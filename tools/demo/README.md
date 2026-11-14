@@ -27,17 +27,18 @@ What the script does:
 
 1. Starts `demo_provider.py` on `127.0.0.1:8795` (the first start encodes the test video, a few seconds).
 2. Starts the Orbit server (`web/server/run.py`) on `127.0.0.1:8760` with a scratch data folder,
-   `%TEMP%\orbit-demo`. The folder is **wiped on every start** (use `-Keep` to reuse it). The environment is
+   `%TEMP%\orbit-demo-<Port>` (`orbit-demo-8760` by default). The folder is **wiped on every start** (use `-Keep` to reuse it). The environment is
    `TVBRO_BIND=127.0.0.1`, `TVBRO_PORT`, `TVBRO_DATA`, `TVBRO_STATIC=web\frontend` (the server also serves the
    web app) and `TVBRO_ALLOW_LOOPBACK_SOURCES=1` (so the server accepts the loopback provider). The encryption key
    is a throwaway `key.bin` in the scratch folder.
 3. Through the server's own HTTP API, as the tests do: `POST /v1/setup` with the one-time token from
    `orbit-setup-token` (creates the owner **demo**, with a profile named Demo), `POST /v1/profiles` for Kids and
    Sam, and `POST /api/signin` with the provider's Xtream address. Then it waits until `/v1/catalog/home` has rows.
-4. Prints the address, the login, the log folder (`%TEMP%\orbit-demo-logs`) and how to link a TV.
+4. Prints the address, the login, the log folder (`%TEMP%\orbit-demo-<Port>-logs`) and how to link a TV.
 
-The processes run in the background (process IDs in `%TEMP%\orbit-demo.pids`); `-Stop` ends them and their
-children (`taskkill /T`).
+The processes run in the background (process IDs in `%TEMP%\orbit-demo-<Port>.pids`); `-Stop` ends them and their
+children (`taskkill /T`). Everything is kept per server port, so two demos can run side by side: `-Stop -Port 8771`
+stops only the one on 8771 (without `-Port`, the default 8760).
 
 Options: `-Password`, `-Port` (default 8760), `-ProviderPort` (default 8795), `-DataDir`, `-Keep`, `-NoVideo`, `-Stop`.
 

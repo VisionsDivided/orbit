@@ -13,7 +13,9 @@
   4. Prints the address, the login and how to link a TV over adb reverse.
 
   The processes keep running in the background after the script returns. Stop them with:
-      powershell -File tools\demo\run_demo.ps1 -Stop
+      powershell -File tools\demo\run_demo.ps1 -Stop            (add -Port N for a demo on another port)
+  Process ids, data and logs are kept per server port (%TEMP%\orbit-demo-<Port>.pids, orbit-demo-<Port>,
+  orbit-demo-<Port>-logs), so -Stop on one port never stops another demo.
 
   The demo password comes from -Password or is generated and printed here. It is never written to a file.
 
@@ -29,7 +31,7 @@ param(
     [string]$Password = "",
     [int]$Port = 8760,
     [int]$ProviderPort = 8795,
-    [string]$DataDir = (Join-Path $env:TEMP "orbit-demo"),
+    [string]$DataDir = "",
     [switch]$Keep,
     [switch]$NoVideo,
     [switch]$Stop
@@ -37,10 +39,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$PidFile = Join-Path $env:TEMP "orbit-demo.pids"
-$LogDir = Join-Path $env:TEMP "orbit-demo-logs"
+# per server port, so several demos can run side by side and -Stop on one port never touches another
+if (-not $DataDir) { $DataDir = Join-Path $env:TEMP "orbit-demo-$Port" }
+$PidFile = Join-Path $env:TEMP "orbit-demo-$Port.pids"
+$LogDir = Join-Path $env:TEMP "orbit-demo-$Port-logs"
+$LegacyPidFile = Join-Path $env:TEMP "orbit-demo.pids"     # one shared file before; it belonged to the default port
 
 function Stop-Demo {
+    if ($Port -eq 8760 -and (Test-Path $LegacyPidFile) -and -not (Test-Path $PidFile)) { Move-Item $LegacyPidFile $PidFile }
     if (Test-Path $PidFile) {
         foreach ($id in (Get-Content $PidFile)) {
             if ($id -match '^\d+$' -and (Get-Process -Id $id -ErrorAction SilentlyContinue)) {
@@ -48,14 +54,14 @@ function Stop-Demo {
             }
         }
         Remove-Item $PidFile -Force
-        Write-Host "Orbit demo stopped."
+        Write-Host "Orbit demo on port $Port stopped."
     } else {
-        Write-Host "No Orbit demo is running (no $PidFile)."
+        Write-Host "No Orbit demo is running on port $Port (no $PidFile)."
     }
 }
 
 if ($Stop) { Stop-Demo; return }
-if (Test-Path $PidFile) { Write-Host "An Orbit demo seems to be running; stopping it first."; Stop-Demo }
+if (Test-Path $PidFile) { Write-Host "An Orbit demo seems to be running on port $Port; stopping it first."; Stop-Demo }
 
 # ---- Python
 $Py = $null; $PyArgs = @()
@@ -185,4 +191,5 @@ Write-Host "  adb reverse tcp:$Port tcp:$Port"
 Write-Host "  adb reverse tcp:$ProviderPort tcp:$ProviderPort   # artwork is loaded from the provider's address"
 Write-Host "  On the TV choose the server http://127.0.0.1:$Port, then approve the code in the web app (signed in as demo)."
 Write-Host ""
-Write-Host "Stop everything:  powershell -File `"$PSCommandPath`" -Stop"
+$portArg = if ($Port -ne 8760) { " -Port $Port" } else { "" }
+Write-Host "Stop everything:  powershell -File `"$PSCommandPath`" -Stop$portArg"
