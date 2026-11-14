@@ -24,8 +24,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-latest is Apple Silicon (arm64); macos-13 is the last Intel (x86_64) runner image
-        os: [macos-latest, macos-13]
+        # macos-latest is Apple Silicon (arm64); macos-15-intel is GitHub's Intel (x86_64) runner (macos-13 was retired)
+        os: [macos-latest, macos-15-intel]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

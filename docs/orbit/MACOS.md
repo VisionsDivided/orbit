@@ -15,7 +15,7 @@ test checklist, then the video spike.
 | Video | Sound only for now: macOS does not embed the video by default (see "Video" below). `TVBRO_MAC_VIDEO=wid` tries mpv's `wid` for the spike. Hardware decoding choices: auto-safe (VideoToolbox), videotoolbox, no | `MpvVideoTest` |
 | Drives | Recording drives listed from `/Volumes` (start-up disk left out) | compiles only |
 | Packaging | `packageDmg`: `Orbit.app` in a DMG, bundle id `io.github.visionsdivided.orbit.desktop`, icon `desktop/packaging/orbit.icns` (made with Pillow from `branding/orbit-app-icon.webp`), version 1.0.0 (jpackage refuses 0.x on macOS). Unsigned | Gradle task list only; Windows packaging unchanged |
-| CI | `.github/workflows/desktop-macos.yml`: tests on macos-latest (arm64) and macos-13 (Intel) with a Homebrew libmpv, unsigned DMG, "no libmpv in the app" check | not run: the repository is private and not on GitHub |
+| CI | `.github/workflows/desktop-macos.yml`: tests on macos-latest (arm64) and macos-15-intel (Intel) with a Homebrew libmpv, unsigned DMG, "no libmpv in the app" check | runs on every push to github.com/VisionsDivided/orbit; the arm64 DMG builds |
 
 The folder name stays `tvBro` (as on Windows; `AppDirs.NAME` is the one place to change for a rename). The Mac app
 itself is called Orbit.
@@ -82,7 +82,7 @@ itself is called Orbit.
       "Show Desktop", F works
 - [ ] A recording to `~/Movies/tvBro` and to a USB stick (listed from `/Volumes`)
 - [ ] External player: `/Applications/VLC.app/Contents/MacOS/VLC` (the plain `vlc` command is usually not on PATH)
-- [ ] Intel Mac too, if one is around (or the macos-13 CI job once on GitHub)
+- [ ] Intel Mac too, if one is around (or the macos-15-intel CI job)
 
 ## Video (the biggest risk) — spike plan
 
