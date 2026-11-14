@@ -89,6 +89,30 @@ class WatchStore(private val file: File, private val saveLater: (() -> Unit) -> 
     }
 
     fun putSeries(r: SeriesRow) = commit(data.copy(series = data.series + (r.key to r)))
+
+    // ---- Orbit sync (Orbit.kt): what came from the home server, in one write ----
+    /** Catalogue entry of a key when no snapshot is saved (a title started on another device). */
+    var lookup: (String) -> VodItem? = { null }
+
+    /** Every saved state (film resume points, episode marks, catch-up). */
+    fun allStates(): Map<String, WatchState> = data.items.mapValues { it.value.state() }
+    /** An episode key's series key, when known. */
+    fun seriesKeyOf(key: String): String? = data.items[key]?.series
+
+    /** Applies the server's newer states ([series]: the series key of episode states) and show rows at once. */
+    fun applyRemote(states: Map<String, Pair<WatchState, String?>>, rows: List<SeriesRow>) {
+        if (states.isEmpty() && rows.isEmpty()) return
+        val m = data.items.toMutableMap()
+        for ((k, v) in states) {
+            val (s, series) = v
+            val o = m[k] ?: WItem()
+            m[k] = o.copy(posMs = s.posMs, durMs = s.durMs, watched = s.watched, updated = s.updated, series = series ?: o.series)
+        }
+        commit(data.copy(items = m, series = data.series + rows.associateBy { it.key }))
+    }
+
+    /** Signed out of Orbit: every position, mark, show row and title snapshot goes. */
+    fun clearAll() = commit(WatchData())
     fun snap(v: VodItem) { val b = bare(v); if (data.snaps[b.key] != b) commit(data.copy(snaps = data.snaps + (b.key to b))) }
     fun snapOf(key: String): VodItem? = data.snaps[key]
 
@@ -119,12 +143,12 @@ class WatchStore(private val file: File, private val saveLater: (() -> Unit) -> 
     /** Series in "Continue watching", most recent first, with their catalogue entry. */
     fun continueShows(): List<Pair<VodItem, SeriesRow>> =
         Watch.continueOrder(data.series.values.toList(), { it.active && it.nextEp != null }, { it.updated })
-            .mapNotNull { r -> data.snaps[r.key]?.let { it to r } }
+            .mapNotNull { r -> (data.snaps[r.key] ?: lookup(r.key))?.let { it to r } }
 
     /** Movies (and playlist VOD) in progress, most recent first. */
     fun continueMovies(): List<Pair<VodItem, WItem>> =
         Watch.continueOrder(data.items.entries.filter { it.key.startsWith("m|") || it.key.startsWith("v|") }, { it.value.state().inProgress }, { it.value.updated })
-            .mapNotNull { e -> data.snaps[e.key]?.let { it to e.value } }
+            .mapNotNull { e -> (data.snaps[e.key] ?: lookup(e.key))?.let { it to e.value } }
 
     fun rememberSubs(seriesKey: String, on: Boolean, lang: String?) {
         val o = series(seriesKey) ?: SeriesRow(seriesKey, updated = clock())
@@ -150,5 +174,12 @@ class WatchStore(private val file: File, private val saveLater: (() -> Unit) -> 
         fun bare(v: VodItem): VodItem = if (v.url == null) v else v.copy(url = null)
         fun bare(d: WatchData): WatchData = if (d.snaps.values.none { it.url != null }) d else d.copy(snaps = d.snaps.mapValues { bare(it.value) })
         fun epKey(series: VodItem, e: Episode) = "e|${series.sourceId}|${e.id}"
+
+        /** The desktop's series row as the shared show-sync logic sees it, and back (captions / audio stay). */
+        fun toShared(r: SeriesRow) = io.github.kmmarin.tvbro.data.SeriesRow(r.key, r.updated, r.lastEp, r.nextEp, r.nextSeason, r.nextNum,
+            r.nextTitle, r.finished, r.active)
+        fun fromShared(s: io.github.kmmarin.tvbro.data.SeriesRow, old: SeriesRow?) = (old ?: SeriesRow(s.key)).copy(updated = s.updated,
+            lastEp = s.lastEp, nextEp = s.nextEp, nextSeason = s.nextSeason, nextNum = s.nextNum, nextTitle = s.nextTitle,
+            finished = s.finished, active = s.active)
     }
 }

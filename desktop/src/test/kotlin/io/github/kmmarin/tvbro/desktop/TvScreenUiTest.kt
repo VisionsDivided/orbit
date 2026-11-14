@@ -93,12 +93,13 @@ class TvScreenUiTest {
         assertEquals(nowWin, app.winStart)
         assertTrue(app.homeHasFocus) // never lost, never trapped
 
-        // 2. zones: name -> groups (the selected group) -> side menu, and Right back the same way
+        // 2. zones: name -> groups (the selected group) -> the top bar; Down goes back to the groups, Right to the name
         rule.waitUntil(2_000) { app.tvZone == Zone.LABEL || app.tvZone == Zone.GROUPS }
         if (app.tvZone == Zone.LABEL) press(Key.DirectionLeft)
         assertEquals(Zone.GROUPS, app.tvZone)
-        press(Key.DirectionLeft) // the side menu
-        press(Key.DirectionRight)
+        press(Key.DirectionLeft) // the top bar (Live TV)
+        rule.waitUntil(2_000) { app.tvZone == Zone.GROUPS }    // the zone the guide returns to stays the groups
+        press(Key.DirectionDown)
         rule.waitUntil(2_000) { app.tvZone == Zone.GROUPS }
         press(Key.DirectionRight)
         rule.waitUntil(2_000) { app.tvZone == Zone.LABEL }

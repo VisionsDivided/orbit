@@ -7,6 +7,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Test
 
 class OrbitApiTest {
@@ -40,5 +42,34 @@ class OrbitApiTest {
         assertEquals("", l.deviceName)                     // not named yet (or a server before device names)
         val named = Json.parseToJsonElement("""{"account":{"displayName":"Alex"},"profile":null,"deviceName":"Kitchen"}""").jsonObject
         assertEquals("Kitchen", OrbitApi.linkFrom("http://192.0.2.10:8750", "sid", "csrf", named).deviceName)
+    }
+
+    @Test fun sessionCookieOfASignIn() {
+        assertEquals("abc", OrbitApi.sessionFromCookies(listOf("other=1; Path=/", "tvbro_s=abc; HttpOnly; SameSite=Strict; Path=/")))
+        assertNull(OrbitApi.sessionFromCookies(listOf("tvbro_s=; Max-Age=0")))
+        assertNull(OrbitApi.sessionFromCookies(emptyList()))
+    }
+
+    @Test fun desktopSignInSendsItsKindAndReadsTheCookie() {
+        var sent: Pair<String, String?>? = null
+        val client = okhttp3.OkHttpClient.Builder().addInterceptor(okhttp3.Interceptor { chain ->
+            val r = chain.request()
+            sent = r.url.encodedPath to r.body?.let { b -> okio.Buffer().also { b.writeTo(it) }.readUtf8() }
+            assertEquals("1", r.header("X-TvBro"))
+            assertEquals("Orbit-Desktop", r.header("User-Agent"))
+            okhttp3.Response.Builder().request(r).protocol(okhttp3.Protocol.HTTP_1_1).code(200).message("ok")
+                .header("Set-Cookie", "tvbro_s=sess1; HttpOnly; Path=/")
+                .body("""{"account":{"id":"a1","username":"alex","displayName":"Alex"},"csrf":"c1",
+                    "profiles":[{"id":"p1","name":"Alex","kids":false},{"id":"p2","name":"Kids","kids":true}],
+                    "profile":{"id":"p1","name":"Alex","kids":false}}""".toResponseBody("application/json".toMediaType())).build()
+        }).build()
+        val me = OrbitApi(client, "Orbit-Desktop").login("http://192.0.2.10:8750", "alex", "pw", "Orbit on Windows")
+        assertEquals("/v1/auth/login", sent!!.first)
+        val body = Json.parseToJsonElement(sent!!.second!!).jsonObject
+        assertEquals("desktop", body["kind"].toString().trim('"'))
+        assertEquals(listOf("sess1", "c1", "Alex"), listOf(me.link.session, me.link.csrf, me.link.profile))
+        assertEquals(listOf("p1", "p2"), me.profiles.map { it.id })
+        assertEquals(true, me.profiles[1].kids)
+        assertEquals("p1", me.profileId)
     }
 }

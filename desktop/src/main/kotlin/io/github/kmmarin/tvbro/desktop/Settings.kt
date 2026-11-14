@@ -25,7 +25,7 @@ import io.github.kmmarin.tvbro.data.*
 import java.io.File
 import java.util.UUID
 
-private val pages = listOf("Sources", "General", "Playback", "Recording", "Channels and groups", "Backup and restore", "About and diagnostics")
+private val pages = listOf("Orbit account", "Sources", "General", "Playback", "Recording", "Channels and groups", "Backup and restore", "About and diagnostics")
 
 @Composable
 private fun Field(label: String, v: String, secret: Boolean = false, width: Int = 420, set: (String) -> Unit) =
@@ -61,13 +61,14 @@ fun SettingsScreen(app: AppState) {
             Btn("‹ Settings", requester = back) { app.settingsPage = 0 }; T(pages[page - 1], 22, Theme.accent)
         }
         when (page) {
-            1 -> SourcesPage(app)
-            2 -> GeneralPage(app)
-            3 -> PlaybackPage(app)
-            4 -> RecordingPage(app)
-            5 -> ChannelsPage(app)
-            6 -> BackupPage(app)
-            7 -> AboutPage(app)
+            1 -> OrbitAccountPage(app)
+            2 -> SourcesPage(app)
+            3 -> GeneralPage(app)
+            4 -> PlaybackPage(app)
+            5 -> RecordingPage(app)
+            6 -> ChannelsPage(app)
+            7 -> BackupPage(app)
+            8 -> AboutPage(app)
         }
     }
 }
@@ -82,6 +83,7 @@ private fun SourcesPage(app: AppState) {
     var name by remember { mutableStateOf("") }; var server by remember { mutableStateOf("") }
     var user by remember { mutableStateOf("") }; var pass by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }; var epg by remember { mutableStateOf("") }
+    if (app.orbit.linked) T("Signed in to Orbit: these playlists come from the home server and are replaced when they change there. Logins stay on the server's side.", 13, Theme.dim, maxLines = 2)
     app.sources.forEachIndexed { i, s ->
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val age = SourceRepo(s).cache.ageHours(if (s.isXtream) "live" else "m3u")

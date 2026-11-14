@@ -49,7 +49,7 @@ private var swallowEnter = false
 private const val NEW_PRESS_GAP_MS = 1100L
 
 /**
- * A focusable, clickable item with a clear TV-style focus look (filled + accent border). Enter (on release) or a
+ * A focusable, clickable item with a clear TV-style focus look (filled + white ring). Enter (on release) or a
  * left click activates; holding Enter, a right click, the Menu key or Shift+F10 opens [onMenu].
  */
 @Composable
@@ -100,7 +100,7 @@ fun Modifier.tvItem(onFocus: () -> Unit = {}, onMenu: (() -> Unit)? = null, requ
         }
         .clip(RoundedCornerShape(6.dp))
         .background(if (focused) Theme.surface2 else Color.Transparent)
-        .border(if (focused) 3.dp else 0.dp, if (focused) Theme.accent else Color.Transparent, RoundedCornerShape(6.dp))
+        .border(if (focused) 3.dp else 0.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(6.dp)) // direction 5: a white focus ring
 }
 
 @Composable
@@ -151,10 +151,10 @@ fun Overlays(app: AppState) {
         // header lines wrap at about 60 characters (a restore summary has long ones)
         val head = m.title.lines().take(6).sumOf { (it.length / 60 + 1).coerceAtMost(3) }.coerceAtMost(14)
         val st = rememberDialogState(position = WindowPosition(Alignment.Center), size = androidx.compose.ui.unit.DpSize(520.dp, (90 + head * 22 + rows * 46).dp))
-        DialogWindow(onCloseRequest = { app.menu = null }, state = st, title = "tvBro", undecorated = true, resizable = false) {
+        DialogWindow(onCloseRequest = { app.closeMenu() }, state = st, title = "tvBro", undecorated = true, resizable = false) {
             val first = remember { FocusRequester() }
             LaunchedEffect(m) { first.settle() }
-            Column(Modifier.fillMaxSize().background(Theme.surface).border(2.dp, Theme.accent).padding(14.dp).dialogKeys { app.menu = null }) {
+            Column(Modifier.fillMaxSize().background(Theme.surface).border(2.dp, Theme.accent).padding(14.dp).dialogKeys { app.closeMenu() }) {
                 val lines = m.title.lines()
                 T(lines.first(), 18, Theme.accent, bold = true, maxLines = 2)
                 for (l in lines.drop(1).take(5)) T(l, 13, Theme.dim, maxLines = 3)

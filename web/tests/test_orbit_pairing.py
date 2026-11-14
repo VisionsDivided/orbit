@@ -99,6 +99,26 @@ class Unit(unittest.TestCase):
         self.assertEqual(api.handle(Call("GET", "/v1/device/playlists", tv)).obj, {"playlists": pl})
         self.assertEqual(api.handle(Call("GET", "/v1/device/playlists", self.alex)).code, 403)
 
+    def test_desktop_sign_in_is_a_device_session(self):
+        """The desktop app signs in with its account ("kind": "desktop"): playlists like a linked TV, viewer role."""
+        from orbit.api import Api, Call
+        pl = [{"id": "p0", "name": "Main", "kind": "xtream", "server": "http://tv.example.com", "user": "u", "pass": "x"}]
+        api = Api(self.acc, self.pr, playlists=lambda: pl)
+        body = {"username": "alex", "password": "correct horse 1", "device": "Orbit on Windows", "kind": "desktop"}
+        r = api.handle(Call("POST", "/v1/auth/login", None, body, "192.0.2.5"))
+        self.assertEqual(r.code, 200)
+        self.assertEqual(r.obj["account"]["username"], "alex")
+        desk = self.acc.gate(self.auth.session(r.session))
+        self.assertEqual((desk["session_kind"], desk["role"]), ("desktop", "viewer"), "never the owner's admin role")
+        self.assertEqual(api.handle(Call("GET", "/v1/device/playlists", desk)).obj, {"playlists": pl})
+        self.assertIn("Orbit on Windows", [s["device"] for s in self.acc.sessions(self.alex)])
+        # any other kind (or none) is a browser sign-in: no playlists; "tv" cannot be claimed without a pairing code
+        for kind in (None, "web", "tv", "admin"):
+            r = api.handle(Call("POST", "/v1/auth/login", None, dict(body, kind=kind), "192.0.2.5"))
+            web = self.acc.gate(self.auth.session(r.session))
+            self.assertEqual(web["session_kind"], "web", kind)
+            self.assertEqual(api.handle(Call("GET", "/v1/device/playlists", web)).code, 403, kind)
+
     def test_limits(self):
         self.assertLessEqual(PA.MAX_PER_CLIENT, 3)
         self.assertLessEqual(PA.MAX_PENDING, 20)
@@ -223,6 +243,13 @@ class Server(unittest.TestCase):
         self.assertEqual((code, pl), (200, {"playlists": []}))
         self.assertEqual(self.req("GET", "/v1/device/playlists", headers=auth(alex))[0], 403)
         self.assertEqual(self.req("GET", "/v1/device/playlists")[0], 401)
+        # the desktop app signs in with the account (X-TvBro, no Origin) and is a device like the TV
+        code, hd, dme = self.tv("/v1/auth/login", {"username": "alex", "password": "correct horse 1",
+                                                    "device": "Orbit on Windows", "kind": "desktop"})
+        self.assertEqual(code, 200)
+        desk = (hd["Set-Cookie"].split(";", 1)[0], dme["csrf"])
+        self.assertEqual(self.req("GET", "/v1/device/playlists", headers=auth(desk))[:3:2], (200, {"playlists": []}))
+        self.assertEqual(self.req("POST", "/v1/profiles/select", {"id": kids["id"]}, auth(desk))[2]["profile"]["name"], "Kids")
         # show progress of the TV's profile (episode sync)
         self.assertEqual(self.req("GET", "/v1/progress/shows", headers=auth(tvs))[2], {"episodes": [], "shows": []})
         code, _, r = self.req("POST", "/v1/progress/episodes", {"items": [{"seriesId": "7", "epId": "101", "secs": 120, "dur": 2400,

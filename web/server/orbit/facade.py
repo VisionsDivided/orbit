@@ -105,8 +105,8 @@ class DeviceKeys:
         return hmac.new(self.key, ("orbit-xt|" + h).encode(), sha256).hexdigest()[:32]
 
     def creds(self, sess: dict) -> Optional[tuple[str, str]]:
-        """(user, secret) for a linked TV session, else None."""
-        row = self.acc.db.one("SELECT id FROM account_sessions WHERE sess_hash=? AND kind='tv'", (sess["h"],))
+        """(user, secret) for a linked TV or desktop app session, else None."""
+        row = self.acc.db.one("SELECT id FROM account_sessions WHERE sess_hash=? AND kind IN ('tv','desktop')", (sess["h"],))
         if row is None:
             return None
         return "tv" + row[0], self._secret(sess["h"])
@@ -117,7 +117,7 @@ class DeviceKeys:
             hit = self._users.get(user)
             if hit and hit[0] > now:
                 return hit[1]
-        row = self.acc.db.one("SELECT sess_hash FROM account_sessions WHERE id=? AND kind='tv'", (user[2:],))
+        row = self.acc.db.one("SELECT sess_hash FROM account_sessions WHERE id=? AND kind IN ('tv','desktop')", (user[2:],))
         h = row[0] if row else None
         with self._lock:
             if len(self._users) > 1000:

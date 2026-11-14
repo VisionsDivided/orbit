@@ -146,6 +146,14 @@ class Keys(unittest.TestCase):
         self.acc.revoke(self.alex, dev["id"])
         self.assertIsNone(self.keys.check(u, p), "unlinked: dead at once")
 
+    def test_desktop_app_sessions_get_their_own_login(self):
+        desk = self.acc.gate(self.auth.session(self.acc.login("alex", "correct horse 1", "192.0.2.7", "Desktop", kind="desktop")))
+        u, p = self.keys.creds(desk)
+        self.assertNotEqual((u, p), self.keys.creds(self.tv), "each device its own login")
+        self.assertEqual(self.keys.check(u, p), desk["h"])
+        web = self.acc.gate(self.auth.session(self.acc.login("alex", "correct horse 1", "192.0.2.7", "Chrome")))
+        self.assertIsNone(self.keys.creds(web), "a browser sign-in still gets none")
+
 
 # --------------------------------------------------------------------------- end to end, real server process
 
