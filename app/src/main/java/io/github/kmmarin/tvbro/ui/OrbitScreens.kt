@@ -19,7 +19,9 @@ import androidx.compose.ui.unit.sp
 import io.github.kmmarin.tvbro.AppModel
 import io.github.kmmarin.tvbro.Screen
 import io.github.kmmarin.tvbro.orbit.OrbitApi
+import io.github.kmmarin.tvbro.orbit.ServerFinder
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val Ok = Color(0xFFA5D6A7)
 
@@ -70,14 +72,51 @@ fun OrbitLinkScreen(m: AppModel) {
         var server by remember { mutableStateOf(o.lastServer.ifEmpty { "http://" }) }
         val fieldFr = remember { FocusRequester() }
         val getFr = remember { FocusRequester() }
+        val firstFoundFr = remember { FocusRequester() }
         LaunchedEffect(Unit) { delay(250); runCatching { fieldFr.requestFocus() } }
+        // "Find my server": a TCP scan of the TV's own /24 network for /v1/hello on port 8750 (orbit/ServerFinder.kt)
+        var finding by remember { mutableStateOf(false) }
+        var found by remember { mutableStateOf<ServerFinder.Result?>(null) }
+        val scope = rememberCoroutineScope()
         Column(Modifier.fillMaxSize().background(Bg).padding(40.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Link this TV to Orbit", color = Accent, fontSize = 28.sp)
-            Text("Enter the address of your Orbit home server once (ask whoever set it up). The TV then shows a code to approve " +
-                "on your phone or computer; no password is typed on the TV.", color = TextMain, fontSize = 17.sp)
-            // Down from the field always reaches "Get a code" (not whichever button is nearest below)
-            TvField("Home server address, e.g. 192.0.2.10 (port 8750 is added when none is typed)", server, { server = it }, requester = fieldFr,
-                modifier = Modifier.focusProperties { down = getFr })
+            Text("Enter the address of your Orbit home server once (ask whoever set it up), or let the TV find it on your " +
+                "network. The TV then shows a code to approve on your phone or computer; no password is typed on the TV.",
+                color = TextMain, fontSize = 17.sp)
+            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Down from the field always reaches "Get a code" (not whichever button is nearest below)
+                TvField("Home server address, e.g. 192.0.2.10 (port 8750 is added when none is typed)", server, { server = it }, requester = fieldFr,
+                    modifier = Modifier.weight(1f).focusProperties { down = if (found?.servers.isNullOrEmpty()) getFr else firstFoundFr })
+                TvButton(if (finding) "Searching…" else "Find my server", Modifier.focusProperties { down = if (found?.servers.isNullOrEmpty()) getFr else firstFoundFr }) {
+                    if (finding) return@TvButton
+                    finding = true; found = null
+                    scope.launch {
+                        val r = try { ServerFinder.scan() } finally { finding = false }
+                        found = r
+                        if (r.servers.isNotEmpty()) { delay(100); runCatching { firstFoundFr.requestFocus() } }
+                    }
+                }
+            }
+            if (finding) Text("Looking for Orbit servers on this TV's network (a few seconds)…", color = TextDim, fontSize = 15.sp)
+            found?.let { r ->
+                when {
+                    r.network == null -> Text("This TV has no home-network address to search from. Type the server's address instead.", color = Accent, fontSize = 15.sp)
+                    r.servers.isEmpty() -> Text("No Orbit server answered on ${r.network} (port ${OrbitApi.DEFAULT_PORT}). Type its address instead, " +
+                        "or check that the server is running.", color = Accent, fontSize = 15.sp)
+                    else -> {
+                        Text("Found on ${r.network}: choose one", color = TextDim, fontSize = 15.sp)
+                        r.servers.forEachIndexed { i, s ->
+                            val label = "${s.host}:${io.github.kmmarin.tvbro.data.ServerScan.PORT}" +
+                                if (s.hostOk) "" else "  (add ${s.host}:${io.github.kmmarin.tvbro.data.ServerScan.PORT} to TVBRO_ALLOWED_HOSTS on the server first)"
+                            TvButton(label, if (i == 0) Modifier.focusRequester(firstFoundFr) else Modifier) {
+                                server = io.github.kmmarin.tvbro.data.ServerScan.fieldValue(s.host)
+                                found = null
+                                scope.launch { delay(100); runCatching { getFr.requestFocus() } }
+                            }
+                        }
+                    }
+                }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 TvButton("Get a code", Modifier.focusRequester(getFr)) { o.startPairing(server) }
                 TvButton("Cancel") { o.cancelPairing(); m.screen = back() }

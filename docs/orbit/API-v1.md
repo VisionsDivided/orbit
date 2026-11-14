@@ -66,7 +66,7 @@ The server checks the `Host` header, so the address the TV uses (for example `19
 `TVBRO_ALLOWED_HOSTS`.
 
 **Find my server.** Next to the address field the TV offers "Find my server": it asks `GET /v1/hello` on port 8750 of
-every address of its own /24 network (TCP, 48 at a time, ~0.5 s connect and 1 s read timeout; about 3 s in all) and
+every address of its own /24 network (only private home ranges: 10/8, 172.16/12, 192.168/16; TCP, 64 at a time, 0.5 s connect and 1.5 s overall timeout per address; a few seconds in all, at most 6) and
 lists the servers that answer `"app": "orbit"`. Picking one fills the field. UDP broadcast is not used: the server
 runs in Docker behind a TCP port mapping, which broadcasts do not reach. A server whose `hostOk` is false is listed
 with a note that its address must be added to `TVBRO_ALLOWED_HOSTS`.
