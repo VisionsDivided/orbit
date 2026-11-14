@@ -160,8 +160,9 @@ class SecretBox(private val dir: File, private val encrypt: (ByteArray) -> ByteA
 
 /**
  * Secrets (source credentials, the share password) are stored encrypted: Windows DPAPI (current user); on Linux the
- * desktop keyring through `secret-tool` (libsecret) when present, else AES-GCM with a random key in the config dir
- * (mode 600). A keyring that is locked or not reachable yet (autostart) is an error, never a reason for a new key.
+ * desktop keyring through `secret-tool` (libsecret) when present, on macOS the login Keychain ([MacKeychain]), else
+ * AES-GCM with a random key in the config dir (mode 600). A keyring or Keychain that is locked or not reachable yet
+ * (autostart) is an error, never a reason for a new key.
  */
 object Secrets {
     private val box = SecretBox(Paths.config, ::encrypt, ::decrypt)
@@ -171,10 +172,15 @@ object Secrets {
     fun readString(name: String): String = try { read(name)?.let { String(it, Charsets.UTF_8) } ?: "" } catch (e: Exception) { Diag.log("$name unreadable (${e.javaClass.simpleName})"); "" }
     fun writeString(name: String, s: String) = write(name, s.toByteArray(Charsets.UTF_8))
 
-    val method: String get() = when { Platform.windows -> "Windows DPAPI"; secretTool -> "libsecret keyring"; else -> "AES-GCM, key file (600)" }
+    val method: String get() = when {
+        Platform.windows -> "Windows DPAPI"; secretTool -> "libsecret keyring"; keychain && !File(Paths.config, "key.bin").exists() -> "macOS Keychain"
+        else -> "AES-GCM, key file (600)"
+    }
+
+    private val keychain: Boolean by lazy { MacKeychain.available }
 
     private val secretTool: Boolean by lazy {
-        !Platform.windows && System.getenv("PATH").orEmpty().split(':').any { File(it, "secret-tool").canExecute() } && System.getenv("DBUS_SESSION_BUS_ADDRESS") != null
+        Platform.linux && System.getenv("PATH").orEmpty().split(':').any { File(it, "secret-tool").canExecute() } && System.getenv("DBUS_SESSION_BUS_ADDRESS") != null
     }
 
     private fun encrypt(b: ByteArray): ByteArray = when {
@@ -198,6 +204,10 @@ object Secrets {
 
     private fun loadKey(): ByteArray {
         val kf = File(Paths.config, "key.bin")
+        if (keychain) {
+            MacKeychain().loadOrCreate(kf)?.let { return it } // throws while the Keychain is locked / denied
+            Diag.log("Keychain store failed: using the key file")
+        }
         if (secretTool) {
             val (code, out, err) = run("secret-tool", "lookup", "app", "tvbro")
             when (Keyring.classify(code, out, err)) {
