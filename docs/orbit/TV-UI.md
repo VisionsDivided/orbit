@@ -32,7 +32,11 @@ are: `96.dp` side margin, `112.sp` hero title. Legacy tvBro screens, written in 
 | `ui/home/` | `HomeSection`, `HomeFeed` (catalog home or local fallback) | shell agent |
 | `ui/profiles/WhoIsWatching.kt` | Orbit and classic picker, `ProfilePicker`, `OrbitRing` geometry | shell agent |
 | `ui/movies/MoviesShowsSection.kt` | Movies and Shows (now the legacy `BrowseScreen` below the bar) | **Movies / Shows / Detail agent** |
-| `ui/live/LiveTvSection.kt` | Live TV: sub-menu Channels · Guide · Recordings · My list over the legacy screens | **Live TV / player agent** |
+| `ui/live/LiveTvSection.kt` | Live TV: sub-menu Channels · Guide · Recordings · My list, dim backdrop, the guide's colour keys | **Live TV / player agent** |
+| `ui/live/EpgGrid.kt` | The EPG grid shared by Live TV ▸ Channels and the full guide (`EpgWindow`, `EpgActions`, `RowMarks`) | Live TV / player |
+| `ui/live/LiveParts.kt`, `LiveUi.kt` | Info block (`LiveInfo`), group tabs, channel tile, LIVE pill, HLS tag, ● REC, `flatFocus` | Live TV / player |
+| `ui/live/PlayerOverlay.kt` | Player overlay pieces: scrims, top line, info block, scrubber, "Try HLS?" chip, quick actions, `O5Popup` | Live TV / player |
+| `ui/live/StreamPrompt.kt` | Stream-limit dialog (`StreamPromptCard`), used by `OrbitStreamPrompt` | Live TV / player |
 | `ui/discover/DiscoverSection.kt` | Discover placeholder | **Discover / Settings / phone agent** |
 | `orbit/CatalogApi.kt` | Client for every `/v1/catalog` route (`home`, `recommended`, `browse`, `collections`, `collection`) | shared |
 | `orbit/OrbitProfiles.kt` | Profiles, the picker state, picker style and "ask at start" (settings of this TV) | shell agent |
@@ -112,8 +116,33 @@ syncs the new profile in.
 
 - `Orbit5LogicTest`: catalog parsing, key mapping, the image-cookie rule, colour keys, ring geometry, mesh colours.
 - `ShellFocusTest` (Robolectric): Up lands on the current tab, Down returns to the last item, OK opens a tab.
-- `DesignShotsTest` (Robolectric native graphics) renders Home, Browse and both pickers at 1920 × 1080 to
+- `LiveLogicTest`: the yellow key's format cycle, which programme a recording marks, the stream prompt's words.
+- `DesignShotsTest` (Robolectric native graphics) renders Home, Browse, both pickers, Live TV ▸ Channels (`live-channels`),
+  the full guide (`guide`), the player overlay (`player`) and the stream prompt (`stream-prompt`) at 1920 × 1080 to
   `app/build/orbit-shots/*.png`. It is a visual check only; nothing compares the images.
+
+## Live TV and the player
+
+- **Channels** (`TvSection`, under the bar): the focused programme (`GuideInfo`) at x 96, the live preview top right
+  (500 × 281; `LiveVideo` draws the video over it), the channel groups as tabs (focusing one shows its channels), then
+  the grid. OK on a channel or its programme on now previews it; OK on the channel in the preview opens full screen.
+- **Guide** (`GuideScreen`, full screen): the same pieces with more rows, a "Search guide" pill and its own legend.
+  It opens on the playing channel's programme on now. The preview spot shows what already plays (picture and sound);
+  it starts nothing. Back returns to Live TV when it was opened from there, else to full screen.
+- **Grid** (`EpgGrid`): 150-minute window that follows the clock and never shows the past (`GuideLayout`), 390 px
+  channel column, 80 px rows. Rows are not keyed (the old guide wasn't either). A row reads only its own channel's
+  programmes and marks; each cell holds its own focus state; moving focus recomposes the info block and two cells.
+- **Colour keys** (`LiveColorKeys`): red Favourite (the focused group when a tab has focus), green Record (the focused
+  future programme is scheduled or cancelled; on a channel or the programme on now: stop the running recording or the
+  record menu), yellow cycles the channel's stream format Default → TS → HLS (`AppModel.setChannelFormat`, synced),
+  blue the channel (or group) menu. A format set by hand shows a yellow `HLS` / `TS` tag; a recording shows ● REC.
+- **Player** (`PlayerScreen`): zapping and the info block show for 5 s; Down / Menu opens the quick actions
+  (`QuickBar`): Guide, Favourite, Record, Audio, Subtitles, Start over (catch-up from the programme's start, when the
+  channel has catch-up) or Back to live, Format, Channels, Sleep timer, Info (programme details), then Video, Audio
+  delay, Aspect, Settings. Colour keys: Favourite, Record, Format (or yes to "Try HLS?"), Options (channel menu).
+  Films and episodes use the same `QuickBar` with their seek bar and playback controls.
+- **Stream limit** (`OrbitStreamPrompt`): top-right dialog; each stream with its device name, what it plays, "Watching
+  since" (the server's `since`), and its own "Stop X and watch". Cancel holds the first focus.
 
 ## What each follow-up builds where
 
@@ -122,7 +151,7 @@ syncs the new profile in.
   (180 × 270, 8 per row), and `CinematicBackdrop` + `HeroBlock(section = true)`. Restyle `DetailPage`, for example
   in a new `ui/movies/DetailScreen.kt`, and route `Screen.DETAIL` to it in MainActivity. Colour keys: My list, Play
   trailer, Mark watched, More. The legacy browse and detail code in `ui/BrowseScreens.kt` can then go.
-- **Live TV / player**: replace `ui/live/LiveTvSection.kt` and restyle `TvSection`, `GuideScreen` and `PlayerScreen`.
+- **Live TV / player** (done, see above): replace `ui/live/LiveTvSection.kt` and restyle `TvSection`, `GuideScreen` and `PlayerScreen`.
   Use `CinematicBackdrop(dim = true)` for the guide. Colour keys: Favourite, Record, Format TS / HLS, Channel
   options. Draw the legend yourself on full-screen pages. Restyle the stream prompt (`OrbitStreamPrompt`) per spec
   section 10, keeping Cancel as the default focus.
