@@ -35,8 +35,12 @@ const main = document.getElementById('main');
 const appEl = document.getElementById('app');
 const topbar = document.getElementById('topbar');
 const DEFAULT = 'home';
+let routedHash = null;      // the hash the screen on show was made for
 main.addEventListener('scroll', () => {
   const hs = location.hash.replace(/^#/, '') || DEFAULT;
+  // a scroll that lands between a hash change and its route() (e.g. a clicked card scrolled into view)
+  // belongs to the old screen: it must not become the new screen's saved scroll
+  if (routedHash !== null && hs !== routedHash) return;
   const sc = Object.assign({}, uiLoad().scroll || {}); sc[hs] = main.scrollTop;
   const keys = Object.keys(sc); if (keys.length > 30) delete sc[keys[0]];
   uiSave({ scroll: sc });
@@ -60,6 +64,7 @@ window.addEventListener('hashchange', route);
 let restoreTimer = null;
 function route() {
   const hs = location.hash.replace(/^#/, '') || DEFAULT; const ci = hs.indexOf(':');
+  routedHash = hs;
   uiSave({ hash: hs });
   appEl.classList.remove('scrolled');
   // the page scroll of each section comes back too (best effort: once its content is there)
