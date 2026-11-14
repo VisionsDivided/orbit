@@ -63,6 +63,7 @@ from orbit.profilestate import ProfileStores
 from orbit import discover as ODISC, seerr as OSEERR    # Orbit: Seerr discover and requests (Phase 6)
 from orbit import sync as OSYNC                          # Orbit: cheap change check and batches for TVs
 from orbit.media import MediaServers, TokenVault                # Orbit: Plex / Jellyfin links per account
+from orbit import facade as OFACADE                      # Orbit: hidden provider logins for linked TVs (/xt/)
 
 try:                                    # deterministic authenticated encryption for /seg URLs
     from cryptography.hazmat.primitives.ciphers.aead import AESSIV
@@ -207,6 +208,7 @@ class _CountingReader(io.RawIOBase):
 SETTINGS_DEFAULTS = {"epgHours": 12, "channelsHours": 12, "vodHours": 12, "maxStreams": 1, "recDir": "",
                      "allowLanSources": False,   # playlists / streams on the local network (net.py)
                      "ctid": None,               # Proxmox container id for the share's host steps
+                     "hideProviderLogin": True,  # Orbit: linked TVs get facade logins, not the provider's (facade.py)
                      **REC_DEFAULTS}
 
 
@@ -692,13 +694,15 @@ class Settings(dict):
             pass
 
     def public(self) -> dict:
-        return dict(self)
+        # hideProviderLogin as it applies (ORBIT_HIDE_PROVIDER_LOGIN wins), and whether the environment decides it
+        return {**self, "hideProviderLogin": OFACADE.hide_logins(self), "hideProviderLoginForced": OFACADE.forced()}
 
     def save(self, upd: dict):
         allowed = {"epgHours": (6, 12, 24, 48), "channelsHours": (6, 12, 24, 48), "vodHours": (6, 12, 24, 48),
                    "maxStreams": (1, 2, 3), **REC_ALLOWED}
-        if isinstance(upd.get("allowLanSources"), bool):
-            self["allowLanSources"] = upd["allowLanSources"]
+        for k in ("allowLanSources", "hideProviderLogin"):
+            if isinstance(upd.get(k), bool):
+                self[k] = upd[k]
         if "ctid" in upd:
             c = upd["ctid"]
             if c in (None, ""):
@@ -706,7 +710,7 @@ class Settings(dict):
             elif isinstance(c, (int, str)) and str(c).isdigit() and 100 <= int(c) <= 999999999:
                 self["ctid"] = int(c)
         for k, v in upd.items():
-            if k in ("allowLanSources", "ctid"):
+            if k in ("allowLanSources", "ctid", "hideProviderLogin"):
                 continue
             try:
                 v = int(v)
@@ -1017,8 +1021,11 @@ class App:
         # Orbit: Plex / Jellyfin; tokens sealed with the server key in media.enc (rotate_key re-encrypts it)
         msec = SecretStore(DATA_DIR, "media.enc")
         self.media = MediaServers(self.orbit.db, TokenVault(msec.enc_path, msec.seal_bytes, msec.open_bytes))
+        # Orbit: linked TVs reach the provider through /xt/ with logins of their own (orbit/facade.py)
+        self.facade = OFACADE.Facade(OFACADE.DeviceKeys(self.orbit, self.sign_key), self._facade_provider,
+                                     self.seal, self.unseal, NET.open_url, NET.is_blocked)
         self.v1 = V1.Api(self.orbit, playlists=self._device_playlists, stores=self.profiles.for_session,
-                         streams=lambda: self.streams.status(), media=self.media)
+                         streams=self._streams_status, media=self.media, device_view=self._device_view)
         # Orbit: Seerr discover and requests (orbit/discover.py), mounted into the /v1 route table
         self.discover = ODISC.Discover(self.orbit, OSEERR.SeerrConfig(DATA_DIR))
         self.v1.routes.update(self.discover.routes())
@@ -1048,6 +1055,29 @@ class App:
                         "server": NET.lower_host(p.get("server") or ""), "user": p.get("user") or "", "pass": p.get("pass") or "",
                         "url": p.get("url") or "", "epgUrl": p.get("epgUrl") or ""})
         return out
+
+    def _device_view(self, pl: list, call) -> list:
+        """Orbit: with "hide provider logins" on, a linked TV gets facade addresses and its own login instead."""
+        if not OFACADE.hide_logins(self.settings):
+            return pl
+        creds = self.facade.keys.creds(call.sess)
+        if creds is None:
+            return []
+        return OFACADE.device_playlists(pl, call.origin or "http://localhost:%d" % PORT, *creds)
+
+    def _facade_provider(self, pid: str) -> dict | None:
+        """An enabled playlist's stored login for the facade (never leaves the server)."""
+        prov = self.sources.get(pid)
+        if prov is None or not self.sources.is_enabled(pid):
+            return None
+        p = prov.store.get_provider()
+        if not p:
+            return None
+        return {**p, "server": NET.lower_host(p.get("server") or "")}
+
+    def _streams_status(self) -> dict:
+        """tvBro's stream count, plus the TVs pulling media through the facade right now (exact)."""
+        return {**self.streams.status(), "relays": self.facade.relays.status()}
 
     def _series_eps(self, vid: str):
         """(name, cover, [episode dicts]) of a series for the Shows progress store."""
@@ -1201,11 +1231,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_request(self, code="-", size="-"):
         """Method, path without the query (it can name image URLs or search words) and status."""
-        path = (getattr(self, "path", "") or "").split("?", 1)[0]
+        path = OFACADE.redact((getattr(self, "path", "") or "").split("?", 1)[0])    # no facade device logins
         LOG.info('"%s %s" %s', getattr(self, "command", "-"), path[:200], getattr(code, "value", code))
 
     def log_error(self, fmt, *args):
-        LOG.info("http error: %s", (fmt % args).split("?", 1)[0][:200])
+        LOG.info("http error: %s", OFACADE.redact((fmt % args).split("?", 1)[0])[:200])
 
     def send_header(self, keyword, value):
         if keyword.lower() == "content-security-policy":
@@ -1387,6 +1417,8 @@ class Handler(BaseHTTPRequestHandler):
             return True
         if path.startswith("/v1/"):                  # Orbit API: the route table checks the account
             return True
+        if path.startswith(OFACADE.PREFIX):          # Orbit facade: the device login in the address, checked there
+            return True
         if path in ("/stream", "/vodstream"):        # signed URLs (also for external players)
             if self._media_sig_ok():
                 return True
@@ -1426,7 +1458,7 @@ class Handler(BaseHTTPRequestHandler):
         except BrokenPipeError:
             pass
         except Exception as e:                      # noqa: BLE001
-            LOG.exception("GET %s failed", u.path)
+            LOG.exception("GET %s failed", OFACADE.redact(u.path))
             try:
                 self._err(500, type(e).__name__)
             except Exception:
@@ -1748,8 +1780,9 @@ class Handler(BaseHTTPRequestHandler):
     # -- GET routes --
     def route_v1(self, method: str):
         """Orbit /v1 API (orbit/api.py). Host, Origin and CSRF were checked by do_GET / do_POST."""
+        origin = ("https" if self._https() else "http") + "://" + (self.headers.get("Host") or "localhost")   # Host checked
         call = V1.Call(method, self.path_only, self.sess, self._body() if method == "POST" else {}, self._client_ip(),
-                       {k: v[0] for k, v in self.q.items() if v})
+                       {k: v[0] for k, v in self.q.items() if v}, origin)
         rep = APP.v1.handle(call)
         hdr = dict(rep.headers)
         if rep.raw is not None:                      # media artwork: an image/* type checked by the connector
@@ -1768,6 +1801,9 @@ class Handler(BaseHTTPRequestHandler):
     def route_get(self, path):
         if path.startswith("/v1/"):
             return self.route_v1("GET")
+        if path.startswith(OFACADE.PREFIX):
+            return APP.facade.serve(self, path, {k: v[0] for k, v in self.q.items() if v},
+                                    urllib.parse.urlparse(self.path).query)
         if path == "/api/health":
             return self._json({"status": "ok", "time": int(time.time())})
         if path == "/api/session":
@@ -2903,25 +2939,9 @@ class Handler(BaseHTTPRequestHandler):
             up.close()
 
     def _rewrite_hls(self, data: bytes, base_url: str):
-        base = base_url.rsplit("/", 1)[0] + "/"
-        out_lines = []
-        for line in data.decode("utf-8", "replace").splitlines():
-            s = line.strip()
-            if not s:
-                out_lines.append(line)
-                continue
-            if s.startswith("#"):
-                # proxy URI="..." inside tags (keys, maps, media playlists)
-                if 'URI="' in s:
-                    def repl(m):
-                        abs_u = urllib.parse.urljoin(base, m.group(1))
-                        return 'URI="' + self._signed_seg(abs_u) + '"'
-                    s = __import__("re").sub(r'URI="([^"]+)"', repl, s)
-                out_lines.append(s)
-            else:
-                abs_u = urllib.parse.urljoin(base, s)
-                out_lines.append(self._signed_seg(abs_u))
-        body = ("\n".join(out_lines) + "\n").encode()
+        # every segment, key, map and variant (URI="..." in tags too) as a sealed /seg URL (the same rewrite as the
+        # Orbit facade's, orbit/facade.py)
+        body = OFACADE.rewrite_hls(data, base_url.rsplit("/", 1)[0] + "/", self._signed_seg)
         self.send_response(200)
         self.send_header("Content-Type", "application/vnd.apple.mpegurl")
         self.send_header("Content-Length", str(len(body)))

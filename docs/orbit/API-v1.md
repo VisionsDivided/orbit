@@ -79,13 +79,56 @@ with a note that its address must be added to `TVBRO_ALLOWED_HOSTS`.
 
 | Method | Path | Who | Body → Answer |
 |---|---|---|---|
-| GET | `/v1/device/playlists` | a **linked TV** session of any account (owner, admin or member); 403 for browser sign-ins | → `{"playlists": [{"id", "name", "kind": "xtream"\|"m3u", "server", "user", "pass", "url", "epgUrl"}]}`: the household's enabled playlists with their logins, so the TV plays directly from the provider. Ids are the server's (`p0`, `p1` …), so channel and VOD keys are the same on every device. |
+| GET | `/v1/device/playlists` | a **linked TV** session of any account (owner, admin or member); 403 for browser sign-ins | → `{"playlists": [{"id", "name", "kind": "xtream"\|"m3u", "server", "user", "pass", "url", "epgUrl"}]}`: the household's enabled playlists. With **hidden provider logins** (the default, below) every address and login points at this server's Xtream facade; with it off, they are the provider's own, so the TV plays directly from the provider. Ids are the server's (`p0`, `p1` …), so channel and VOD keys are the same on every device. |
 
 Sessions have a kind (`orbit.db` migration 002): `web` for a browser sign-in, `tv` for a device linked with a pairing
 code. Every linked TV gets the playlists, whatever its account's role: every household TV can watch IPTV.
-The flip side is that any account can read the provider logins by linking a device with its own approval, so only
-give accounts to people the household trusts with them. Browser sessions never get them (`session_kind` must be
-`tv`). The TV keeps the playlists encrypted. When it is unlinked, signed out from another device, or linked to
+Browser sessions never get them (`session_kind` must be `tv`). With hidden logins off, any account can read the
+provider logins by linking a device with its own approval, so only give accounts to people the household trusts with
+them. The TV keeps the playlists encrypted.
+
+### Hidden provider logins: the Xtream facade
+
+On by default. `ORBIT_HIDE_PROVIDER_LOGIN=1` / `0` decides it on the server; otherwise the owner's setting
+(Settings > Security, "Provider login on linked TVs"; `POST /api/settings {"hideProviderLogin": bool}`). The status
+answer's `settings` carry `hideProviderLogin` (as it applies) and `hideProviderLoginForced` (the environment decides).
+TVs pick up a change at their next playlist sync (every 30 minutes, and at start).
+
+With it on, `/v1/device/playlists` answers, for each playlist:
+
+- **Xtream**: `{"server": "<origin>/xt/<id>", "user": "tv<16 hex>", "pass": "<32 hex>", "url": "", "epgUrl": ""}`.
+- **M3U**: `{"url": "<origin>/xt/<id>/get.php?username=…&password=…", "epgUrl": "<origin>/xt/<id>/xmltv.php?…&n=0,…"}`
+  (one guide address per configured one; empty when none is set), `server` / `user` / `pass` empty.
+
+`<origin>` is the scheme and `Host` the TV used for this request. The user is the TV session's public id, the
+password an HMAC of the session with the server key, so both stay the same for as long as the TV stays linked (the
+TV's playlist list does not change between syncs). They stop working at once when the session ends: unlinked,
+signed out from another device (`/v1/sessions/revoke`), account disabled or password reset, or expiry. Rotating the
+server key changes every password; TVs get the new one at their next playlist sync. A TV app that predates the
+facade just sees an Xtream server and works unchanged.
+
+Facade routes (Host check as everywhere; no cookie, the device login is in the address; wrong or dead logins get
+401 `{"user_info": {"auth": 0}, "error"}`, unknown playlists 404):
+
+| Path under `/xt/<id>/` | Does |
+|---|---|
+| `player_api.php?username&password[&action&…]` | the provider's answer for the same action and parameters (Xtream only). `user_info.username` / `password` become the device's, `server_info` names this server, and any value that carries the provider login in an address is replaced by a sealed `s/` address. Other answers pass through unchanged. gzip when the TV accepts it. |
+| `xmltv.php?username&password[&n=i]` | the guide, streamed through: Xtream's own `xmltv.php`, or the M3U playlist's i-th guide address. |
+| `get.php?username&password` | the M3U playlist (for Xtream: the provider's `get.php`), rewritten: every stream line, the `url-tvg` / `x-tvg-url` guide addresses and absolute `catchup-source` templates point here. Logos stay as they are. |
+| `live\|movie\|series\|timeshift/<user>/<pass>/<rest>` | relayed from the provider's same path with the real login (Xtream only). |
+| `s/<user>/<pass>/<token>[.ext]` | a sealed provider address (HLS segment, M3U stream, guide); a query string the TV adds (catch-up "append") is passed on. |
+| `t/<user>/<pass>/<token>[.ext]?v0=…&v1=…` | a sealed catch-up template; its placeholders were handed to the TV in order as `v0`, `v1` …, so it fills them in as usual. |
+
+Relaying: bytes are piped through 64 KiB at a time as they arrive (no buffering beyond one chunk; a TV that stops
+reading stops the provider read too), `Range` / `Content-Range` / `Accept-Ranges` pass through for films, the
+provider's redirects are followed by the server, the TV's `User-Agent` is passed on, and an answer without a length
+(live) closes the connection when it ends. An HLS playlist is rewritten so every segment, key and variant comes
+through `s/`. Tokens are AES-SIV sealed with the server key (`App.seal`), so the TV can replay them but never read
+the provider address inside. A running relay stops within a few chunks once its TV's session ends. Images (logos,
+posters) still load straight from wherever the catalogue names them, unless that address carries the login.
+
+Nothing logs a provider address or a device login: request lines show `/xt/<id>/<kind>/-/-/…` (the container's nginx
+log too), errors the exception type only. When it is unlinked, signed out from another device, or linked to
 another account, it removes everything the account brought: session and CSRF token, the server's playlists, My
 list and favourites, film resume points, episode marks and show progress, recently watched and search history, so
 the next account starts clean (data from before the first link was merged into that account then and goes too; it
@@ -101,7 +144,7 @@ has a random stream session id (`sid`, 32+ characters) that it keeps to itself.
 
 | Method | Path | Who | Body → Answer |
 |---|---|---|---|
-| GET | `/v1/streams` | signed in | → `{"max", "count", "active": [StreamUse]}`, oldest first. Only streams active in the last 20 seconds count. |
+| GET | `/v1/streams` | signed in | → `{"max", "count", "active": [StreamUse], "relays": [Relay]}`, oldest first. Only streams active in the last 20 seconds count. |
 | POST | `/api/stream/start` | signed in | `{"sid", "label", "what", "replace"?}` → `{"ok": true, "replaced": n}`. Takes a slot; when every slot is taken, another viewer is stopped: the stream whose `id` is `replace`, or else the oldest. `{"ok": false, "stopped": "recording"}` when every slot is held by a recording. `{"ok": false, "changed": true, "streams": {...}}` (the `/v1/streams` answer) when `replace` names a stream that has ended or is a recording and no slot is free: nothing was stopped; ask again with the new list. When the chosen stream has ended and a slot is free, the start simply goes ahead. |
 | POST | `/api/stream/heartbeat` | signed in | `{"sid"}` every ~10 s → `{"ok": true}`, or `{"stopped": "replaced"\|"recording"}` once another device took the slot. |
 | POST | `/api/stream/stop` | signed in | `{"sid"}` → `{"ok": true}`: the slot is free again. |
@@ -111,6 +154,10 @@ has a random stream session id (`sid`, 32+ characters) that it keeps to itself.
   that device's heartbeats. `sid` is the first 6 characters of the session id (kept for older clients to recognise
   their own stream). `label` is the device as the client named it ("Chrome on Windows", "TV (…)"), `profile` the
   Orbit profile that started it (empty in tvBro mode and for recordings), `what` what is playing.
+- `Relay`: `{"device", "playlist", "what", "since", "idleSec"}`, one per linked TV pulling media through the facade
+  (open relay, or media bytes in the last 20 seconds). This is exact, since every byte passes the server, but it is
+  informational: `count` and the slot rules above are unchanged (the TV still takes its slot with `/api/stream/start`).
+  `what` is the last stream named in an address (`live 101`, `movie 7`); empty for M3U and HLS segments.
 - The TV lists every active stream when the limit is full and offers one "Stop <name> and watch" per viewer
   (recordings are listed but cannot be chosen), plus Cancel. The web app still stops the oldest without asking
   (it never had a prompt).
