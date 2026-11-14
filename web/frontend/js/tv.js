@@ -1,6 +1,9 @@
 // Copyright 2026 The tvBro authors. SPDX-License-Identifier: Apache-2.0
-// TV screen: groups column; header with a live preview + the programme under the cursor;
-// a time-proportional guide grid (virtualised rows, guide paged from the backend).
+// Live TV (direction 5, like the TV app): a sub-menu row (Channels · Guide · Recordings · My list), an info block
+// for the channel under the cursor with the live preview top right, the groups as tabs (★ Favourites, All
+// channels, News…), a time-proportional guide grid with a now line (virtualised rows, guide paged from the backend)
+// and the colour-key legend. Channels shows the info block; Guide gives the grid the whole screen.
+// Keys: Up from the guide's first row reaches the group tabs, then the sub-menu row, then the top bar.
 
 import { api, cacheGet, cacheSet, myList, inMyList, toggleMyList } from './api.js';
 import { layoutEdit, addToGroupMenu } from './editor.js';
@@ -15,9 +18,10 @@ import { hasReminder, toggleReminder } from './reminders.js';
 import { isUnlocked, setLock, unlock } from './parental.js';
 import { guideMapDialog } from './epgpick.js';
 import { openLiveExternally } from './external.js';
+import { legend, colorKey } from './ui5.js';
 
-const ROW_H = 52, PAGE = 200;
-let LABEL_W = 240, narrow = false;
+const PAGE = 200;
+let ROW_H = 52, LABEL_W = 240, narrow = false;     // both scale with the window on wide screens (layout())
 
 // remembered across screen switches
 // (group, focused row, scroll position and whether the guide or the group list had focus)
@@ -35,7 +39,11 @@ export function toggleFavChannel(c) {
 
 export function tvScreen(main, nav) {
   main.innerHTML = '';
-  const root = h('div', { class: 'tv2' });
+  const root = h('div', { class: 'tv2' + (uiLoad().tvGuide ? ' guide-only' : '') });
+  // the sub-menu row: Channels (info block + guide) · Guide (the guide alone) · Recordings · My list
+  const SUB = [['channels', 'Channels'], ['guide', 'Guide'], ['recordings', 'Recordings'], ['mylist', 'My list']];
+  const sub = h('div', { class: 'sub5 tv-sub', role: 'navigation', 'aria-label': 'Live TV sections' },
+    ...SUB.map(([id, t], i) => h('button', { class: 'pill', type: 'button', tabindex: '-1', 'data-i': i, onclick: () => subAct(i) }, t)));
   const gcol = h('div', { class: 'gcol' }, h('div', { class: 'gcol-h' }, 'TV'));
   const glist = h('div', { class: 'glist' }); gcol.append(glist);
 
@@ -59,12 +67,14 @@ export function tvScreen(main, nav) {
   const empty = h('div', { class: 'gempty', hidden: true });
   body.append(spacer, empty);
   const bodyWrap = h('div', { class: 'gbody-wrap' }, body, nowLine);
-  const right = h('div', { class: 'tvr' }, header, ruler, bodyWrap);
-  root.append(gcol, right); main.append(root);
+  const nowPill = h('div', { class: 'now-pill', hidden: true });
+  ruler.append(nowPill);
+  const right = h('div', { class: 'tvr' }, header, gcol, ruler, bodyWrap);
+  root.append(sub, right); main.append(root);
 
   const preview = new PreviewPlayer(pvVideo, () => { pvBox.querySelector('.pv-off').textContent = 'Playing in another window · click to play here'; },
     (msg) => { pvNote.textContent = msg || ''; pvNote.hidden = !msg; });
-  let groups = [], chans = [], total = 0, loadingPages = new Set(), zone = mem.zone, gi = 0, focusKey = null;
+  let groups = [], chans = [], total = 0, loadingPages = new Set(), zone = mem.zone, gi = 0, si = 0, focusKey = null;
   // what plays from here remembers its group, so the guide can come back to it
   const playLive = (c, ctx = {}) => playLive0(c, { ...ctx, group: mem.group, row: mem.row });
   const watchProg = (c, p, ctx = {}) => watchProg0(c, p, { ...ctx, group: mem.group, row: mem.row });
@@ -112,12 +122,14 @@ export function tvScreen(main, nav) {
     glist.innerHTML = '';
     groups.forEach((g, i) => {
       const n = g.id === '__fav' ? favKeys().length : g.count;
+      const name = g.id === '__fav' ? '★ ' + g.name.replace(/^★\s*/, '') : g.name;
       const b = h('button', { class: 'gitem' + (g.id === mem.group ? ' sel' : '') + (zone === 'groups' && i === gi ? ' kf' : ''), 'data-i': i, tabindex: '-1' },
-        h('span', { class: 'gname' }, (g.locked ? '🔒 ' : '') + g.name), n != null ? h('span', { class: 'count' }, String(n)) : null);
+        h('span', { class: 'gname' }, (g.locked ? '🔒 ' : '') + name), n != null ? h('span', { class: 'count' }, String(n)) : null);
       b.onclick = () => { gi = i; zone = 'groups'; selectGroup(g.id); };
       glist.append(b);
     });
-    const kf = glist.querySelector('.kf'); if (kf) kf.scrollIntoView({ block: 'nearest' });
+    const kf = glist.querySelector('.kf') || glist.querySelector('.sel'); if (kf) kf.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    renderSub();
   }
   function selectGroup(id) {
     if (id !== mem.group) { mem.group = id; mem.row = 0; mem.scroll = 0; setPref('lastGroup', id); loadGroup(id); }
@@ -233,7 +245,12 @@ export function tvScreen(main, nav) {
   function layout() {
     narrow = window.innerWidth < 900;
     root.classList.toggle('narrow', narrow);
-    LABEL_W = narrow ? 118 : 240; root.style.setProperty('--lw', LABEL_W + 'px');
+    // wide screens: the TV's proportions (a row is 80 px and the channel column 390 px of 1920)
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 10;
+    const rowH = narrow ? 52 : Math.max(52, Math.round(8 * rem));
+    if (rowH !== ROW_H) { ROW_H = rowH; rows.forEach((r) => r.remove()); rows.clear(); }
+    root.style.setProperty('--rowh', ROW_H + 'px');
+    LABEL_W = narrow ? 118 : Math.max(240, Math.round(39 * rem)); root.style.setProperty('--lw', LABEL_W + 'px');
     spacer.style.height = (total * ROW_H) + 'px';
     // phones: a fixed scale and the grid scrolls sideways (channel names stay put)
     pxPerMin = narrow ? 4.4 : Math.max(200, body.clientWidth - LABEL_W) / G.WINDOW_MIN;
@@ -248,7 +265,22 @@ export function tvScreen(main, nav) {
     return [first, last];
   }
   function renderAll() { layout(); renderRuler(); renderRows(); renderHeader(); renderGroupsKf(); requestGuide(); }
-  function renderGroupsKf() { if (zone !== 'nav') mem.zone = zone; glist.querySelectorAll('.gitem').forEach((b, i) => b.classList.toggle('kf', zone === 'groups' && i === gi)); }
+  function renderGroupsKf() { if (zone !== 'nav' && zone !== 'sub') mem.zone = zone; glist.querySelectorAll('.gitem').forEach((b, i) => b.classList.toggle('kf', zone === 'groups' && i === gi)); renderSub(); }
+  function renderSub() {
+    const guideOnly = root.classList.contains('guide-only');
+    sub.querySelectorAll('.pill').forEach((b, i) => {
+      b.classList.toggle('on', (i === 0 && !guideOnly) || (i === 1 && guideOnly));
+      b.classList.toggle('kf', zone === 'sub' && i === si);
+    });
+  }
+  /** A sub-menu item: Channels / Guide switch the layout here; Recordings and My list are their own screens. */
+  function subAct(i) {
+    const id = SUB[i][0];
+    if (id === 'recordings' || id === 'mylist') { location.hash = id; return; }
+    root.classList.toggle('guide-only', id === 'guide');
+    uiSave({ tvGuide: id === 'guide' });
+    si = i; layout(); renderRuler(); renderRows(); renderHeader(); renderSub();
+  }
 
   function renderRuler() {
     const now = nowSec(), ws = mem.winStart, we = ws + G.WINDOW_SEC;
@@ -259,12 +291,16 @@ export function tvScreen(main, nav) {
     syncHScroll();
     if (now >= ws && now < we) { nowLine.hidden = false; nowLine.style.left = (LABEL_W + G.tickX(now, ws, pxPerMin) - body.scrollLeft) + 'px'; }
     else nowLine.hidden = true;
+    nowPill.hidden = nowLine.hidden;
+    nowPill.textContent = fmtTime(now).replace(/\s?[AP]M$/i, '');
+    nowPill.style.left = nowLine.style.left;
   }
 
   function syncHScroll() {
     const x = body.scrollLeft || 0;
     rulerTrack.firstChild && (rulerTrack.style.transform = `translateX(${-x}px)`);
     if (!nowLine.hidden) { const now = nowSec(); nowLine.style.left = (LABEL_W + G.tickX(now, mem.winStart, pxPerMin) - x) + 'px'; nowLine.style.visibility = G.tickX(now, mem.winStart, pxPerMin) - x < 0 ? 'hidden' : ''; }
+    if (nowPill) { nowPill.style.left = nowLine.style.left; nowPill.style.visibility = nowLine.style.visibility; }
   }
   function chanNum(c, i) { return prefs().numbering === 'group' ? i + 1 : (c.number || ''); }
   function labelHtml(c, i) {
@@ -290,15 +326,17 @@ export function tvScreen(main, nav) {
       const p = seg.prog, state = G.progState(p, now, c);
       const foc = zone === 'grid' && focusProg && focusProg.start === p.start && chans[mem.row] === c;
       const rem = hasReminder(c.key, p.start) ? '<span class="bell">⏰</span>' : '';
+      const done = state === 'now' ? G.progress(p, now).frac : 0;     // how far the programme on now is (bar under it)
       s += `<div class="g-blk ${state}${foc ? ' foc' : ''}" data-s="${p.start}" style="${st}">` +
         `<div class="t">${b.clippedLeft ? '‹ ' : ''}${rem}${esc(p.title)}</div>` +
-        (b.w > 90 ? `<div class="tm">${esc(fmtTime(p.start))}${state === 'catchup' ? ' ⟲' : ''}</div>` : '') + '</div>';
+        (b.w > 90 ? `<div class="tm">${esc(fmtTime(p.start))}${b.w > 170 ? ' – ' + esc(fmtTime(p.stop)) : ''}${state === 'catchup' ? ' ⟲' : ''}</div>` : '') +
+        (done ? `<i class="g-pg" style="width:${(done * 100).toFixed(1)}%"></i>` : '') + '</div>';
     }
     return s;
   }
   function renderRows() {
     if (!alive) return;
-    if (zone !== 'nav') mem.zone = zone;
+    if (zone !== 'nav' && zone !== 'sub') mem.zone = zone;
     saveMem();
     const [first, last] = visibleRange();
     ensurePages(first, last);
@@ -333,24 +371,31 @@ export function tvScreen(main, nav) {
     if (!play.playing) setCurrent(c, { list: () => chans, group: mem.group, row: mem.row });
     const progs = progsOf(c);
     const p = focusProg || G.progAt(progs, now);
-    info.append(h('div', { class: 'hd-ch' }, `${chanNum(c, mem.row)}  ${c.name}`));
+    const st = p ? G.progState(p, now, c) : null;
+    const isCur = !!(play.playing && play.playing.key === c.key);
+    const num = chanNum(c, mem.row);
+    info.append(h('div', { class: 'hd-ch' },
+      c.logo ? h('img', { class: 'hd-logo', alt: '', src: api.img(c.logo) }) : h('span', { class: 'hd-logo' }),
+      h('span', { class: 'hd-chname' }, (num ? num + ' · ' : '') + c.name),
+      st === 'now' ? h('span', { class: 'live-pill' }, 'LIVE') : null,
+      c.locked ? h('span', { class: 'hd-flag', title: 'Locked (parental PIN)' }, '🔒') : null));
     info.append(h('div', { class: 'hd-title' }, p ? p.title : (progs ? 'No guide data' : 'Loading guide…')));
     if (p) {
-      const st = G.progState(p, now, c), pr = G.progress(p, now);
+      const pr = G.progress(p, now);
       const when = st === 'now' ? `${pr.minLeft} min left` : st === 'future' ? (fmtDate(p.start) + ' · starts in ' + Math.ceil((p.start - now) / 60) + ' min')
         : st === 'catchup' ? 'finished · catch-up available' : 'finished';
-      info.append(h('div', { class: 'hd-time' }, `${fmtTime(p.start)} – ${fmtTime(p.stop)}   ${when}`));
-      if (st === 'now') { const bar = h('div', { class: 'progress' }, h('i')); bar.firstChild.style.width = (pr.frac * 100).toFixed(1) + '%'; info.append(bar); }
+      const nx = G.nextProg(progs || [], p);
+      info.append(h('div', { class: 'hd-time' }, h('span', {}, `${fmtTime(p.start)} – ${fmtTime(p.stop)}`), h('span', { class: 'hd-left' }, when),
+        nx ? h('span', { class: 'hd-next' }, `Next: ${fmtTime(nx.start)} ${nx.title}`) : null));
+      const flags = [inMyList(c.key) ? '★ Favourite' : null, c.catchup ? `⟲ Catch-up ${c.catchupDays || ''}d` : null, isCur ? (playerOpen ? '▶ Playing' : '▶ In the preview') : null].filter(Boolean);
+      const bar = st === 'now' ? h('div', { class: 'progress' }, h('i')) : null;
+      if (bar) bar.firstChild.style.width = (pr.frac * 100).toFixed(1) + '%';
+      info.append(h('div', { class: 'hd-prog' }, bar, flags.length ? h('span', { class: 'hd-flags' }, flags.join('   ')) : null));
       const epl = [p.ep, p.sub].filter(Boolean).join(' ');
       if (epl) info.append(h('div', { class: 'hd-ep' }, epl));
       if (p.desc) info.append(h('div', { class: 'hd-desc' }, p.desc));
     }
     side.append(h('div', { class: 'hd-group' }, c.group || ''));
-    if (inMyList(c.key)) side.append(h('div', { class: 'hd-star' }, '★ My list'));
-    if (c.catchup) side.append(h('div', { class: 'hd-cu' }, `⟲ Catch-up ${c.catchupDays || ''}d`));
-    if (play.playing && play.playing.key === c.key) side.append(h('div', { class: 'hd-play' }, '▶ Playing'));
-    const isCur = play.playing && play.playing.key === c.key;
-    side.append(h('div', { class: 'hd-keys' }, (isCur ? 'Enter full screen' : prefs().previewOn ? 'Enter play here' : 'Enter watch') + ' · M menu · F favourite'));
     renderPreview();
   }
   /** The preview plays the current channel, never the focused one: moving through the guide
@@ -423,6 +468,7 @@ export function tvScreen(main, nav) {
     renderGroupsKf(); renderRows(); renderHeader();
   }
   function toNav() { zone = 'nav'; renderGroupsKf(); renderRows(); nav.focusActive(); }
+  function toSub() { zone = 'sub'; si = root.classList.contains('guide-only') ? 1 : 0; renderGroups(); renderRows(); }
 
   /** Enter / OK. On a channel name or its programme on now: the current channel goes full
    *  screen; another channel becomes the current one (the preview switches to it; full screen
@@ -486,6 +532,26 @@ export function tvScreen(main, nav) {
     })));
   }
 
+  // ---------- colour keys: Favourite · Record · Channel options (the legend's items are buttons too) ----------
+  // (the TV's yellow "Format: TS / HLS" key has no web counterpart: the browser picks the format itself)
+  function colorKeys() {
+    return [
+      { color: 'red', label: 'Favourite', action: () => { const c = chans[mem.row]; if (c) { toggleFavChannel(c); renderRows(); renderHeader(); renderGroups(); } } },
+      { color: 'green', label: 'Record', action: recordFocused },
+      { color: 'blue', label: 'Channel options', action: progMenu },
+    ];
+  }
+  async function recordFocused() {
+    const c = chans[mem.row]; if (!c) return;
+    const now = nowSec(), p = focusProg || G.progAt(progsOf(c), now), st = p ? G.progState(p, now, c) : null;
+    if (p && st !== 'now' && st !== 'future') { toast('This programme has ended'); return; }
+    try {
+      const r = await api.record(p ? { key: c.key, title: p.title, start: p.start, stop: p.stop } : { key: c.key });
+      toast(st === 'future' ? 'Recording scheduled ' + fmtTime(r.item.start) + '–' + fmtTime(r.item.stop) : 'Recording on the server until ' + fmtTime(r.item.stop));
+    } catch (e) { toast('Cannot record: ' + e.message); }
+  }
+  root.append(legend(colorKeys(), [['OK', 'Watch'], ['M', 'Menu']]));
+
   // ---------- input ----------
   let escDown = 0, escFired = false;
   function onKey(e) {
@@ -502,14 +568,26 @@ export function tvScreen(main, nav) {
     if (k === 'p' || k === 'P') { resumeFullscreen(); return true; }
     // the keys reach the guide but the nav rail lost the DOM focus (a click elsewhere): no trap,
     // the guide takes the focus back where it was
-    if (zone === 'nav') { zone = mem.zone && mem.zone !== 'nav' ? mem.zone : 'label'; renderGroupsKf(); renderRows(); renderHeader(); if (k.startsWith('Arrow') || k === 'Enter') return true; }
-    if (zone === 'groups') {
-      if (k === 'ArrowUp' && gi === 0) { toNav(); return true; }   // the top bar is above the groups
-      if (k === 'ArrowDown' || k === 'ArrowUp') { gi = Math.max(0, Math.min(groups.length - 1, gi + (k === 'ArrowDown' ? 1 : -1))); renderGroups(); if (groups[gi]) selectGroupSoon(groups[gi].id); return true; }
-      if (k === 'ArrowRight' || k === 'Enter') { if (groups[gi]) selectGroup(groups[gi].id); toLabel(); return true; }
-      if (k === 'ArrowLeft') { toNav(); return true; }
+    if (zone === 'nav') { zone = mem.zone && mem.zone !== 'nav' && mem.zone !== 'sub' ? mem.zone : 'label'; renderGroupsKf(); renderRows(); renderHeader(); if (k.startsWith('Arrow') || k === 'Enter') return true; }
+    if (zone === 'sub') {        // Channels · Guide · Recordings · My list
+      if (k === 'ArrowLeft' || k === 'ArrowRight') { si = Math.max(0, Math.min(SUB.length - 1, si + (k === 'ArrowRight' ? 1 : -1))); renderSub(); return true; }
+      if (k === 'Enter') { subAct(si); return true; }
+      if (k === 'ArrowDown') { toGroups(); return true; }
+      if (k === 'ArrowUp') { toNav(); return true; }
+      return k.startsWith('Arrow');
+    }
+    if (zone === 'groups') {     // the group tabs: Left / Right pick one, Down goes into the guide
+      if (k === 'ArrowLeft' || k === 'ArrowRight') {
+        if (k === 'ArrowLeft' && gi === 0) { toNav(); return true; }
+        gi = Math.max(0, Math.min(groups.length - 1, gi + (k === 'ArrowRight' ? 1 : -1))); renderGroups(); if (groups[gi]) selectGroupSoon(groups[gi].id); return true;
+      }
+      if (k === 'ArrowDown' || k === 'Enter') { if (groups[gi]) selectGroup(groups[gi].id); toLabel(); return true; }
+      if (k === 'ArrowUp') { toSub(); return true; }
       return k === 'PageUp' || k === 'PageDown';
     }
+    if (k === 'ArrowUp' && mem.row === 0 && (zone === 'label' || zone === 'grid')) { toGroups(); return true; }   // the tabs are above the guide
+    const keys = colorKeys();
+    if (colorKey(e, keys)) return true;
     switch (k) {
       case 'ArrowUp': moveRow(-1); return true;
       case 'ArrowDown': moveRow(1); return true;
@@ -529,7 +607,7 @@ export function tvScreen(main, nav) {
     if (e.key !== 'Escape') return;
     const short = escDown && !escFired && Date.now() - escDown <= 450;
     escDown = 0;
-    if (short && !playerOpen && !document.querySelector('.modal-back')) { if (zone === 'grid' || zone === 'label') toGroups(); else if (zone === 'groups') toNav(); }
+    if (short && !playerOpen && !document.querySelector('.modal-back')) { if (zone === 'grid' || zone === 'label') toGroups(); else if (zone === 'groups' || zone === 'sub') toNav(); }
   }
 
   function rowOf(ev) { const r = ev.target.closest('.g-row'); return r ? +r.dataset.i : -1; }
@@ -602,7 +680,7 @@ export function tvScreen(main, nav) {
   return {
     onKey, onKeyUp,
     virtualFocus: true,          // the guide draws its own focus; app.js must not move the DOM focus into it
-    focusIn() { const z = mem.zone && mem.zone !== 'nav' ? mem.zone : 'label'; if (z === 'groups') toGroups(); else { zone = z; renderGroupsKf(); renderRows(); renderHeader(); } },
+    focusIn() { const z = mem.zone && mem.zone !== 'nav' && mem.zone !== 'sub' ? mem.zone : 'label'; if (z === 'groups') toGroups(); else { zone = z; renderGroupsKf(); renderRows(); renderHeader(); } },
     destroy() { alive = false; setDock(null); preview.dispose(); clearInterval(tick); ro.disconnect(); window.removeEventListener('tvbro-player', onPlayer); window.removeEventListener('tvbro-layout', onLayout); window.removeEventListener('tvbro-unlocked', onUnlocked); window.removeEventListener('tvbro-epgmap', onEpgMap); epgTimers.forEach(clearTimeout); },
   };
 }

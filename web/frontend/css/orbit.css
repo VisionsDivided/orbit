@@ -233,7 +233,7 @@ html.solid #scene .bgart { opacity: .35 !important; }
 .ck .kr { background: #e5484d; } .ck .kg { background: #30a46c; } .ck .ky { background: #f5d90a; } .ck .kb { background: #3e63dd; }
 .ck .hn { color: rgba(255,255,255,.55); padding-left: 2.8rem; border-left: 1px solid rgba(255,255,255,.18); white-space: nowrap; }
 .ck b { color: #fff; font-weight: 700; border: 1.5px solid rgba(255,255,255,.4); border-radius: .5rem; padding: 0 .6rem; font-size: 1.5rem; }
-body[data-screen="live"] .ck, body[data-screen="settings"] .ck { display: none; }
+body[data-screen="settings"] .ck { display: none; }
 
 /* ---------------------------------------------------------------- title detail */
 .dt5 .hero5, .title5 .hero5 { padding-top: 15rem; min-height: 60rem; align-content: start; }
@@ -380,26 +380,92 @@ body[data-screen="live"] .ck, body[data-screen="settings"] .ck { display: none; 
 .signin-back { background: radial-gradient(72% 82% at 100% 0%, rgba(107,69,230,.6), transparent 70%), radial-gradient(55% 65% at 0% 100%, rgba(47,211,255,.18), transparent 72%), #06061a; }
 .signin-card { background: var(--dialog); border-color: rgba(255,255,255,.12); border-radius: 20px; }
 
-/* Live TV: the guide sits under the top bar, panels on the dimmed orbit backdrop */
-.tv2 { position: relative; height: calc(100vh - var(--tbh)); height: calc(100dvh - var(--tbh)); margin-top: var(--tbh); padding: 0 var(--side) 2rem; gap: 2rem; box-sizing: border-box; }
-.gcol, .hd, .ruler { background: rgba(10,12,22,.55); border: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); -webkit-backdrop-filter: none; backdrop-filter: none; }
-.gcol { border-radius: 16px; }
-.gcol-h { color: #fff; font-weight: 800; letter-spacing: -.01em; }
-.gitem.sel { background: rgba(255,255,255,.1); color: #fff; }
-.gitem.kf { border-color: transparent; box-shadow: 0 0 0 3px #fff; background: rgba(255,255,255,.14); }
-.hd { border-radius: 16px; }
-.hd-ch { color: var(--accent); }
-.hd-title { font-weight: 800; letter-spacing: -.01em; }
-.g-blk { background: rgba(255,255,255,.035); border: 0; border-left: 2px solid var(--line); border-radius: 0; }
-.g-row.rf .g-blk { background: rgba(255,255,255,.06); }
-.g-blk.now, .g-row.rf .g-blk.now { background: rgba(255,255,255,.09); }
+/* Live TV (direction 5, like the TV app): sub-menu row, info block with the preview top right, group tabs,
+   a large guide with a now line, and the colour-key legend. Phones keep their own layout (media query below). */
+.tv2 .live-pill { display: inline-flex; align-items: center; gap: .6rem; background: var(--live); color: #fff; font-size: 1.6rem; font-weight: 800; letter-spacing: .08em; padding: .5rem 1rem; border-radius: .6rem; line-height: 1; }
+.tv2 .live-pill::before { content: ""; width: .8rem; height: .8rem; border-radius: 50%; background: #fff; }
 .g-blk.foc, .g-row .g-blk.foc { background: #fff !important; border-radius: 8px; box-shadow: 0 0 0 3px #fff; border-color: transparent; }
 .g-blk.foc .t { color: #05060c; } .g-blk.foc .tm { color: #333; }
 .g-row.lf .g-label { box-shadow: inset 0 0 0 3px #fff; background: rgba(255,255,255,.14); }
-.g-row.playing .g-label .gname { color: var(--live); }
+.g-row.playing .g-label .gname { color: var(--accent); }
+.g-row.playing .g-label .gname::before { content: none; }
 .g-row.fav .g-label .gname::after { color: var(--rating); }
 .now-line { background: var(--live); width: 3px; }
 .rb { background: rgba(255,255,255,.1); color: #fff; }
+.g-pg { position: absolute; left: 6px; bottom: 4px; height: 4px; max-width: calc(100% - 12px); border-radius: 2px; background: var(--accent); pointer-events: none; }
+.g-blk.foc .g-pg { background: #0a7fa3; }
+.now-pill { position: absolute; top: 0; transform: translateX(-50%); background: var(--live); color: #fff; font-size: 13px; font-weight: 800; padding: 3px 7px; border-radius: 6px; z-index: 5; pointer-events: none; font-variant-numeric: tabular-nums; }
+.gitem .count { opacity: .7; }
+
+@media (min-width: 900px) {
+  .tv2 { display: flex; flex-direction: column; height: 100vh; height: 100dvh; margin: 0; padding: 11.8rem var(--side) 9.6rem; gap: 0; box-sizing: border-box; }
+  .tv2 .tv-sub { position: static; margin: 0 0 2.6rem; flex: none; }
+  .tv2 .tv-sub::before { display: none; }
+  .tv2 .tv-sub .pill.kf { outline: var(--ring) solid #fff; outline-offset: .5rem; color: #fff; }
+  .tv2 .tv-sub .pill.on.kf { color: #05060c; }
+  .tvr { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0; }
+  /* the info block: channel, LIVE, title, time, progress, description; the preview top right */
+  .hd { display: grid; grid-template-columns: minmax(0, 1fr) 50rem; column-gap: 4rem; align-items: start; height: auto; flex: none; padding: 0; margin: 0 0 3rem;
+    background: none; border: 0; box-shadow: none; border-radius: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .hd .pv { grid-column: 2; grid-row: 1; width: 50rem; height: 28.1rem; flex: none; border-radius: .6rem; border: 0; box-shadow: 0 1.6rem 4rem rgba(0,0,0,.5); }
+  .hd-info { grid-column: 1; grid-row: 1; min-width: 0; overflow: visible; }
+  .hd-side { display: none; }
+  .hd-ch { display: flex; align-items: center; gap: 1.6rem; font-size: 2.6rem; font-weight: 700; color: #fff; white-space: nowrap; overflow: hidden; }
+  .hd-logo { width: 5.6rem; height: 5.6rem; flex: none; border-radius: 1rem; object-fit: contain; background: rgba(255,255,255,.08); box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
+  .hd-chname { overflow: hidden; text-overflow: ellipsis; }
+  .hd-flag { font-size: 2rem; }
+  .hd-title { font-size: 6.4rem; font-weight: 800; letter-spacing: -.03em; line-height: 1.08; margin: 2.2rem 0 1.4rem; -webkit-line-clamp: 1; color: #fff; }
+  .hd-time { display: flex; gap: 2rem; font-size: 2.6rem; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; margin: 0; }
+  .hd-next { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  .hd-prog { display: flex; align-items: center; gap: 2.4rem; margin-top: 1.8rem; min-height: 1rem; }
+  .hd-prog .progress { width: 48rem; max-width: 50%; height: .6rem; min-height: 3px; margin: 0; flex: none; background: rgba(255,255,255,.22); border-radius: .3rem; }
+  .hd-flags { font-size: 2rem; color: var(--muted); white-space: pre; }
+  .hd-ep { font-size: 2.2rem; color: #e9ecff; margin-top: 1.2rem; }
+  .hd-desc { font-size: 2.2rem; line-height: 1.4; color: var(--muted); margin-top: 1.4rem; -webkit-line-clamp: 2; max-width: 110rem; }
+  .tv2.guide-only .hd { display: none; }
+  /* the groups as tabs */
+  .gcol { width: auto; flex: none; margin: 0 0 1.8rem; background: none; border: 0; box-shadow: none; border-radius: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .gcol-h { display: none; }
+  .glist { display: flex; flex-direction: row; gap: 4rem; overflow-x: auto; overflow-y: hidden; flex: none; padding: .8rem .8rem 1.6rem; scrollbar-width: none; }
+  .glist::-webkit-scrollbar { display: none; }
+  .gitem { position: relative; width: auto; flex: none; padding: .4rem 0; font-size: 2.6rem; font-weight: 700; color: rgba(255,255,255,.5); background: none; border: 0; border-radius: .6rem; }
+  .gitem:hover { color: #fff; background: none; }
+  .gitem .gname { overflow: visible; }
+  .gitem .count { display: none; }
+  .gitem.sel { color: #fff; background: none; }
+  .gitem.sel::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1rem; height: .4rem; border-radius: .2rem; background: var(--accent); }
+  .gitem.kf { color: #fff; background: none; box-shadow: none; outline: var(--ring) solid #fff; outline-offset: .6rem; }
+  /* the time ruler with the now pill */
+  .ruler { height: 4.6rem; flex: 0 0 4.6rem; background: none; border: 0; box-shadow: none; border-radius: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .ruler-label { visibility: hidden; }
+  .tick { font-size: 2rem; color: var(--muted); bottom: .8rem; gap: 1rem; }
+  .tick i { width: 2px; height: 2.6rem; background: rgba(255,255,255,.14); }
+  .ruler-btns { right: 0; top: .2rem; }
+  .rb { font-size: 1.6rem; padding: .4rem 1.2rem; border-radius: .8rem; }
+  .now-pill { font-size: 1.6rem; padding: .5rem .9rem; border-radius: .6rem; top: -.2rem; }
+  /* the guide: 80 px rows (of 1920), big titles, a now line */
+  .gbody-wrap { flex: 1; min-height: 0; }
+  .g-row { height: var(--rowh, 52px); padding: 0; }
+  .g-label { font-size: 2.4rem; font-weight: 600; gap: 2rem; padding: 0 1.6rem; border-radius: .8rem; background: none; box-shadow: inset 0 -1px 0 var(--line); }
+  .g-label .n { width: 5rem; flex: 0 0 5rem; font-size: 2.2rem; text-align: center; color: var(--muted); }
+  .g-label .lg { width: 4.8rem; height: 4.8rem; flex: 0 0 4.8rem; border-radius: .8rem; background: rgba(255,255,255,.08); }
+  .g-label .ic-cu, .g-label .ic-lock { font-size: 2rem; }
+  .g-fav, .g-more { width: 3.6rem; height: 3.6rem; flex-basis: 3.6rem; font-size: 2.2rem; border-radius: .8rem; }
+  /* the star and the menu button only where the pointer is (keys: F and M; the legend) */
+  .g-row:not(:hover) .g-more, .g-row:not(:hover) .g-fav:not(.on) { display: none; }
+  @media (hover: none) { .g-row .g-more, .g-row .g-fav { display: flex; } }
+  .g-row.rf .g-label { background: rgba(255,255,255,.05); }
+  .g-track { height: var(--rowh, 52px); }
+  .g-blk { top: .4rem; height: calc(var(--rowh, 52px) - .8rem); padding: .7rem 1.4rem 1.3rem; box-sizing: border-box; background: rgba(255,255,255,.04); border: 0; border-left: 2px solid var(--line); border-radius: 0; }
+  .g-row.rf .g-blk { background: rgba(255,255,255,.07); }
+  .g-blk.now, .g-row.rf .g-blk.now { background: rgba(255,255,255,.09); }
+  .g-blk .t { font-size: 2.3rem; font-weight: 600; color: #fff; }
+  .g-blk .tm { font-size: 1.8rem; color: var(--muted); margin-top: .4rem; }
+  .g-blk.past .t, .g-blk.catchup .t { color: #b4bccb; }
+  .g-blk.gap { font-size: 1.8rem; }
+  .g-pg { left: .6rem; bottom: .3rem; height: .5rem; min-height: 3px; }
+  .gempty { font-size: 2.4rem; top: 3rem; left: 3rem; }
+}
 
 /* the player overlay (DESIGN-SPEC-5 §10). The stream-limit prompt is streamprompt.js (.modal.stream-ask inside
    .modal-back): direction 5 places it top-right on wide screens and as a bottom sheet on phones. */
@@ -558,7 +624,18 @@ body[data-screen="live"] .ck, body[data-screen="settings"] .ck { display: none; 
   .screen:not(.screen5) > h1 { font-size: 24px; }
   #toast { bottom: 96px; }
   /* Live TV under the header, above the bottom bar */
-  .tv2 { margin-top: var(--tbh); height: calc(100dvh - var(--tbh) - 80px); padding: 0 8px; gap: 8px; }
+  .tv2 { margin-top: var(--tbh); height: calc(100dvh - var(--tbh) - 80px); padding: 0 8px; gap: 8px; display: flex; flex-direction: column; }
+  .tv2 .tv-sub { order: 0; margin: 4px 4px 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 7px; padding-bottom: 2px; }
+  .tv2 .tv-sub > .pill { all: unset; cursor: pointer; font-size: 13px; font-weight: 600; padding: 7px 13px; border-radius: 999px; background: rgba(255,255,255,.1); color: #fff; flex: none; }
+  .tv2 .tv-sub > .pill.on { background: #fff; color: #070812; }
+  .tv2 .tv-sub > .pill.kf { outline: 3px solid #fff; outline-offset: 2px; }
+  .tv2.guide-only .hd { display: none; }
+  .hd-ch { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--accent); }
+  .hd-logo { width: 22px; height: 22px; border-radius: 5px; object-fit: contain; }
+  .tv2 .live-pill { font-size: 9px; padding: 3px 6px; }
+  .hd-time { font-size: 12px; display: flex; gap: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+  .hd-next, .hd-flags { display: none; }
+  .hd-prog .progress { margin: 6px 0 0; }
   .modal-back:has(> .stream-ask) { align-items: flex-end; justify-content: stretch; padding: 0; background: rgba(0,0,0,.55); }
   .modal.stream-ask { width: 100%; min-width: 0; border-radius: 22px 22px 0 0; padding: 16px 20px calc(24px + env(safe-area-inset-bottom)); }
   .stream-ask .pin-btns .btn { flex: 1; justify-content: center; }
