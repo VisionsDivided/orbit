@@ -201,7 +201,7 @@ fun HomeSection(m: AppModel) {
 }
 
 /** OK on a card or a hero button: channels play, titles open their page ([play]: films start playing). */
-private fun open(m: AppModel, t: Tile, play: Boolean, unlocked: Boolean = false) {
+internal fun open(m: AppModel, t: Tile, play: Boolean, unlocked: Boolean = false) {
     t.channel?.let { m.play(it); return }
     // a catalog title of a PIN-locked category (its category name is not known here, so the PIN is asked each time)
     if (t.locked && !unlocked && m.prefs.pinHash.isNotEmpty()) { m.askPin { open(m, t, play, unlocked = true) }; return }
