@@ -61,6 +61,7 @@ from orbit.accounts import Accounts as OrbitAccounts      # Orbit: accounts and 
 from orbit import api as V1
 from orbit.profilestate import ProfileStores
 from orbit import discover as ODISC, seerr as OSEERR    # Orbit: Seerr discover and requests (Phase 6)
+from orbit import sync as OSYNC                          # Orbit: cheap change check and batches for TVs
 from orbit.media import MediaServers, TokenVault                # Orbit: Plex / Jellyfin links per account
 
 try:                                    # deterministic authenticated encryption for /seg URLs
@@ -1021,6 +1022,7 @@ class App:
         # Orbit: Seerr discover and requests (orbit/discover.py), mounted into the /v1 route table
         self.discover = ODISC.Discover(self.orbit, OSEERR.SeerrConfig(DATA_DIR))
         self.v1.routes.update(self.discover.routes())
+        self.v1.routes.update(OSYNC.routes(self.profiles.for_session))   # /v1/sync: revision check, batches
         NET.set_allow_private(lambda: bool(self.settings.get("allowLanSources")))
         # Orbit: the LAN servers the household configured (Plex / Jellyfin links, Seerr), exact host and port only
         NET.set_private_hosts(lambda: self.media.private_hosts() | self.discover.private_hosts())

@@ -150,7 +150,12 @@ class Store(private val ctx: Context) {
     var autoplayNext: Boolean
         get() = sp.getBoolean("autoplayNext", true)
         set(v) = sp.edit { putBoolean("autoplayNext", v) }
-    fun recent(): List<String> = (vp.getString("recent", "") ?: "").split('\n').filter { it.isNotEmpty() }
+    /** Orbit unlink: recently watched, their title snapshots, the last channel / group / screen and search history. */
+    fun clearViewingHistory() {
+        vp.edit { remove("recent"); remove("snaps") }
+        sp.edit { remove("lastKey"); remove("lastGroup"); remove("lastUi"); remove("searchHistory") }
+    }
+    fun recent(): List<String> =(vp.getString("recent", "") ?: "").split('\n').filter { it.isNotEmpty() }
     fun addRecent(key: String) = vp.edit { putString("recent", (listOf(key) + recent().filter { it != key }).take(30).joinToString("\n")) }
 
     var chHours: Int

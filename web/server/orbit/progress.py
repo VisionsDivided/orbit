@@ -68,22 +68,28 @@ def _num(v, field: str, top: float = 10 * 86400) -> float:
     return f
 
 
-def push_episodes(store, items, now=time.time) -> dict:
-    """Apply episode changes from a device. Each: {seriesId, epId, secs, dur, done, at (ms), name?, poster?}.
-    A change older than what the server has for that episode is skipped. Changed shows get their next episode
-    recomputed in the background (that may ask the provider for the episode list)."""
+def clean_items(items, now=time.time, field: str = "items") -> list:
+    """Checked episode changes (400 for anything malformed, so a batch is applied whole or not at all)."""
     if not isinstance(items, list) or len(items) > MAX_ITEMS:
-        raise ApiError(400, f"items: a list of at most {MAX_ITEMS}")
+        raise ApiError(400, f"{field}: a list of at most {MAX_ITEMS}")
     clean = []
     for it in items:
         if not isinstance(it, dict):
-            raise ApiError(400, "items: objects")
+            raise ApiError(400, f"{field}: objects")
         at = _num(it.get("at"), "at", top=1e14) / 1000.0        # milliseconds since 1970
         if at > now() + 300:
             at = now()                                    # a device clock ahead of ours: count it as now
         clean.append((_text(it.get("seriesId"), "seriesId"), _text(it.get("epId"), "epId"), _num(it.get("secs"), "secs"),
                       _num(it.get("dur"), "dur"), it.get("done") is True, at,
                       str(it.get("name") or "")[:200] or None, str(it.get("poster") or "")[:500] or None))
+    return clean
+
+
+def push_episodes(store, items, now=time.time) -> dict:
+    """Apply episode changes from a device. Each: {seriesId, epId, secs, dur, done, at (ms), name?, poster?}.
+    A change older than what the server has for that episode is skipped. Changed shows get their next episode
+    recomputed in the background (that may ask the provider for the episode list)."""
+    clean = clean_items(items, now)
     applied, touched = 0, {}
     with store._lock:
         store.db.execute("BEGIN IMMEDIATE")        # one commit for the whole batch, not one per episode

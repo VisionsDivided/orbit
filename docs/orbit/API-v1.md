@@ -78,9 +78,14 @@ Sessions have a kind (`orbit.db` migration 002): `web` for a browser sign-in, `t
 code. Every linked TV gets the playlists, whatever its account's role: every household TV can watch IPTV.
 The flip side is that any account can read the provider logins by linking a device with its own approval, so only
 give accounts to people the household trusts with them. Browser sessions never get them (`session_kind` must be
-`tv`). The TV keeps the playlists encrypted and removes them again when it is unlinked or signed out. It syncs My list
+`tv`). The TV keeps the playlists encrypted. When it is unlinked, signed out from another device, or linked to
+another account, it removes everything the account brought: session and CSRF token, the server's playlists, My
+list and favourites, film resume points, episode marks and show progress, recently watched and search history, so
+the next account starts clean (data from before the first link was merged into that account then and goes too; it
+comes back when that account links again). It syncs My list
 (three-way merge, so offline changes on either side survive) and film resume points (newest wins) through the
-existing `/api/state` routes of its profile, every minute and shortly after a change.
+profile's state, every minute and shortly after a change: it downloads the state only when its revision changed and
+sends its own changes in one batch (`/v1/sync/*` below; the `/api/state` routes with older servers).
 
 ## Show progress for devices (step 7b)
 
@@ -91,6 +96,27 @@ existing `/api/state` routes of its profile, every minute and shortly after a ch
 
 `seriesId` is the server's VOD id (`7` for the first playlist, `p1~7` for others); `key` is the show's My list key
 (`s|p0|7`). Episode ids are the provider's.
+
+## Sync for devices: change check and batches
+
+| Method | Path | Who | Body / query → Answer |
+|---|---|---|---|
+| GET | `/v1/sync/state` | signed in | `?since=<rev>` (optional) → `{"rev", "changed": false}` when the profile's state is unchanged since `rev`; otherwise `{"rev", "changed": true, "state": <as GET /api/state>, "progress": <as GET /v1/progress/shows>}`. |
+| POST | `/v1/sync/batch` | signed in | `{"state"?: [{"op": "put"\|"del", "scope", "key", "value"?}], "episodes"?: [<as /v1/progress/episodes items>]}` (at most 500 of each) → `{"state": n, "episodes": applied, "shows"}`. |
+
+- **`rev`** is an opaque string for the session profile's whole state (My list, resume points, reminders, history,
+  prefs, show progress). Any write through any route (web, TV, restore, the server's own show recompute) gives a
+  new one, and so does a server restart; it can also change without a visible difference. Compare it only for
+  equality. A device keeps the `rev` and the data of its last full answer and sends `since=` every minute: an
+  unchanged profile costs one tiny answer instead of the whole state.
+- **Batch:** every change is checked first; one bad change answers 400 (`"state[3]: ..."`) and nothing is applied.
+  Then all changes are applied in order in **one transaction** (state changes and episode changes together), so a
+  device never leaves half a batch behind. `op` defaults to `put`; scopes and limits are those of
+  `POST /api/state/<scope>` (`clear` is not offered here). Episode changes follow `/v1/progress/episodes` (newest
+  wins per episode). Request bodies are capped at 1 MB, so devices send at most 200 state changes per call.
+- Older clients keep working: `GET /api/state`, `POST /api/state/<scope>`, `GET /v1/progress/shows` and
+  `POST /v1/progress/episodes` are unchanged. A device that gets 404 for these routes (an older server) falls back
+  to them.
 
 ## Media servers (Phase 3)
 

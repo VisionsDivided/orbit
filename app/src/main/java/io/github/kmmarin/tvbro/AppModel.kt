@@ -1367,6 +1367,11 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
             else { if (screen == Screen.ADD_SOURCE) screen = Screen.LIST; loadAll(true) }
         }
         override fun describe(key: String) = orbitDescribe(key)
+        override fun clearAccountData() {
+            this@AppModel.favourites = emptySet(); store.saveFavourites(emptySet())
+            store.clearViewingHistory(); this@AppModel.history = emptyList()
+            refreshLists()
+        }
         override fun stopPlayback(reason: String) {
             liveExo?.stop(); liveUrl = null; liveKey = null
             if (screen == Screen.PLAYER || screen == Screen.VODPLAY) screen = Screen.LIST

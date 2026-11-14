@@ -13,6 +13,32 @@ SCOPES = {"mylist": 2000, "resume": 2000, "reminders": 500, "history": 20, "pref
 MAX_VALUE = 16 * 1024
 
 
+def _key_ok(scope, key) -> bool:
+    return scope in SCOPES and isinstance(key, str) and 0 < len(key) <= 300
+
+
+def clean_put(scope, key, value):
+    """The JSON text to store for a put, or None when the scope, key or value is not allowed."""
+    if not _key_ok(scope, key):
+        return None
+    raw = json.dumps(value)
+    return raw if len(raw) <= MAX_VALUE else None
+
+
+def clean_op(d):
+    """One change of a batch, ``{"op": "put"|"del", "scope", "key", "value"?}`` -> ``(op, scope, key, raw)``, or
+    None when it is not allowed."""
+    if not isinstance(d, dict):
+        return None
+    op, scope, key = d.get("op", "put"), d.get("scope"), d.get("key")
+    if op == "del":
+        return ("del", scope, key, None) if _key_ok(scope, key) else None
+    if op != "put":
+        return None
+    raw = clean_put(scope, key, d.get("value"))
+    return None if raw is None else ("put", scope, key, raw)
+
+
 class StateStore:
     def __init__(self, path: str):
         self._lock = threading.Lock()
@@ -46,19 +72,37 @@ class StateStore:
         return self._last
 
     def put(self, scope: str, key: str, value) -> bool:
-        if scope not in SCOPES or not key or len(key) > 300:
-            return False
-        raw = json.dumps(value)
-        if len(raw) > MAX_VALUE:
+        raw = clean_put(scope, key, value)
+        if raw is None:
             return False
         with self._lock:
-            self.db.execute("INSERT INTO kv(scope, key, value, updated) VALUES (?,?,?,?) "
-                            "ON CONFLICT(scope, key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
-                            (scope, key, raw, self._stamp()))
-            # keep each scope bounded (oldest go first)
-            self.db.execute("DELETE FROM kv WHERE scope=? AND key NOT IN (SELECT key FROM kv WHERE scope=? "
-                            "ORDER BY updated DESC LIMIT ?)", (scope, scope, SCOPES[scope]))
+            self._put_locked(scope, key, raw)
+            self._trim_locked(scope)
         return True
+
+    def _put_locked(self, scope: str, key: str, raw: str):
+        self.db.execute("INSERT INTO kv(scope, key, value, updated) VALUES (?,?,?,?) "
+                        "ON CONFLICT(scope, key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
+                        (scope, key, raw, self._stamp()))
+
+    def _trim_locked(self, scope: str):
+        """Keep each scope bounded (oldest go first)."""
+        self.db.execute("DELETE FROM kv WHERE scope=? AND key NOT IN (SELECT key FROM kv WHERE scope=? "
+                        "ORDER BY updated DESC LIMIT ?)", (scope, scope, SCOPES[scope]))
+
+    def apply_locked(self, ops: list) -> int:
+        """Apply checked ops ``(op, scope, key, raw)`` from ``clean_op`` ("put" or "del"), in order. Call with the
+        lock held, inside the caller's transaction (orbit/sync.py commits a batch with episode changes at once)."""
+        touched = set()
+        for op, scope, key, raw in ops:
+            if op == "put":
+                self._put_locked(scope, key, raw)
+                touched.add(scope)
+            else:
+                self.db.execute("DELETE FROM kv WHERE scope=? AND key=?", (scope, key))
+        for scope in touched:
+            self._trim_locked(scope)
+        return len(ops)
 
     def delete(self, scope: str, key: str):
         with self._lock:

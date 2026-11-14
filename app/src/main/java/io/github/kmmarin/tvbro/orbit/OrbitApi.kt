@@ -172,25 +172,40 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT) {
     fun streamStop(link: OrbitLink, sid: String) { runCatching { streamCall(link, "stop", sid) } }
 
     /** Episode marks and show summaries of this TV's profile (/v1/progress/shows). */
-    fun showsState(link: OrbitLink): Pair<List<ServerEpisode>, List<ServerShow>> {
-        val j = call(link.server, "/v1/progress/shows", null, link)
-        fun JsonObject.long(k: String) = (this[k] as? JsonPrimitive)?.longOrNull ?: 0L
-        fun JsonObject.bool(k: String) = (this[k] as? JsonPrimitive)?.booleanOrNull ?: false
-        val eps = (j["episodes"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { e ->
-            val o = e as? JsonObject ?: return@mapNotNull null
-            ServerEpisode(o.str("seriesId") ?: return@mapNotNull null, o.str("epId") ?: return@mapNotNull null,
-                o.long("secs"), o.long("dur"), o.bool("done"), o.long("at"))
+    fun showsState(link: OrbitLink): Pair<List<ServerEpisode>, List<ServerShow>> =
+        OrbitBatch.shows(call(link.server, "/v1/progress/shows", null, link))
+
+    /**
+     * Everything the TV syncs, in one request (/v1/sync/state). With [cached], the server answers only "unchanged"
+     * when nothing was written since its rev, and [cached] is returned. Null from an older server without the route
+     * (then use [state] and [showsState]).
+     */
+    fun syncState(link: OrbitLink, cached: SyncSnapshot?): SyncSnapshot? {
+        val since = cached?.rev?.let { "?since=" + java.net.URLEncoder.encode(it, "UTF-8") } ?: ""
+        val j = try { call(link.server, "/v1/sync/state$since", null, link) } catch (e: OrbitError) {
+            if (e.code == 404) return null
+            throw e
         }
-        val shows = (j["shows"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { e ->
-            val o = e as? JsonObject ?: return@mapNotNull null
-            val n = (o["next"] as? JsonObject)?.let { x ->
-                ServerNext(x.str("id") ?: return@let null, (x["season"] as? JsonPrimitive)?.intOrNull ?: 0,
-                    (x["num"] as? JsonPrimitive)?.intOrNull ?: 0, x.str("title"))
+        OrbitBatch.fromSyncAnswer(j, cached)?.let { return it }
+        // an answer the TV cannot use with what it has: ask for everything
+        return OrbitBatch.fromSyncAnswer(call(link.server, "/v1/sync/state", null, link), null)
+            ?: throw OrbitError(502, "The home server sent an unexpected sync answer")
+    }
+
+    /**
+     * Queued changes in as few requests as possible (/v1/sync/batch, each applied in one transaction). False from an
+     * older server without the route, before anything was sent (then send them one by one).
+     */
+    fun batch(link: OrbitLink, out: Outbox): Boolean {
+        for ((i, c) in OrbitBatch.chunks(out.ops, out.episodes).withIndex()) {
+            try {
+                call(link.server, "/v1/sync/batch", Json.encodeToString(JsonObject.serializer(), OrbitBatch.body(c)), link)
+            } catch (e: OrbitError) {
+                if (e.code == 404 && i == 0) return false
+                throw e
             }
-            ServerShow(o.str("id") ?: return@mapNotNull null, o.str("key") ?: return@mapNotNull null, o.str("lastEp"), n,
-                o.bool("finished"), o.bool("hidden"), o.long("at"))
         }
-        return eps to shows
+        return true
     }
 
     /** Episode changes from this TV; the server keeps the newest per episode. */
