@@ -14,7 +14,11 @@ class OrbitApiTest {
         assertEquals("http://192.0.2.10:8750", OrbitApi.normalizeServer("192.0.2.10:8750"))
         assertEquals("http://192.0.2.10:8750", OrbitApi.normalizeServer("  http://192.0.2.10:8750/ "))
         assertEquals("https://orbit.example.com", OrbitApi.normalizeServer("https://orbit.example.com"))
-        assertEquals("http://orbit.example.com", OrbitApi.normalizeServer("orbit.example.com"))
+        // no port typed on plain http: Orbit's own port 8750
+        assertEquals("http://orbit.example.com:8750", OrbitApi.normalizeServer("orbit.example.com"))
+        assertEquals("http://192.0.2.10:8750", OrbitApi.normalizeServer("192.0.2.10"))
+        assertEquals("http://192.0.2.10", OrbitApi.normalizeServer("http://192.0.2.10:80"))
+        assertEquals("http://[2001:db8::1]:8750", OrbitApi.normalizeServer("http://[2001:db8::1]"))
         for (bad in listOf("", "http://", "ftp://orbit.example.com", "http://user:pw@orbit.example.com",
             "http://orbit.example.com/some/path", "http://orbit.example.com/?x=1", "orbit example com", "file:///etc/hosts")) {
             assertNull(bad, OrbitApi.normalizeServer(bad))

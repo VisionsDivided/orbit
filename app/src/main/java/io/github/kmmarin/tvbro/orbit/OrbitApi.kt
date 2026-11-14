@@ -41,6 +41,8 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT) {
         val DEFAULT: OkHttpClient = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS).build()
         private val JSON = "application/json".toMediaType()
         private const val COOKIE = "tvbro_s"
+        /** The Orbit home server's port (docs/orbit/DEPLOY.md). */
+        const val DEFAULT_PORT = 8750
 
         /**
          * "192.0.2.10:8750", "http://host:8750/" or "https://orbit.example.com" -> "http://192.0.2.10:8750" etc.;
@@ -54,6 +56,10 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT) {
             if (u.scheme != "http" && u.scheme != "https") return null
             if (u.username.isNotEmpty() || u.password.isNotEmpty() || u.query != null || u.fragment != null) return null
             if (u.encodedPath != "/") return null
+            // no port typed on plain http: the Orbit home server's own port (8750), not 80 (an easy mistake on a remote)
+            val authority = s.substringAfter("://").substringBefore('/')
+            val portTyped = if (authority.startsWith("[")) authority.contains("]:") else authority.contains(':')
+            if (!portTyped && u.scheme == "http") return u.newBuilder().port(DEFAULT_PORT).build().toString().trimEnd('/')
             return u.toString().trimEnd('/')
         }
 

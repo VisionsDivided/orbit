@@ -76,7 +76,7 @@ fun OrbitLinkScreen(m: AppModel) {
             Text("Enter the address of your Orbit home server once (ask whoever set it up). The TV then shows a code to approve " +
                 "on your phone or computer; no password is typed on the TV.", color = TextMain, fontSize = 17.sp)
             // Down from the field always reaches "Get a code" (not whichever button is nearest below)
-            TvField("Home server address (e.g. http://192.0.2.10:8750)", server, { server = it }, requester = fieldFr,
+            TvField("Home server address, e.g. 192.0.2.10 (port 8750 is added when none is typed)", server, { server = it }, requester = fieldFr,
                 modifier = Modifier.focusProperties { down = getFr })
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 TvButton("Get a code", Modifier.focusRequester(getFr)) { o.startPairing(server) }
