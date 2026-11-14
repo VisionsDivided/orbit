@@ -24,8 +24,9 @@ _PID = re.compile(r"^[0-9a-f]{16}$")      # orbit/accounts.py ids: secrets.token
 
 class ProfileStores:
     def __init__(self, data_dir: str, household_state: StateStore, household_series, fetch_eps: Optional[Callable],
-                 enabled: Callable[[], bool]):
+                 enabled: Callable[[], bool], exists: Callable[[str], bool] = lambda pid: True):
         self.root = os.path.join(data_dir, "profiles")
+        self.exists = exists                      # a deleted profile is never recreated by a late request
         self.household = (household_state, household_series)
         self.fetch_eps = fetch_eps
         self.enabled = enabled
@@ -57,7 +58,7 @@ class ProfileStores:
         if not self.enabled():
             return self.household
         pid = (sess or {}).get("profile_id")
-        if not pid:
+        if not pid or not self.exists(pid):
             raise PermissionError("no profile selected")
         return self.for_profile(pid)
 

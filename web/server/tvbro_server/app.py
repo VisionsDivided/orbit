@@ -1008,7 +1008,8 @@ class App:
         self.auth = AUTH.Auth(DATA_DIR, self.sign_key)
         self.orbit = OrbitAccounts(DATA_DIR, self.auth)        # Orbit: accounts gate every session
         # Orbit: My list, favourites, resume, show progress per profile (household state.db in tvBro mode)
-        self.profiles = ProfileStores(DATA_DIR, self.state, self.series, self._series_eps, self.orbit.enabled)
+        self.profiles = ProfileStores(DATA_DIR, self.state, self.series, self._series_eps, self.orbit.enabled,
+                                      exists=lambda pid: self.orbit.db.one("SELECT 1 FROM profiles WHERE id=?", (pid,)) is not None)
         self.orbit.on_setup = self.profiles.adopt_household
         self.orbit.on_profile_deleted = self.profiles.drop
         # Orbit: Plex / Jellyfin; tokens sealed with the server key in media.enc (rotate_key re-encrypts it)
