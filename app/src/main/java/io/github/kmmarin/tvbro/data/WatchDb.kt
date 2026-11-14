@@ -10,13 +10,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
-/** Per-series memory: last episode, the next one to offer, and the caption / audio choices for the whole series. */
-data class SeriesRow(
-    val key: String, val updated: Long = 0, val lastEp: String? = null,
-    val nextEp: String? = null, val nextSeason: Int = 0, val nextNum: Int = 0, val nextTitle: String? = null,
-    val finished: Boolean = false, val active: Boolean = false,
-    val subs: SubPref? = null, val audioLang: String? = null,
-)
+// SeriesRow (per-series memory) lives in shared/ (WatchLogic.kt): Orbit show sync uses it on the desktop too.
 
 /**
  * Watch state in SQLite (`state.db`): positions, durations and watched marks per movie / episode, and per-series rows.
@@ -152,7 +146,8 @@ class WatchDb private constructor(private val ctx: Context) : SQLiteOpenHelper(c
                     put("key", r.key); put("updated", r.updated); put("last_ep", r.lastEp); put("next_ep", r.nextEp)
                     put("next_season", r.nextSeason); put("next_num", r.nextNum); put("next_title", r.nextTitle)
                     put("finished", if (r.finished) 1 else 0); put("active", if (r.active) 1 else 0)
-                    if (r.subs == null) putNull("subs") else put("subs", if (r.subs.on) 1 else 0)
+                    val subs = r.subs
+                    if (subs == null) putNull("subs") else put("subs", if (subs.on) 1 else 0)
                     put("sub_lang", r.subs?.lang); put("audio_lang", r.audioLang)
                 }, SQLiteDatabase.CONFLICT_REPLACE)
             } catch (e: Exception) { Diag.log("state: series write failed (${e.javaClass.simpleName})") }

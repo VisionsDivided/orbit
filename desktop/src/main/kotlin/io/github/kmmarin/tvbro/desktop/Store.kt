@@ -105,6 +105,8 @@ data class Settings(
     /** External player command (e.g. vlc); [useExternal] plays everything full screen with it. */
     val externalPlayer: String = "",
     val useExternal: Boolean = false,
+    /** Orbit: the home server last signed in to (the sign-in itself is in Secrets, "orbit"). */
+    val orbitServer: String = "",
 )
 
 /**

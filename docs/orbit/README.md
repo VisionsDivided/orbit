@@ -27,7 +27,8 @@ Orbit is a private media app built on tvBro (see the note at the top of the main
 | Later phases | Status |
 |---|---|
 | 5. Catalogue for Home / Movies / Shows (`/v1/catalog/*`) | server done (API-v1.md "Catalogue"); no UI yet |
-| 6. Discover and requests through Seerr (`/v1/discover/*`, `/v1/requests`) | server done (API-v1.md "Discover and requests"); no UI yet |
+| 6. Discover and requests through Seerr (`/v1/discover/*`, `/v1/requests`) | server done (API-v1.md "Discover and requests"); desktop Discover screen |
+| Desktop app (Windows, macOS) as an Orbit device | signs in with an account (session kind `desktop`, API-v1.md "The desktop app"): playlists, sync, stream count, sign-out wipe; direction 5 UI (top bar, backdrops, orbit picker) |
 
 Web app: Settings ▸ Accounts sets up accounts (owner, with the one-time code from the server's data folder),
 adds profiles and accounts, lists your devices; the side menu shows the current profile ("Who's watching?").

@@ -43,7 +43,7 @@ It is written so another implementation (for example Rust) could replace the ser
 | GET | `/v1/hello` | anyone (public, **any Host**) | → `{"app": "orbit", "api": 1, "hostOk": bool}`. Recognises an Orbit server (the TV's "Find my server" scan). It is answered before the Host check, so a scan by IP address works; `hostOk` says whether the Host the client used is allowed (else the address must be added to `TVBRO_ALLOWED_HOSTS` before the TV can link). It names no version, account or setting. |
 | GET | `/v1/status` | anyone (public) | → `{"accounts": bool, "setup": bool}`. `setup` is true while the first owner can be created. |
 | POST | `/v1/setup` | anyone, only while no account exists | `{"token", "username", "password", "displayName"?}` → `Me` + session cookie. `token` is the one-time setup token from the server's data folder (`orbit-setup-token`). |
-| POST | `/v1/auth/login` | anyone | `{"username", "password", "device"?}` → `Me` + session cookie. Wrong username or password: 403, the same message either way. Throttled like tvBro's login. |
+| POST | `/v1/auth/login` | anyone | `{"username", "password", "device"?, "kind"?}` → `Me` + session cookie. Wrong username or password: 403, the same message either way. Throttled like tvBro's login. `"kind": "desktop"` makes a desktop-app session (see "The desktop app" below); anything else is a browser session. |
 | POST | `/v1/auth/logout` | signed in | `{}` → `{"ok": true}`, session ends, cookie cleared. The web app then removes what the browser cached for the account and profile (localStorage `tvbro.ui`, `tvbro.reminders`; sessionStorage `tvbro.parental`, `tvbro.sid`; no IndexedDB is used), and does the same whenever it shows the sign-in page because the server ended its session, so the next person starts clean. |
 | GET | `/v1/me` | signed in | → `Me` |
 | GET | `/v1/profiles` | signed in | → `{"profiles": [Profile]}` (own account only) |
@@ -100,7 +100,7 @@ with a note that its address must be added to `TVBRO_ALLOWED_HOSTS`.
 
 | Method | Path | Who | Body → Answer |
 |---|---|---|---|
-| GET | `/v1/device/playlists` | a **linked TV** session of any account (owner, admin or member); 403 for browser sign-ins | → `{"playlists": [{"id", "name", "kind": "xtream"\|"m3u", "server", "user", "pass", "url", "epgUrl"}]}`: the household's enabled playlists. With **hidden provider logins** (the default, below) every address and login points at this server's Xtream facade; with it off, they are the provider's own, so the TV plays directly from the provider. Ids are the server's (`p0`, `p1` …), so channel and VOD keys are the same on every device. |
+| GET | `/v1/device/playlists` | a **linked TV** or **desktop app** session of any account (owner, admin or member); 403 for browser sign-ins | → `{"playlists": [{"id", "name", "kind": "xtream"\|"m3u", "server", "user", "pass", "url", "epgUrl"}]}`: the household's enabled playlists. With **hidden provider logins** (the default, below) every address and login points at this server's Xtream facade; with it off, they are the provider's own, so the TV plays directly from the provider. Ids are the server's (`p0`, `p1` …), so channel and VOD keys are the same on every device. |
 
 Sessions have a kind (`orbit.db` migration 002): `web` for a browser sign-in, `tv` for a device linked with a pairing
 code. Every linked TV gets the playlists, whatever its account's role: every household TV can watch IPTV.
@@ -157,6 +157,29 @@ comes back when that account links again). It syncs My list
 (three-way merge, so offline changes on either side survive) and film resume points (newest wins) through the
 profile's state, every minute and shortly after a change: it downloads the state only when its revision changed and
 sends its own changes in one batch (`/v1/sync/*` below; the `/api/state` routes with older servers).
+
+## The desktop app (Windows, macOS)
+
+The desktop app has a keyboard, so it signs in like the web app instead of showing a pairing code: server address,
+username and password, then "Who's watching?".
+
+1. `GET /v1/status`: `accounts` false means a tvBro-mode server; the app says so and stays as it is.
+2. `POST /v1/auth/login` with `X-TvBro: 1` and `{"username", "password", "device": "Orbit on Windows", "kind": "desktop"}`.
+   The session id comes in the `tvbro_s` cookie of the answer (`Set-Cookie`), the CSRF token in `Me.csrf`. The app
+   stores both encrypted (Windows DPAPI, macOS Keychain; `Secrets` in desktop/Store.kt) and sends them like the TV.
+3. `Me.profiles` is the "Who's watching?" list; `POST /v1/profiles/select` `{"id"}` picks one (also later, from the
+   profile menu). An account with one profile skips the picker.
+4. From then on the app is a device like a linked TV: `GET /v1/device/playlists` (the household's playlists, which
+   replace any typed into the app, so channel and VOD keys match every other device), `/v1/sync/state?since=` and
+   `/v1/sync/batch` every minute and shortly after a change, and the stream count below (one slot per app, the
+   "Stop … and watch" choice when every stream is in use).
+
+Why a `desktop` kind and not `web`: a desktop session plays from the provider itself, so it needs the playlists,
+which browser sessions never get. It has the `viewer` role whatever the account's role, like a linked TV (the app has
+no admin screens; household settings stay in the web app). It is no new exposure: any account could already link a
+"TV" with its own approval. Signing out (`/v1/auth/logout`), a revoked session or a disabled account (any 401) makes
+the app remove everything the account brought, as on the TV: session, the server's playlists, My list, resume points
+and show progress, search history and the last channel. Device settings and recordings stay.
 
 ## The provider's stream limit (Phase 2)
 

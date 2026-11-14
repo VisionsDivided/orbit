@@ -36,7 +36,10 @@ private fun Logo(url: String?) = NetImage(url, Modifier.size(48.dp, 30.dp).clip(
 @Composable
 fun Empty(app: AppState) = Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
     T(if (app.busy) "Loading…" else if (app.sources.isEmpty()) "No sources yet" else "Nothing here", 20)
-    if (app.sources.isEmpty()) Btn("Add a source") { app.tab = Tab.SETTINGS; app.settingsPage = 1 }
+    if (app.sources.isEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!app.orbit.linked) Btn("Sign in to Orbit") { app.tab = Tab.SETTINGS; app.settingsPage = 1 }
+        Btn("Add a source") { app.tab = Tab.SETTINGS; app.settingsPage = 2 }
+    }
 }
 
 private fun nowSec() = System.currentTimeMillis() / 1000

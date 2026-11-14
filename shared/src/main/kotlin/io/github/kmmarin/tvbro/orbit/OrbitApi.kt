@@ -37,8 +37,17 @@ sealed class PairPoll {
 /** An answer the server gave on purpose (its "error" text is safe to show). */
 class OrbitError(val code: Int, message: String) : IOException(message)
 
-/** The home server's /v1 API (docs/orbit/API-v1.md) as far as the TV needs it. */
-class OrbitApi(private val client: OkHttpClient = DEFAULT) {
+/** One of the account's profiles ("Who's watching?"). */
+data class OrbitProfile(val id: String, val name: String, val kids: Boolean)
+
+/** `/v1/me` as a desktop uses it: the link, the account's profiles and the id of the session's profile. */
+data class OrbitMe(val link: OrbitLink, val profiles: List<OrbitProfile>, val profileId: String)
+
+/**
+ * The home server's /v1 API (docs/orbit/API-v1.md) as far as the TV and the desktop app need it. [userAgent] names
+ * the client ("Orbit-TV", "Orbit-Desktop").
+ */
+class OrbitApi(private val client: OkHttpClient = DEFAULT, private val userAgent: String = "Orbit-TV") {
     companion object {
         // no redirects: the session cookie and CSRF token are set by hand and OkHttp would carry them to any host
         val DEFAULT: OkHttpClient = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS)
@@ -95,11 +104,27 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT) {
             )
         }
 
+        internal fun meFrom(server: String, session: String, csrf: String, me: JsonObject): OrbitMe {
+            val profiles = (me["profiles"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { e ->
+                val o = e as? JsonObject ?: return@mapNotNull null
+                OrbitProfile(o.str("id") ?: return@mapNotNull null, o.str("name") ?: "", (o["kids"] as? JsonPrimitive)?.booleanOrNull ?: false)
+            }
+            return OrbitMe(linkFrom(server, session, csrf, me), profiles, (me["profile"] as? JsonObject)?.str("id") ?: "")
+        }
+
+        /** The session id the server set as the `tvbro_s` cookie (sign-in answers), or null. */
+        fun sessionFromCookies(setCookie: List<String>): String? = setCookie.firstNotNullOfOrNull { c ->
+            c.substringBefore(';').trim().takeIf { it.startsWith("$COOKIE=") }?.substringAfter('=')?.takeIf { it.isNotEmpty() }
+        }
+
         private fun JsonObject.str(k: String) = (this[k] as? JsonPrimitive)?.contentOrNull
     }
 
-    private fun call(server: String, path: String, body: String?, link: OrbitLink? = null): JsonObject {
-        val b = Request.Builder().url(server + path).header("User-Agent", "Orbit-TV")
+    private fun call(server: String, path: String, body: String?, link: OrbitLink? = null): JsonObject = exchange(server, path, body, link).first
+
+    /** The answer and its Set-Cookie headers. */
+    private fun exchange(server: String, path: String, body: String?, link: OrbitLink? = null): Pair<JsonObject, List<String>> {
+        val b = Request.Builder().url(server + path).header("User-Agent", userAgent)
         if (body != null) b.post(body.toRequestBody(JSON)).header("X-TvBro", "1")
         if (link != null) b.header("Cookie", "$COOKIE=${link.session}").header("X-CSRF-Token", link.csrf)
         client.newCall(b.build()).execute().use { r ->
@@ -109,8 +134,47 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT) {
                 val msg = (obj["error"] as? JsonPrimitive)?.contentOrNull ?: "HTTP ${r.code}"
                 throw OrbitError(r.code, msg)
             }
-            return obj
+            return obj to r.headers("Set-Cookie")
         }
+    }
+
+    // ---------- signing in with an account (the desktop app; the TV links with a pairing code) ----------
+    /** `{"accounts", "setup"}`: false while the server is still in tvBro mode (no accounts). */
+    fun hasAccounts(server: String): Boolean =
+        (call(server, "/v1/status", null)["accounts"] as? JsonPrimitive)?.booleanOrNull ?: false
+
+    /**
+     * Signs in as [username] (`/v1/auth/login` with `"kind": [kind]`): a "desktop" session watches and syncs like a
+     * linked TV and may fetch the household's playlists. Wrong username or password: [OrbitError] 403.
+     */
+    fun login(server: String, username: String, password: String, device: String, kind: String = "desktop"): OrbitMe {
+        val body = JsonObject(mapOf("username" to JsonPrimitive(username), "password" to JsonPrimitive(password),
+            "device" to JsonPrimitive(device), "kind" to JsonPrimitive(kind)))
+        val (j, cookies) = exchange(server, "/v1/auth/login", Json.encodeToString(JsonObject.serializer(), body))
+        val session = sessionFromCookies(cookies) ?: throw OrbitError(502, "The home server did not start a session")
+        val csrf = (j["csrf"] as? JsonPrimitive)?.contentOrNull ?: throw OrbitError(502, "The home server sent no CSRF token")
+        return meFrom(server, session, csrf, j)
+    }
+
+    /** The account, its profiles and the current one; null when the server no longer knows this session (401). */
+    fun account(link: OrbitLink): OrbitMe? = try {
+        val j = call(link.server, "/v1/me", null, link)
+        meFrom(link.server, link.session, (j["csrf"] as? JsonPrimitive)?.contentOrNull ?: link.csrf, j)
+    } catch (e: OrbitError) {
+        if (e.code == 401) null else throw e
+    }
+
+    /** A signed-in GET of another /v1 route (Discover, catalogue); the answer as JSON. */
+    fun get(link: OrbitLink, path: String): JsonObject = call(link.server, path, null, link)
+
+    /** A signed-in POST of another /v1 route (a Seerr request). */
+    fun post(link: OrbitLink, path: String, body: JsonObject): JsonObject =
+        call(link.server, path, Json.encodeToString(JsonObject.serializer(), body), link)
+
+    /** Switches this session to profile [id] (one of the account's own). */
+    fun selectProfile(link: OrbitLink, id: String): OrbitMe {
+        val j = call(link.server, "/v1/profiles/select", Json.encodeToString(JsonObject.serializer(), JsonObject(mapOf("id" to JsonPrimitive(id)))), link)
+        return meFrom(link.server, link.session, (j["csrf"] as? JsonPrimitive)?.contentOrNull ?: link.csrf, j)
     }
 
     fun start(server: String, device: String): PairStart {

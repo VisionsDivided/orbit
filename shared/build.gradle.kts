@@ -14,6 +14,8 @@ java {
 
 dependencies {
     api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    // Orbit home-server client (orbit/OrbitApi.kt), used by the TV and the desktop app; both already use OkHttp 4.12.
+    api("com.squareup.okhttp3:okhttp:4.12.0")
     // XmlPullParser API: provided by Android itself; the desktop app adds kXML2 at runtime.
     compileOnly("xmlpull:xmlpull:1.1.3.1")
     testImplementation("junit:junit:4.13.2")

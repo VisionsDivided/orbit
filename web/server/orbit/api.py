@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from .accounts import Accounts, ApiError
+from .accounts import DEVICE_KINDS, Accounts, ApiError
 from .pairing import Pairings
 from . import progress as PROG
 from .media import MediaServers, Raw
@@ -130,7 +130,7 @@ class Api:
         if not self.acc.enabled():
             return Reply({"error": "no accounts yet: create the owner with /v1/setup"}, 409)
         b = c.body
-        sid = self.acc.login(b.get("username"), b.get("password"), c.client, b.get("device") or "")
+        sid = self.acc.login(b.get("username"), b.get("password"), c.client, b.get("device") or "", b.get("kind") or "web")
         return self._signed_in(sid)
 
     def _logout(self, c: Call) -> Reply:
@@ -150,13 +150,13 @@ class Api:
             raise ApiError(409, "no profile selected")
 
     def _device_playlists(self, c: Call) -> Reply:
-        """Linked TVs only (never a browser): the household's playlists.
+        """Linked TVs and the desktop app only (never a browser): the household's playlists.
 
         Every linked TV gets them, whatever its account's role (the owner wants every household TV to watch IPTV).
         With hidden provider logins (``device_view``, orbit/facade.py; the default) they point at this server's
-        Xtream facade with a login of the TV's own. Without it they carry the provider logins, and any account can
-        read those by linking a "TV" (or a script) with its own approval. Browser sessions never get them."""
-        if c.sess.get("session_kind") != "tv":
+        Xtream facade with a login of the device's own. Without it they carry the provider logins, and any account
+        can read those by linking a "TV" (or a script) with its own approval. Browser sessions never get them."""
+        if c.sess.get("session_kind") not in DEVICE_KINDS:
             return Reply({"error": "only a linked TV can fetch the playlists"}, 403)
         pl = self.playlists()
         if self.device_view is not None:
