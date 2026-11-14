@@ -59,6 +59,7 @@ from . import backup as BK
 from orbit.accounts import Accounts as OrbitAccounts      # Orbit: accounts and profiles (docs/orbit/API-v1.md)
 from orbit import api as V1
 from orbit.profilestate import ProfileStores
+from orbit import discover as ODISC, seerr as OSEERR    # Orbit: Seerr discover and requests (Phase 6)
 
 try:                                    # deterministic authenticated encryption for /seg URLs
     from cryptography.hazmat.primitives.ciphers.aead import AESSIV
@@ -1011,7 +1012,12 @@ class App:
         self.orbit.on_profile_deleted = self.profiles.drop
         self.v1 = V1.Api(self.orbit, playlists=self._device_playlists, stores=self.profiles.for_session,
                          streams=lambda: self.streams.status())
+        # Orbit: Seerr discover and requests (orbit/discover.py), mounted into the /v1 route table
+        self.discover = ODISC.Discover(self.orbit, OSEERR.SeerrConfig(DATA_DIR))
+        self.v1.routes.update(self.discover.routes())
         NET.set_allow_private(lambda: bool(self.settings.get("allowLanSources")))
+        # Orbit: the LAN media servers the admin configured, exact host and port; compose further sources with |
+        NET.set_private_hosts(lambda: self.discover.private_hosts())
         self.parental = Parental(os.path.join(DATA_DIR, "parental.json"), self.sign_key)
         self._siv = None
         self.no_timeshift_hls: dict[str, float] = {}     # provider host -> when its timeshift .m3u8 failed
@@ -1723,7 +1729,8 @@ class Handler(BaseHTTPRequestHandler):
     # -- GET routes --
     def route_v1(self, method: str):
         """Orbit /v1 API (orbit/api.py). Host, Origin and CSRF were checked by do_GET / do_POST."""
-        call = V1.Call(method, self.path_only, self.sess, self._body() if method == "POST" else {}, self._client_ip())
+        call = V1.Call(method, self.path_only, self.sess, self._body() if method == "POST" else {}, self._client_ip(),
+                       {k: v[0] for k, v in self.q.items() if v})
         rep = APP.v1.handle(call)
         hdr = dict(rep.headers)
         if rep.session is not None:

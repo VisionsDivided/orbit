@@ -22,5 +22,9 @@ Orbit is a private media app built on tvBro (see the note at the top of the main
 | 7. Android sync (playlists, My list, film resume, show progress) | done |
 | 8. Docker Compose deploy | next |
 
+| Later phases | Status |
+|---|---|
+| 6. Discover and requests through Seerr (`/v1/discover/*`, `/v1/requests`) | server done (API-v1.md "Discover and requests"); no UI yet |
+
 Web app: Settings ▸ Accounts sets up accounts (owner, with the one-time code from the server's data folder),
 adds profiles and accounts, lists your devices; the side menu shows the current profile ("Who's watching?").
