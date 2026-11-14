@@ -24,7 +24,6 @@ WORKDIR /opt/orbit
 COPY web/server ./server
 COPY web/frontend ./frontend
 COPY infra/docker/nginx.conf /etc/nginx/orbit.conf
-COPY infra/docker/openssl.cnf /etc/ssl/orbit-openssl.cnf
 COPY infra/docker/entrypoint.sh /usr/local/bin/orbit-entrypoint
 
 # version-stamp the frontend (like web/deploy/stage.ps1): long browser caching, fresh files after each update
