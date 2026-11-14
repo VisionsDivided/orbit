@@ -27,16 +27,24 @@ def stream_id(sid: str) -> str:
     return hashlib.sha256(("orbit-stream:" + sid).encode()).hexdigest()[:12]
 
 
+def display_name(s: "Session") -> str:
+    """What the prompt calls a stream: the device's name, else the profile's, else the client's label."""
+    if s.pinned:
+        return "Recording"
+    return s.device or s.profile or s.label or "Another device"
+
+
 class StreamChanged(Exception):
     """The stream a start asked to replace has ended (or is a recording) and no slot is free."""
 
 
 class Session:
-    __slots__ = ("sid", "label", "what", "started", "last_seen", "gen", "pinned", "profile")
+    __slots__ = ("sid", "label", "what", "started", "last_seen", "gen", "pinned", "profile", "device")
 
     def __init__(self, sid: str, label: str, what: str, now: float):
         self.sid, self.label, self.what = sid, label, what
         self.profile = ""     # Orbit: name of the profile that started it (empty in tvBro mode)
+        self.device = ""      # Orbit: the name the household gave the device ("Kitchen"), empty when not named
         self.started = now
         self.last_seen = now
         self.gen = 0          # bumped when the session is stopped; relays compare it
@@ -60,7 +68,7 @@ class StreamRegistry:
         return [s for s in self._s.values() if now - s.last_seen < ACTIVE_SEC]
 
     def start(self, sid: str, label: str = "", what: str = "", pinned: bool = False,
-              replace: Optional[str] = None, profile: str = "") -> Optional[list[str]]:
+              replace: Optional[str] = None, profile: str = "", device: str = "") -> Optional[list[str]]:
         """A tab starts (or takes back) a stream. Returns the sids that were stopped.
 
         ``pinned`` sessions are server-side recordings: a viewer never evicts them. When every
@@ -103,6 +111,8 @@ class StreamRegistry:
             s.pinned = pinned
             if profile:
                 s.profile = profile
+            if device:
+                s.device = device
             stopped = []
             while len(others) + 1 > self.max_streams and evictable:
                 old = evictable.pop(0)
@@ -173,6 +183,6 @@ class StreamRegistry:
             act = sorted(self._active(now), key=lambda x: x.started)
             return {"max": self.max_streams, "count": len(act),
                     "active": [{"id": stream_id(s.sid), "sid": s.sid[:6], "label": s.label, "what": s.what,
-                                "profile": s.profile,
+                                "profile": s.profile, "device": s.device, "name": display_name(s),
                                 "since": int(s.started), "idleSec": int(now - s.last_seen),
                                 "recording": s.pinned} for s in act]}

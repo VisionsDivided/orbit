@@ -1730,7 +1730,8 @@ class Handler(BaseHTTPRequestHandler):
                 replace = str(d.get("replace") or "")[:32] or None
                 try:
                     stopped = APP.streams.start(sid, str(d.get("label", ""))[:60], str(d.get("what", ""))[:120],
-                                                replace=replace, profile=self._profile_name())
+                                                replace=replace, profile=self._profile_name(),
+                                                device=self._device_name())
                 except StreamChanged:
                     return self._json({"ok": False, "changed": True, "streams": APP.streams.status()})
                 if stopped is None:
@@ -1906,6 +1907,15 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:                           # noqa: BLE001
             return ""
         return str(row[0])[:40] if row else ""
+
+    def _device_name(self) -> str:
+        """Orbit: the name the household gave this session's device ("Kitchen"; "" when not named or in tvBro mode)."""
+        if not (self.sess or {}).get("account_id"):
+            return ""
+        try:
+            return APP.orbit.device_name_of(self.sess["h"])[:40]
+        except Exception:                           # noqa: BLE001
+            return ""
 
     def _sync_status(self) -> dict:
         st = APP.sources.status()

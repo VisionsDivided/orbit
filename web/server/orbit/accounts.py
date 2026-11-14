@@ -52,6 +52,19 @@ def _name(v, field: str, longest: int) -> str:
     return s
 
 
+DEVICE_NAME_MAX = 32
+DEVICE_NAME_PUNCT = " '-._()&+#"
+
+
+def device_name(v) -> str:
+    """A device name ("Kitchen", "Kids' room 2"): 1 to 32 letters (any language), digits, spaces and ' - . _ ( ) & + #;
+    runs of spaces become one. Anything else (control characters, emoji, markup, quotes) is refused."""
+    s = re.sub(" {2,}", " ", v.strip(" ")) if isinstance(v, str) else ""
+    if not 1 <= len(s) <= DEVICE_NAME_MAX or not all(c.isalnum() or c in DEVICE_NAME_PUNCT for c in s):
+        raise ApiError(400, f"name: 1 to {DEVICE_NAME_MAX} letters, digits, spaces or ' - . _ ( ) & + #")
+    return s
+
+
 def _password(v) -> str:
     try:
         return check_new_password(v)
@@ -279,10 +292,67 @@ class Accounts:
 
     # ---- sessions (own account) ----
     def sessions(self, sess: dict) -> list[dict]:
-        rows = self.db.q("SELECT id, device, created, last_seen, sess_hash FROM account_sessions WHERE account_id=? "
-                         "ORDER BY last_seen DESC", (sess["account_id"],))
-        return [{"id": r[0], "device": r[1], "created": r[2], "lastSeen": r[3], "current": r[4] == sess["h"]}
-                for r in rows]
+        rows = self.db.q("SELECT id, device, created, last_seen, sess_hash, name, kind FROM account_sessions "
+                         "WHERE account_id=? ORDER BY last_seen DESC", (sess["account_id"],))
+        return [{"id": r[0], "device": r[1], "created": r[2], "lastSeen": r[3], "current": r[4] == sess["h"],
+                 "name": r[5], "kind": r[6]} for r in rows]
+
+    # ---- device names and linked TVs ----
+    def device_name_of(self, h: str) -> str:
+        """The name of the device behind a session hash ("" when not named or unknown)."""
+        row = self.db.one("SELECT name FROM account_sessions WHERE sess_hash=?", (h,))
+        return str(row[0]) if row else ""
+
+    def set_device_name(self, sess: dict, name) -> dict:
+        """The calling device names itself (a TV after linking, or from its Settings)."""
+        n = device_name(name)
+        self.db.run("UPDATE account_sessions SET name=? WHERE sess_hash=? AND account_id=?",
+                    (n, sess["h"], sess["account_id"]))
+        return {"ok": True, "name": n}
+
+    _DEV_COLS = ("SELECT s.id, s.name, s.device, s.created, s.last_seen, s.sess_hash, s.account_id, a.display_name, "
+                 "a.role, p.name FROM account_sessions s JOIN accounts a ON a.id = s.account_id "
+                 "LEFT JOIN profiles p ON p.id = s.profile_id ")
+
+    def _device(self, r, sess: dict) -> dict:
+        return {"id": r[0], "name": r[1], "device": r[2], "created": r[3], "lastSeen": r[4], "current": r[5] == sess["h"],
+                "account": {"id": r[6], "displayName": r[7]}, "profile": r[9] or "",
+                "canUnlink": self._may_unlink(sess, r[6], r[8])}
+
+    @staticmethod
+    def _may_unlink(sess: dict, account_id: str, account_role: str) -> bool:
+        """Your own devices; owner: anyone's; admin: members' too (never the owner's or another admin's)."""
+        me = sess.get("account_role")
+        return account_id == sess["account_id"] or me == "owner" or (me == "admin" and account_role == "member")
+
+    def devices(self, sess: dict) -> list[dict]:
+        """Linked TVs: owner / admin see the household's, members their own account's."""
+        if sess.get("account_role") in ("owner", "admin"):
+            rows = self.db.q(self._DEV_COLS + "WHERE s.kind='tv' ORDER BY s.last_seen DESC")
+        else:
+            rows = self.db.q(self._DEV_COLS + "WHERE s.kind='tv' AND s.account_id=? ORDER BY s.last_seen DESC",
+                             (sess["account_id"],))
+        return [self._device(r, sess) for r in rows]
+
+    def _device_row(self, sess: dict, dev_id):
+        r = self.db.one(self._DEV_COLS + "WHERE s.id=? AND s.kind='tv'", (dev_id if isinstance(dev_id, str) else "",))
+        if r is None or (r[6] != sess["account_id"] and sess.get("account_role") not in ("owner", "admin")):
+            raise ApiError(404, "no such device")         # another account's ids look like nothing
+        return r
+
+    def rename_device(self, sess: dict, dev_id, name) -> dict:
+        """Owner / admin: any linked TV; members: their own account's."""
+        n = device_name(name)
+        r = self._device_row(sess, dev_id)
+        self.db.run("UPDATE account_sessions SET name=? WHERE id=?", (n, r[0]))
+        return self._device(self._device_row(sess, r[0]), sess)
+
+    def unlink_device(self, sess: dict, dev_id) -> None:
+        """Sign a linked TV out (it wipes the account's data on its next request)."""
+        r = self._device_row(sess, dev_id)
+        if not self._may_unlink(sess, r[6], r[8]):
+            raise ApiError(403, "only the owner can unlink the owner's or an admin's TVs")
+        self._end(r[5])
 
     def revoke(self, sess: dict, sid_pub) -> None:
         row = self.db.one("SELECT sess_hash FROM account_sessions WHERE id=? AND account_id=?",
