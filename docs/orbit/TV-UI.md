@@ -31,7 +31,7 @@ are: `96.dp` side margin, `112.sp` hero title. Legacy tvBro screens, written in 
 | `ui/shell/OrbitShell.kt` | `OrbitShell(m)`: top bar, section routing, Back, Settings panel. `ShellFrame` is the same without the model (tests) | shell agent |
 | `ui/home/` | `HomeSection`, `HomeFeed` (catalog home or local fallback) | shell agent |
 | `ui/profiles/WhoIsWatching.kt` | Orbit and classic picker, `ProfilePicker`, `OrbitRing` geometry | shell agent |
-| `ui/movies/MoviesShowsSection.kt` | Movies and Shows (now the legacy `BrowseScreen` below the bar) | **Movies / Shows / Detail agent** |
+| `ui/movies/` | Movies and Shows (`MoviesShowsSection`, views in `MoviesViews`, state in `MoviesFeed`), the title page (`DetailScreen`, Screen.DETAIL), title actions (`TitleActions`) | Movies / Shows / Detail agent |
 | `ui/live/LiveTvSection.kt` | Live TV: sub-menu Channels · Guide · Recordings · My list over the legacy screens | **Live TV / player agent** |
 | `ui/discover/DiscoverSection.kt` | Discover placeholder | **Discover / Settings / phone agent** |
 | `orbit/CatalogApi.kt` | Client for every `/v1/catalog` route (`home`, `recommended`, `browse`, `collections`, `collection`) | shared |
@@ -39,7 +39,8 @@ are: `96.dp` side margin, `112.sp` hero title. Legacy tvBro screens, written in 
 
 `Section` (AppModel.kt) gained `HOME` (now the default) and `DISCOVER`. Live TV is `TV`, and `RECORDINGS` and `MYLIST`
 are its sub-pages. `SEARCH` opens from the search icon. MainActivity routes `Screen.LIST / SETTINGS / VOD` to
-`OrbitShell`. The other screens (guide, player, detail, link, add source) are still full-screen legacy screens.
+`OrbitShell` and `Screen.DETAIL` to `ui/movies/DetailScreen` (under the same top bar, via `ShellFrame`). The other
+screens (guide, player, link, add source) are still full-screen legacy screens.
 
 ## Focus rules (shell)
 
@@ -98,6 +99,40 @@ Switching profile sends the current profile's changes first. It then clears what
 TV (My list, favourites, recently watched, resume points, show progress, as on unlink; the playlists stay) and
 syncs the new profile in.
 
+## Movies and Shows
+
+`MoviesShowsSection` draws the sub-menu row `Recommended · Browse [All | Local | IPTV] · Collections … Any genre ▾ ·
+Sort ▾ · N titles` over the page; the source toggle, genre, sort and count show only on Browse. `MoviesFeed`
+(`m.movies`, one per app model) keeps each kind's state while a title page is open: the sub-tab, the Recommended
+hero and rows, Browse's filters and loaded pages, the collections and the open collection, and the card focus
+returns to.
+
+- **Recommended**: `CatalogApi.recommended`. The hero shows the first hero title, then the focused card (250 ms
+  settle); IPTV synopsis and backdrop come from `peekVod`. Rows scroll so the focused row sits at y = 634.
+- **Browse**: `CatalogApi.browse`, 96 titles a page (12 rows of 8); the next page loads when focus is within three
+  rows of the end. Genre and sort open a menu; the source toggle reloads.
+- **Collections**: `CatalogApi.collections`; OK opens `CatalogApi.collection` as a page (hero, watched bar,
+  Continue / Play from film 1, numbered posters). Back closes it.
+- **Local data** (not linked, catalog 404, or the server out of reach): Recommended = Continue watching, My list,
+  Recently added (highest provider ids in `search.db`), History. Browse = tvBro's own category list (`openVod`,
+  `selectVodCat`, `vodMore`; PIN-locked categories ask for the PIN): the genre menu lists the categories (My list,
+  History and all titles too); sort is the provider's order. Collections lists the categories with their size
+  (OK opens the category in Browse, long press locks / unlocks it).
+- OK on a card opens the title page; IPTV catalog titles are looked up in `search.db` first (real category for the
+  parental lock, file type for direct play). Colour keys: My list, Play trailer (when the provider has one), Mark
+  watched, More. Bookmark / gamepad Y still toggle My list.
+
+**Title page** (`DetailScreen`): backdrop, eyebrow, title, meta, synopsis, then Play / Resume (primary), Play from
+start, My list, Trailer, More; a status line; for shows the season tabs (focus selects) and that season's episodes,
+for films cast and director. Colour keys: red My list, green trailer, yellow mark watched (the focused episode, else
+the film or the whole show), blue More (the episode's menu on an episode). Long press on an episode or a season tab
+opens its menu (play from start, marks, downloads). Everything tvBro's page did is kept: resume, play from start,
+episode lists and marks, downloads, external player, category lock.
+
+**Plex / Jellyfin titles** open the title page with details, seasons and episodes from `/v1/media/item` and
+`/v1/media/children`, My list and Mark watched (`/v1/media/watched`), and a disabled **Play (coming soon)**: playback
+through those servers is not built on the TV yet.
+
 ## Performance (BRAVIA)
 
 - Focus animation runs in the draw phase (`graphicsLayer` / `drawWithContent` read an animated float). Moving focus
@@ -112,16 +147,13 @@ syncs the new profile in.
 
 - `Orbit5LogicTest`: catalog parsing, key mapping, the image-cookie rule, colour keys, ring geometry, mesh colours.
 - `ShellFocusTest` (Robolectric): Up lands on the current tab, Down returns to the last item, OK opens a tab.
-- `DesignShotsTest` (Robolectric native graphics) renders Home, Browse and both pickers at 1920 × 1080 to
+- `MoviesLogicTest`: catalog items to titles (IPTV and Plex keys), captions, counts, collection summaries.
+- `DesignShotsTest` (Robolectric native graphics) renders Home, Browse, both pickers, Movies Recommended and Browse,
+  a collection and a title page at 1920 × 1080 to
   `app/build/orbit-shots/*.png`. It is a visual check only; nothing compares the images.
 
 ## What each follow-up builds where
 
-- **Movies / Shows / Detail**: replace `ui/movies/MoviesShowsSection.kt`. Use `SubMenuRow` (Recommended · Browse ·
-  Collections, with `BrowseControls` on Browse), `CatalogApi.recommended / browse / collections`, `PosterCard` grids
-  (180 × 270, 8 per row), and `CinematicBackdrop` + `HeroBlock(section = true)`. Restyle `DetailPage`, for example
-  in a new `ui/movies/DetailScreen.kt`, and route `Screen.DETAIL` to it in MainActivity. Colour keys: My list, Play
-  trailer, Mark watched, More. The legacy browse and detail code in `ui/BrowseScreens.kt` can then go.
 - **Live TV / player**: replace `ui/live/LiveTvSection.kt` and restyle `TvSection`, `GuideScreen` and `PlayerScreen`.
   Use `CinematicBackdrop(dim = true)` for the guide. Colour keys: Favourite, Record, Format TS / HLS, Channel
   options. Draw the legend yourself on full-screen pages. Restyle the stream prompt (`OrbitStreamPrompt`) per spec
