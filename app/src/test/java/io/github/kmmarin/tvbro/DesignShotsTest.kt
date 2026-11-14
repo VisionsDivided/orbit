@@ -103,6 +103,17 @@ import io.github.kmmarin.tvbro.orbit.DiscoverRequest
 import io.github.kmmarin.tvbro.orbit.DiscoverRow
 import io.github.kmmarin.tvbro.orbit.DiscoverTitle
 import io.github.kmmarin.tvbro.orbit.DownloadInfo
+import androidx.compose.material.icons.filled.Check
+import io.github.kmmarin.tvbro.ui.movies.PhoneBrowseView
+import io.github.kmmarin.tvbro.ui.movies.PhoneMoviesControls
+import io.github.kmmarin.tvbro.ui.movies.PhoneTopBackdrop
+import io.github.kmmarin.tvbro.ui.live.PhoneChannelRow
+import io.github.kmmarin.tvbro.ui.live.PhoneListHeading
+import io.github.kmmarin.tvbro.ui.live.PhoneLiveView
+import io.github.kmmarin.tvbro.ui.live.PhonePlayerEvents
+import io.github.kmmarin.tvbro.ui.live.PhonePlayerView
+import io.github.kmmarin.tvbro.ui.live.PhoneStreamSheet
+import io.github.kmmarin.tvbro.ui.shell.LocalIsPhone
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -464,5 +475,99 @@ class DesignShotsTest {
                 backdrop = { BackdropStill(art().asImageBitmap(), MeshColors(Color(0xFFC3261B), Color.Black), Modifier.fillMaxSize()) },
             )
         }
+    }
+
+    // ---- phone 5b: Movies / Shows, title page, Live TV, player (orbit/phone-layouts) ----
+
+    @Config(sdk = [34], qualifiers = "w412dp-h915dp-port-xxhdpi")
+    @Test fun phoneMovies() = shot("phone-movies") {
+        PhoneFrame(active = NavTab.MOVIES, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani", title = "Movies") {
+            PhoneTopBackdrop { BackdropStill(art().asImageBitmap(), MeshColors(Color(0xFF1B7FA3), Color(0xFFD8F3FF)), Modifier.fillMaxSize()) }
+            PhoneBrowseView(
+                (0..17).map { title(it) }, TitleEvents(watched = { it.key.endsWith("3") }), hasMore = false, onNearEnd = {},
+                header = { PhoneMoviesControls(tabs, 1, {}, BrowseControls(BrowseSource.ALL, {}, count = "1,284 titles")) },
+            )
+        }
+    }
+
+    @Config(sdk = [34], qualifiers = "w412dp-h915dp-port-xxhdpi")
+    @Test fun phoneDetail() = shot("phone-detail") {
+        androidx.compose.runtime.CompositionLocalProvider(LocalIsPhone provides true) {
+            Box(Modifier.fillMaxSize().background(Color(0xFF05060C))) {
+                PhoneTopBackdrop(1f) { BackdropStill(art().asImageBitmap(), MeshColors(Color(0xFF1B7FA3), Color(0xFFD8F3FF)), Modifier.fillMaxSize()) }
+                DetailView(
+                    DetailData("Fathom Station", "Series", listOf("iptv"), "2023", "8.4", "3 Seasons", listOf("Thriller", "Sci-fi"),
+                        "Eight researchers live two kilometres under the ocean on a station that was never meant to be found.",
+                        status = "28 min left · Ballast · My list ✓"),
+                    listOf(DetailButton("Resume S2 E4", Icons.Filled.PlayArrow, primary = true), DetailButton("My list", Icons.Filled.Check),
+                        DetailButton("Trailer", Icons.Filled.Star), DetailButton("More", Icons.Filled.MoreVert)),
+                    seasons = listOf("Season 1", "Season 2", "Season 3"), season = 1,
+                    episodes = listOf(
+                        EpCard("3", "E3 · Pressure Line", "Watched · 47 min", null, 1f, true), EpCard("4", "E4 · Ballast", "28 min left", null, 0.46f),
+                        EpCard("5", "E5 · Thermocline", "52 min", null), EpCard("6", "E6 · The Quiet Hatch", "49 min", null), EpCard("7", "E7 · Surface", "55 min", null),
+                    ),
+                    watched = DetailButton("Watched", Icons.Filled.Check),
+                )
+            }
+        }
+    }
+
+    private val liveMarks = mapOf("k1" to RowMarks(fav = true, playing = true), "k2" to RowMarks(fav = true, format = "HLS"), "k4" to RowMarks(rec = true))
+
+    @Composable
+    private fun phoneLive(guide: Boolean) {
+        PhoneFrame(active = NavTab.LIVE, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani", title = "Live TV") {
+            BackdropStill(null, MeshColors(Color(0xFFB8741A), Color(0xFFFFE2B0)), Modifier.fillMaxSize(), dim = true)
+            PhoneLiveView(
+                tabs = listOf("Channels", "Guide", "Recordings", "My list"), selected = if (guide) 1 else 0, onTab = {},
+                preview = { mod -> Box(mod.background(Color.Black, RoundedCornerShape(12.dp))) { Image(art().asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) } },
+                nowPlaying = "The Ninth Lantern" to "Vista Cinema",
+                groups = groups, group = "Favourites", groupLabel = { if (it == "Favourites") "★ Favourites" else it }, onGroup = {}, onGroupLong = {},
+                guide = guide, channels = channels, programmes = { c -> progs[c.key] ?: emptyArray() }, now = now, marks = { c -> liveMarks[c.key] ?: RowMarks() },
+                onChannel = {}, onChannelLong = {}, guideChannel = channels.first(), onGuideChannel = {},
+                catchup = { _, _ -> true }, recorded = { _, pr -> pr.title == "Late Feature" }, onProgramme = { _, _ -> }, onProgrammeLong = { _, _ -> },
+            )
+        }
+    }
+
+    @Config(sdk = [34], qualifiers = "w412dp-h915dp-port-xxhdpi")
+    @Test fun phoneLiveChannels() = shot("phone-live") { phoneLive(guide = false) }
+
+    @Config(sdk = [34], qualifiers = "w412dp-h915dp-port-xxhdpi")
+    @Test fun phoneLiveGuide() = shot("phone-guide") { phoneLive(guide = true) }
+
+    private val phoneQuick = listOf(
+        QuickAction("Favourite", icon = Icons.Filled.Star, tint = Color(0xFFFFD166), on = true) {}, QuickAction("Record", glyph = "●", tint = Color(0xFFFF6B6B)) {},
+        QuickAction("Format · TS", glyph = "TS") {}, QuickAction("Start over", icon = Icons.Filled.Refresh) {}, QuickAction("Guide", icon = Icons.Filled.DateRange) {},
+        QuickAction("Info", icon = Icons.Filled.Info) {}, QuickAction("More", glyph = "•••") {},
+    )
+
+    @Composable
+    private fun phonePlayer() {
+        Box(Modifier.fillMaxSize().background(Color(0xFF05060C))) {
+            PhonePlayerView(
+                playerInfo, phoneQuick, controls = true, PhonePlayerEvents(), hint = true,
+                video = { Image(art().asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) },
+            ) {
+                item { PhoneListHeading("Channels · Favourites") }
+                items(channels.size) { i -> val c = channels[i]; PhoneChannelRow(c, progs[c.key] ?: emptyArray(), now, liveMarks[c.key] ?: RowMarks(), {}) {} }
+            }
+        }
+    }
+
+    @Config(sdk = [34], qualifiers = "w412dp-h915dp-port-xxhdpi")
+    @Test fun phonePlayerShot() = shot("phone-player") { phonePlayer() }
+
+    @Config(sdk = [34], qualifiers = "w412dp-h915dp-port-xxhdpi")
+    @Test fun phoneStreamPrompt() = shot("phone-stream-prompt") {
+        phonePlayer()
+        PhoneStreamSheet(
+            2, "Vista Cinema",
+            listOf(
+                StreamChoice.Row("a1", "Kitchen", "Arcadia Sports · Harbor City v Northgate", false, t0 - 900),
+                StreamChoice.Row("b2", "Bedroom", "Meridian News 24 · Market Close", false, t0),
+            ),
+            oldestOnly = false, onStop = {}, onCancel = {},
+        )
     }
 }
