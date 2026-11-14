@@ -2,215 +2,135 @@
 
 ![Orbit: your media, in orbit](branding/orbit-banner.webp)
 
-> **Orbit** is a private, independently developed media app based on [tvBro](https://github.com/kmmarin/tvBro)
-> (Apache-2.0). It adds a home server with accounts and profiles, Plex and Jellyfin libraries, Seerr requests
-> and a cinematic home screen on top of tvBro's IPTV player. Orbit installs as its own app
-> (`io.github.visionsdivided.orbit`) beside tvBro. Everything below this note is tvBro's original README and
-> still describes the IPTV engine Orbit is built on.
+**A self-hosted home for live TV, films and shows, on your TV, phone, browser and computer.**
 
----
+Orbit brings your IPTV service, your Plex and Jellyfin libraries and your Seerr requests together in one cinematic
+app. A small home server you run yourself keeps the logins, accounts and profiles. Every screen in the house talks
+only to that server, so the experience is the same on the TV in the living room, the phone in your hand and the
+browser at your desk.
 
-# tvBro
+> Orbit is a **player only**. It ships no channels, streams, playlists or other content and is not affiliated with
+> any provider. You add your own sources and must have the rights to watch them. Orbit is based on
+> [tvBro](https://github.com/kmmarin/tvBro) (Apache-2.0).
 
-**A free, open-source IPTV player for Android TV, Fire TV, phones, Windows, Raspberry Pi and your own home server.**
+![Orbit Home on a TV: a featured show over a backdrop that takes its colours from the artwork](docs/screenshots/orbit/tv-home.jpg)
 
-tvBro plays the live TV, guide, films and series of an IPTV service you already have. Add your
-Xtream Codes login or an M3U playlist (with an XMLTV guide) and get a fast, remote-friendly TV app:
-a live guide with catch-up, search across everything, recordings, reminders and resume where you
-left off. Dark theme, big focus outlines, built for the remote.
+*Every screenshot on this page uses the fictional demo provider in [`tools/demo/`](tools/demo/): made-up channels,
+titles and artwork.*
 
-> tvBro is a **player only**. It ships no channels, streams, playlists or other content and is not
-> affiliated with any provider. You add your own sources and must have the rights to watch them.
-
-[Download the latest Android APK](https://github.com/kmmarin/tvBro/releases/latest) ·
-[How to install](docs/INSTALL.md) · [All releases](https://github.com/kmmarin/tvBro/releases) ·
-[Report a bug](https://github.com/kmmarin/tvBro/issues/new/choose)
-
-## Screenshots
-
-![TV screen: live preview above the guide grid, with catch-up markers and programme details](docs/screenshots/web-tv.png)
+## What it does
 
 | | |
 |---|---|
-| ![Films: categories, posters, ratings and details](docs/screenshots/web-movies.png) | ![Shows](docs/screenshots/web-shows.png) |
-| ![A series with seasons and episodes](docs/screenshots/web-series.png) | ![Settings: sync status per playlist](docs/screenshots/web-settings.png) |
-| ![Desktop app (Windows / Raspberry Pi): TV screen](docs/screenshots/desktop-tv.png) | |
+| ![Movies on the TV: Recommended rows under a featured film](docs/screenshots/orbit/tv-movies.jpg) | ![Browse on the TV: All, Local and IPTV, genre, sort and title count on one row](docs/screenshots/orbit/tv-browse.jpg) |
+| **Movies and Shows.** Recommended rows (continue watching, recently added, top in a genre, top unwatched), then Browse and Collections, one press away. | **Browse.** All · Local · IPTV, genre, sort and the title count on a single row, above a poster grid that loads as you go. |
+| ![A show's title page with Play, My list, seasons and episodes](docs/screenshots/orbit/tv-detail.jpg) | ![Live TV with a compact header, live preview and the programme guide](docs/screenshots/orbit/tv-live.jpg) |
+| **Title pages.** Play or resume first, seasons and episodes right below, and the remote's coloured keys for My list and Mark watched. | **Live TV.** A guide built for the remote: quick-select group tabs, a live preview, a now line and favourites. |
+| ![The All groups side menu searching for hockey](docs/screenshots/orbit/tv-live-groups.jpg) | ![Search results for hockey: channels and live programmes](docs/screenshots/orbit/tv-search.jpg) |
+| **Thousands of channels, found fast.** Groups fold into folders ("Sports", "UK" …), a search box finds groups and channels, and the groups you pin become tabs. | **Search everything.** Channels, what's on now, films and shows, with voice search and history. |
+| ![The player overlay with quick actions](docs/screenshots/orbit/tv-player.jpg) | ![The stream-limit dialog listing Kitchen and Bedroom, each with its own Stop button](docs/screenshots/orbit/tv-stream-prompt.jpg) |
+| **The player.** Guide, favourite, record, subtitles, audio, start over and per-channel MPEG-TS or HLS, all from one row. | **Fair sharing.** When every stream your provider allows is in use, choose which TV to stop, by name. A channel that keeps buffering offers HLS and never switches on its own. |
+| ![The orbit-style Who's watching picker](docs/screenshots/orbit/tv-whos-watching.jpg) | ![Discover with trending titles and request status badges](docs/screenshots/orbit/tv-discover.jpg) |
+| **Accounts and profiles.** Everyone gets their own My list, progress and recommendations; kids profiles hide locked categories. Pick the orbit picker or a classic grid. | **Discover.** Trending and upcoming titles through Seerr. Requests show live status down to download progress, and titles you already have say Play. |
 
-Most screenshots show the self-hosted web app at 1920x1080; the Android TV and desktop apps use the
-same TV layout (Android TV screenshots will follow). All of them use the made-up demo provider in `tools/demo/` (fictional channels,
-programmes, films and generated artwork), never real content.
+### In the browser and on your phone
 
-## Features
+| | |
+|---|---|
+| ![Web app: Movies Browse grid](docs/screenshots/orbit/web-browse.jpg) | ![Web app: Collections](docs/screenshots/orbit/web-collections.jpg) |
 
-### Sources
-- **Xtream Codes** login (live, films, series, catch-up) and **M3U / M3U8** playlists with one or more
-  **XMLTV** guide URLs (gzip supported).
-- Several playlists at once: enable, disable, reorder, remove.
-- **Add a source from your phone**: the TV shows a QR code and a one-time code; a small page on your
-  phone (same Wi-Fi, only while that screen is open) sends the login to the TV. No typing on the remote.
-- Logins are stored encrypted on the device and never logged or shown in backups.
-- Background sync per kind (channels, guide, films and series) with its own schedule; a failed or
-  empty sync keeps the data you have and retries. Settings > Sync shows progress, counts and errors.
-- Starts instantly from stored data, then refreshes.
+<p>
+  <img src="docs/screenshots/orbit/phone-home.jpg" alt="Phone: Home with a featured show and the bottom bar" width="260">
+  <img src="docs/screenshots/orbit/phone-browse.jpg" alt="Phone: Movies Browse grid with the source toggle and filters" width="260">
+  <img src="docs/screenshots/orbit/phone-live.jpg" alt="Phone: Live TV with the preview and channel guide" width="260">
+</p>
 
-### Live TV and guide
-- TV screen: live preview on top, guide grid below, everything on one time scale. The guide opens at
-  the current half hour; move left into the past for catch-up.
-- Full-screen guide, programme details, episode code and sub-title ("S2 E4 ...").
-- Groups in provider order, favourites, your own groups, rename / hide / reorder channels and groups.
-- Number zapping, channel up / down, last channel on start, picture-in-picture (Android).
-- Back from full screen shrinks the video into the preview without re-buffering.
-- Automatic reconnect, then fallback to an alternate copy of the same channel.
-- Manual channel-to-guide mapping and guide time shift for mismatched guides.
-- **Catch-up**: Xtream timeshift and M3U `catchup` attributes.
+The web app is served by the home server, so there is nothing to install on a computer. Below 900 px wide, and in the
+Android app on a phone, Orbit switches to a touch layout with a labelled bottom bar.
 
-### Films and series
-- Poster grids with categories, details (plot, year, rating, cast, trailer), seasons and episodes.
-- **Continue watching**, resume per film and per episode, watched marks for episode / season / show.
-- **Up next**: plays the next episode with a countdown (can be turned off).
-- Audio and subtitle language remembered per series.
-- Large catalogues are stored on the device and paged, so browsing stays fast.
+## How it fits together
 
-### Search
-- One search over channels, programmes, films and shows, with results as rows.
-- Fast full-text index: prefix matching per word, accents ignored ("pokemon" finds "Pokémon").
-- Programme results marked as catch-up, on now (with time left) or upcoming, with Watch, Record,
-  Remind and My list actions. Search history and voice search (Android).
-
-### Recording and reminders
-- Record now (until stopped, 30 min, 1 h, 2 h or the end of the programme) or schedule from the guide
-  with padding; **record a series** (every airing of a title on a channel).
-- Storage: internal, USB / SD card, or a **network share (SMB)** with free-space check and a Test button.
-- Recordings list with play and delete.
-- **Reminders**: a pop-up "starting now" with Watch now, or a notification when tvBro is in the background.
-
-### Player
-- Audio and subtitle tracks, caption size and background, video quality.
-- Aspect (normal, fill, zoom, 16:9, 4:3), audio delay, sleep timer, clock, stream info.
-- HEVC and MKV / AVI where the device can decode them; frame-rate matching on Android TV.
-- Optional external player.
-
-### My list, organisation and safety
-- **My list**: rows of cards for continue watching, favourite channels, films, shows, programmes and recordings.
-- **Parental PIN**: lock groups, single channels and film / series categories (salted PBKDF2; waits after wrong tries).
-- Backup and restore of settings and organisation (never includes logins).
-- Dark theme only, clear focus everywhere, works fully with a TV remote.
-- Android: optional "update available" check against this repository's releases (Settings > About; can be turned off).
-
-### Privacy and security
-No ads, no analytics, no tracking, no account. tvBro talks only to the sources you add and, if the
-update check is on, once a day to the GitHub Releases API of this repository. Logins are stored
-encrypted and are never part of backups. Note that most IPTV services use plain HTTP and put your
-login in the stream address; that is how those services work, not something a player can change.
-Security reports: see [SECURITY.md](SECURITY.md) (also lists the release signing certificate).
-
-## Security
-
-**How the code is kept secure**
-- Every release goes through a security review of all changes since the previous release, and nothing
-  is published while a known critical or high issue is open. The release workflow builds nothing
-  unless the full CI passes for the release tag.
-- CI on every push and pull request: all tests (Android, desktop, web), secret scanning (gitleaks),
-  a dependency vulnerability scan (osv-scanner, plus GitHub's dependency graph alerts), Gradle wrapper
-  validation, and a scan that refuses private addresses, home paths and keys in the code.
-- The web app's browser players (hls.js, mpegts.js) are downloaded at pinned versions and checked
-  against SHA-256 hashes before use.
-- Android release APKs are always signed with the same tvBro key (fingerprint in [SECURITY.md](SECURITY.md));
-  Android refuses an update signed with any other key.
-- Clean room: no code or assets from other players, so nothing of unknown origin.
-
-**How your data is protected**
-- Provider logins are encrypted at rest: Android with the Android Keystore (EncryptedSharedPreferences),
-  desktop with Windows DPAPI or the Linux keyring (a private key file as fallback), the web server with
-  a key stored outside its data folder (a root-only systemd credential).
-- Logins never appear in logs or in tvBro's backup files. Android cloud backup and device-to-device
-  transfer are switched off for tvBro's data. Release builds of the Android app strip informational
-log output.
-- The parental PIN is stored only as a salted, slow hash (PBKDF2-SHA256).
-- No analytics, telemetry, ads or crash reporting. Apart from your own sources, the only request tvBro
-  makes is the optional Android update check to GitHub over HTTPS; a download is installed only after
-  it passes checks (published SHA-256 checksum, same app, newer, same signing key) and you confirm it in the system installer.
-
-**Network safety**
-- TLS certificate checks are never switched off.
-- The web server gives every browser its own session and always checks CSRF tokens, Origin and Host
-  (DNS-rebinding protection), sends security headers, fetches only `http(s)` URLs and
-  refuses loopback and internal addresses unless you explicitly allow sources on your own network.
-  A password is optional and **off by default**: without it anyone on your network can use and change
-  the app. Turn on Settings > Security > Require a password whenever the server can be reached from
-  beyond a trusted home network, and never expose it to the internet.
-
-**If something goes wrong**: report vulnerabilities privately through
-[GitHub security advisories](https://github.com/kmmarin/tvBro/security/advisories/new). Fixes are made on
-a best-effort basis and announced in the release notes and a GitHub advisory. What to do if your own
-device or server was compromised is described in [SECURITY.md](SECURITY.md).
-
-## Platforms
-
-| Feature | Android / Android TV / Google TV / Fire TV | Windows / Raspberry Pi (desktop) | Web (self-hosted) |
-|---|---|---|---|
-| Xtream, M3U, XMLTV, several playlists | yes | yes | yes |
-| Add a source from your phone (QR) | yes | - | the web page itself works on phones |
-| TV screen with preview + guide, catch-up | yes | yes | yes |
-| Films and series, resume, Up next | yes | yes | yes (series features in progress) |
-| Full-text search | yes | yes | simpler search |
-| Recording (incl. series, SMB share) | yes | yes | on the server (no series rules yet) |
-| Reminders | yes | yes | yes |
-| Parental PIN | yes | yes | settings PIN only |
-| Picture-in-picture, frame-rate matching | yes | - | - |
-| Voice search | yes | - | where the browser supports it |
-| Backup and restore | yes | yes | state lives on the server |
-
-- **Android 7.0 or newer** (minSdk 24): phones, tablets, Android TV, Google TV, Fire TV (Fire OS 6 and later, including the Fire TV Stick).
-  One universal APK for ARM and x86, 32 and 64 bit.
-- **Windows 10/11 x64**: zip with a bundled Java runtime; video by libmpv (see [docs/INSTALL.md](docs/INSTALL.md)).
-- **Raspberry Pi 4/5 and other Linux arm64** (Debian 12 or newer): tarball with a bundled Java runtime and the system libmpv.
-- **Web**: a small Python server plus a browser app for your own LAN (see [web/README.md](web/README.md)).
-
-The details of each platform are tracked in [docs/PARITY.md](docs/PARITY.md).
-
-## Install
-
-Short version for Android: download `tvbro-<version>.apk` from the
-[latest release](https://github.com/kmmarin/tvBro/releases/latest), allow your browser or file
-manager to install unknown apps, open the file. Fire TV: use the Downloader app.
-Step-by-step guides for phones, Android TV / Google TV, Fire TV, Obtainium (automatic updates),
-Windows and Raspberry Pi are in **[docs/INSTALL.md](docs/INSTALL.md)**.
-
-## Build from source
-
-Requirements: JDK 17, Android SDK (platform 34, build-tools 34), Git. Gradle comes with the wrapper.
-
-```sh
-git clone https://github.com/kmmarin/tvBro.git && cd tvBro
-./gradlew :shared:test :app:testDebugUnitTest :app:assembleDebug     # Android debug APK
-./gradlew :app:assembleRelease                                       # release APK (signed if keystore.properties exists)
-./gradlew :desktop:test :desktop:createDistributable                 # Windows / Linux desktop app image
-./gradlew :desktop:piLibs -Ptarget=linux-arm64                       # Raspberry Pi classpath
+```mermaid
+flowchart LR
+  subgraph Sources
+    IPTV[IPTV provider]
+    PJ[Plex / Jellyfin]
+    SR[Seerr]
+  end
+  subgraph Home["Your home server (Docker)"]
+    S[Orbit server<br/>accounts · profiles · sync<br/>catalogue · stream relay]
+  end
+  subgraph Screens
+    TV[Android TV]
+    PH[Phone]
+    WEB[Browser]
+    DESK[Windows / macOS]
+  end
+  IPTV --> S
+  PJ --> S
+  SR --> S
+  S --> TV
+  S --> PH
+  S --> WEB
+  S --> DESK
 ```
 
-- Android output: `app/build/outputs/apk/`. Release signing: copy `keystore.properties.example` to
-  `keystore.properties` (gitignored) or set the `TVBRO_*` environment variables.
-- Desktop details: [desktop/README.md](desktop/README.md). Web server: [web/README.md](web/README.md)
-  (`cd web/server && pip install -r requirements.txt && python run.py`).
-- Version: `-Ptvbro.version=1.2.3`. F-Droid style build without the update check: `-Ptvbro.updateCheck=false`.
+- **One home server** keeps the provider login, accounts, profiles, My list, resume points and show progress. It also
+  serves the web app and builds the Home, Movies and Shows feeds.
+- **Every screen talks only to the server.** A TV is linked once with a short code approved from a phone or computer;
+  the desktop apps sign in with an account. Watching on one device picks up where another left off.
+- **Provider logins stay on the server.** Each linked device gets a login of its own, which the owner can revoke, and
+  the server relays the streams.
 
-Development workflow, branches and tests: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) and
-[CONTRIBUTING.md](CONTRIBUTING.md).
+## Private by design
 
-## How it was made
+- **Runs at home.** On your own machine, reached over your home network or Tailscale. Nothing is published to the
+  internet.
+- **Every person apart.** Accounts and profiles, with each profile's data in its own file on the server.
+- **Clean sign-out.** Signing a TV out from the web removes that account's data from the TV.
+- **Name each TV.** Kitchen, Bedroom: devices are listed by name and can be renamed or unlinked from the web.
+- **Hardened.** Throttled sign-in, session and pairing limits, no logins sent on redirects, and client addresses
+  trusted only from proxies you list.
 
-tvBro is a clean-room implementation built only from public specifications and documentation
-(M3U / M3U8, the Xtream `player_api.php` conventions, XMLTV, Android / Media3, mpv). No code, layout,
-text or artwork from any other IPTV app is used. Architecture notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+## Get Orbit
 
-## Credits
+| Part | How |
+|---|---|
+| **Home server** | Docker on Linux. Copy [`infra/compose.example.yaml`](infra/compose.example.yaml), then follow [`docs/orbit/DEPLOY.md`](docs/orbit/DEPLOY.md) (setup token, first owner account, updates, backups, reverse proxy and TLS). |
+| **Web app** | Open `http://<your server>:8750` in a browser once the server runs. |
+| **Android TV and phones** | Build the APK (`./gradlew :app:assembleDebug`); signed release builds will be attached to [Releases](https://github.com/VisionsDivided/orbit/releases). On the TV, choose **Find my server** or type its address, then approve the code from the web app. |
+| **Windows** | Build the installer (`./gradlew :desktop:packageMsi`). Add `libmpv-2.dll` for video; the app explains where to get it ([`docs/INSTALL.md`](docs/INSTALL.md)). |
+| **macOS** | Every push builds a DMG in [Actions](https://github.com/VisionsDivided/orbit/actions) (Apple silicon and Intel). It is unsigned, so open it the first time with right-click ▸ Open. Status: [`docs/orbit/MACOS.md`](docs/orbit/MACOS.md). |
 
-tvBro was written with [Claude](https://www.anthropic.com/claude), Anthropic's AI model, using
-[Claude Code](https://claude.com/claude-code). Third-party libraries and their licenses are listed in
-[docs/THIRD_PARTY.md](docs/THIRD_PARTY.md) and [NOTICE](NOTICE).
+## Under the hood
 
-## License
+| Part | Built with |
+|---|---|
+| Home server | Python standard library, SQLite, Docker |
+| TV and phone app | Kotlin, Jetpack Compose, Media3 |
+| Web app | Plain JavaScript, served by the home server, no build step |
+| Desktop apps | Compose Desktop with libmpv (Windows and macOS) |
+| API | One documented, versioned contract every app shares: [`docs/orbit/API-v1.md`](docs/orbit/API-v1.md) |
 
-Copyright 2026 The tvBro authors. Licensed under the [Apache License 2.0](LICENSE): free to use,
-modify and share for any purpose, including commercially. See [NOTICE](NOTICE) for third-party notices.
+Tests: `py -3 -m unittest discover -s web/tests` (server), `node --test web/tests/*.test.mjs` (web) and
+`./gradlew :shared:test :app:testDebugUnitTest :desktop:test` (Kotlin, including screen renders). The design is in
+[`docs/orbit/DESIGN-SPEC-5.md`](docs/orbit/DESIGN-SPEC-5.md), the TV app's structure in
+[`docs/orbit/TV-UI.md`](docs/orbit/TV-UI.md), and every change in [`CHANGELOG.md`](CHANGELOG.md).
+
+## Status
+
+Orbit is in active development (0.1.0-dev).
+
+- **Working:** the home server, accounts and profiles, TV linking and sync, the TV, web and phone apps in the new
+  design, Live TV with the guide, recordings, the stream limit, hidden provider logins and the Seerr screens.
+- **Next:** Plex and Jellyfin playback on the TV and web (browsing works today), a run of the macOS app on a real Mac,
+  and signed releases on GitHub.
+
+## Credits and license
+
+Orbit is built on [tvBro](https://github.com/kmmarin/tvBro), an open-source IPTV player by the tvBro authors, under
+the Apache License 2.0. tvBro's original README is kept in [`docs/TVBRO-README.md`](docs/TVBRO-README.md), and its
+notices are in [`NOTICE`](NOTICE). Fixes found while building Orbit are offered back to tvBro.
+
+The code is licensed under [Apache-2.0](LICENSE). The Orbit name, logos and app icons in [`branding/`](branding/) are
+the Orbit project's own artwork and are not covered by the code's license ([`branding/README.md`](branding/README.md)).
