@@ -56,6 +56,8 @@ from .parental import Parental, Locked as PinWait
 from .secfile import write_secret
 from . import auth as AUTH
 from . import backup as BK
+from orbit.accounts import Accounts as OrbitAccounts      # Orbit: accounts and profiles (docs/orbit/API-v1.md)
+from orbit import api as V1
 
 try:                                    # deterministic authenticated encryption for /seg URLs
     from cryptography.hazmat.primitives.ciphers.aead import AESSIV
@@ -1001,6 +1003,8 @@ class App:
         self.images = ImageCache(os.path.join(DATA_DIR, "imgcache"))
         self.sign_key = self._load_sign_key()
         self.auth = AUTH.Auth(DATA_DIR, self.sign_key)
+        self.orbit = OrbitAccounts(DATA_DIR, self.auth)        # Orbit: accounts gate every session
+        self.v1 = V1.Api(self.orbit)
         NET.set_allow_private(lambda: bool(self.settings.get("allowLanSources")))
         self.parental = Parental(os.path.join(DATA_DIR, "parental.json"), self.sign_key)
         self._siv = None
@@ -1199,7 +1203,8 @@ class Handler(BaseHTTPRequestHandler):
         for part in c.split(";"):
             k, _, v = part.strip().partition("=")
             if k == AUTH.COOKIE:
-                return APP.auth.session(v)
+                # Orbit mode: a session that belongs to no account counts as signed out
+                return APP.orbit.gate(APP.auth.session(v))
         return None
 
     def _https(self) -> bool:
@@ -1329,7 +1334,9 @@ class Handler(BaseHTTPRequestHandler):
     # -- routing --
     def _gate_get(self, path: str) -> bool:
         """True when the request may go on (else it has been answered)."""
-        if path in PUBLIC_GET:
+        if path in PUBLIC_GET or path in V1.PUBLIC_GET:
+            return True
+        if path.startswith("/v1/"):                  # Orbit API: the route table checks the account
             return True
         if path in ("/stream", "/vodstream"):        # signed URLs (also for external players)
             if self._media_sig_ok():
@@ -1402,13 +1409,17 @@ class Handler(BaseHTTPRequestHandler):
             if not self._json_request() or not self._origin_ok():
                 return self._err(403, "cross-site request refused")
             self.sess = self._session()
-            if u.path == "/api/auth/login":
+            if u.path == "/api/auth/login" or u.path in V1.PUBLIC_POST:
                 if self.headers.get("X-TvBro") != "1":
                     return self._err(403, "cross-site request refused")
+            elif u.path.startswith("/v1/") and not self.sess:
+                return self.route_v1("POST")             # answers 401 / not found in the API's own format
             elif not self.sess:
                 return self._need_login()
             elif not APP.auth.csrf_ok(self.sess["h"], self.headers.get("X-CSRF-Token", "")):
                 return self._err(403, "csrf token")
+            if u.path.startswith("/v1/"):
+                return self.route_v1("POST")
             if u.path in ADMIN_POST or u.path.startswith(ADMIN_POST_PREFIX):
                 if not self._is_admin():
                     return self._err(403, "admin only")
@@ -1438,6 +1449,11 @@ class Handler(BaseHTTPRequestHandler):
         "Require a password"), password {current, password} (admin), viewer {password|""} (admin)."""
         d = self._body()
         A = APP.auth
+        if APP.orbit.enabled():                      # Orbit mode: accounts replace the shared password
+            if action == "logout":
+                APP.orbit.logout(self.sess)
+                return self._json({"ok": True}, headers={"Set-Cookie": self._cookie("", 0)})
+            return self._err(410, "this server uses accounts: sign in with /v1/auth/login")
         if action == "require":
             on = d.get("enabled") is True
             if on:
@@ -1669,7 +1685,18 @@ class Handler(BaseHTTPRequestHandler):
         self._err(404, "not found")
 
     # -- GET routes --
+    def route_v1(self, method: str):
+        """Orbit /v1 API (orbit/api.py). Host, Origin and CSRF were checked by do_GET / do_POST."""
+        call = V1.Call(method, self.path_only, self.sess, self._body() if method == "POST" else {}, self._client_ip())
+        rep = APP.v1.handle(call)
+        hdr = dict(rep.headers)
+        if rep.session is not None:
+            hdr["Set-Cookie"] = self._cookie(rep.session, AUTH.SESSION_TTL if rep.session else 0)
+        return self._json(rep.obj, rep.code, headers=hdr)
+
     def route_get(self, path):
+        if path.startswith("/v1/"):
+            return self.route_v1("GET")
         if path == "/api/health":
             return self._json({"status": "ok", "time": int(time.time())})
         if path == "/api/session":

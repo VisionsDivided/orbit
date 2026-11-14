@@ -177,7 +177,9 @@ class Endpoints(unittest.TestCase):
         sid = auth.setup("password1")
         cls.headers = {"Content-Type": "application/json", "Cookie": f"{AU.COOKIE}={sid}",
                        "X-CSRF-Token": auth.csrf(AU.Auth._h(sid))}
-        A.APP = types.SimpleNamespace(series=store, auth=auth)
+        # Orbit: no accounts here (tvBro mode), so the account gate passes sessions through unchanged
+        orbit = types.SimpleNamespace(gate=lambda s: s, enabled=lambda: False)
+        A.APP = types.SimpleNamespace(series=store, auth=auth, orbit=orbit)
         cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), A.Handler)
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         cls.base = "http://127.0.0.1:%d" % cls.srv.server_address[1]

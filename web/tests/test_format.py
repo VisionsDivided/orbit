@@ -98,6 +98,7 @@ class SealedSegments(unittest.TestCase):
             self.assertIsNone(a.unseal(tok[:-2] + ("AA" if not tok.endswith("AA") else "BB")))
             self.assertIsNone(a.unseal("nonsense"))
             a.state.db.close()
+            a.orbit.close()                                    # Orbit: orbit.db is open too (Windows cannot delete open files)
 
 
 if __name__ == "__main__":

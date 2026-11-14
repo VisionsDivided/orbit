@@ -217,6 +217,13 @@ class Auth:
         with self._lock:
             return self._new_session(role), role
 
+    def issue_session(self, role: str) -> str:
+        """A new session for a caller that did its own sign-in check (Orbit accounts)."""
+        if role not in ROLES:
+            raise ValueError("role")
+        with self._lock:
+            return self._new_session(role)
+
     def set_password(self, role: str, pw: Optional[str], keep: Optional[str] = None):
         """Admin: change the admin password (other sessions end) or set / remove ("" or None)
         the viewer password (viewer sessions end)."""
