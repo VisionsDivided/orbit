@@ -73,7 +73,7 @@ data class Reminder(val id: String, val chKey: String, val channel: String, val 
 data class Settings(
     val epgHours: Int = 12,
     val catalogueHours: Int = 24,
-    val hwdec: String = if (Platform.windows) "auto-safe" else "v4l2m2m-copy,auto-safe",
+    val hwdec: String = MpvVideo.hwdecChoices(Platform.os).first(),
     val lastChannel: String = "",
     val myList: List<String> = emptyList(), // channel keys, VOD item keys and "g|<group>"
     val resume: Map<String, Long> = emptyMap(), // legacy (seconds); moved into watch.json on first start

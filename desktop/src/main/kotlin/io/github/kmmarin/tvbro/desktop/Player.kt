@@ -19,7 +19,6 @@ import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import com.sun.jna.Native
 import kotlinx.coroutines.*
 import io.github.kmmarin.tvbro.data.*
 import java.awt.Canvas
@@ -33,7 +32,7 @@ private class VideoCanvas(val onReady: (Long) -> Unit, val onGone: () -> Unit, v
         background = java.awt.Color.BLACK; isFocusable = false
         addMouseListener(object : MouseAdapter() { override fun mouseClicked(e: MouseEvent) = onMouse(e) })
     }
-    override fun addNotify() { super.addNotify(); onReady(Native.getComponentID(this)) }
+    override fun addNotify() { super.addNotify(); onReady(MpvVideo.windowId(this)) }
     override fun removeNotify() { onGone(); super.removeNotify() }
 }
 

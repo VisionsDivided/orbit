@@ -262,10 +262,49 @@ object MpvHardening {
     )
 }
 
+/**
+ * How mpv shows video on each OS, in one place. Windows: `wid` = the HWND of an AWT Canvas, vo=gpu. Linux / Pi: the
+ * X11 window id, gpu-context=x11egl (AWT is X11, XWayland under labwc). macOS: not settled (docs/orbit/MACOS.md):
+ * by default no embedding (sound only, nothing native is touched); TVBRO_MAC_VIDEO=wid (or -Dtvbro.macVideo=wid)
+ * tries `wid` with the Canvas's native handle for the MacBook spike.
+ */
+object MpvVideo {
+    /** "Window id" meaning: play with sound but without a video output. */
+    const val NO_EMBED = -1L
+
+    val macMode: String? get() = System.getProperty("tvbro.macVideo") ?: System.getenv("TVBRO_MAC_VIDEO")
+
+    /** Whether the video can be drawn into an AWT component on [os]. */
+    fun embeds(os: Os, macMode: String? = this.macMode): Boolean = os != Os.MAC || macMode == "wid"
+
+    /** mpv options for drawing into the native window [wid]; the order is the order they are set in. */
+    fun options(os: Os, wid: Long): List<Pair<String, String>> = when (os) {
+        Os.WINDOWS -> listOf("wid" to wid.toString(), "vo" to "gpu")
+        Os.LINUX -> listOf("wid" to wid.toString(), "gpu-context" to "x11egl", "vo" to "gpu")
+        Os.MAC -> listOf("wid" to wid.toString(), "vo" to "gpu") // spike only (embeds() is false by default)
+    }
+
+    /** Hardware decoding choices in Settings, the default first (macOS: VideoToolbox through auto-safe). */
+    fun hwdecChoices(os: Os): List<String> = when (os) {
+        Os.WINDOWS -> listOf("auto-safe", "d3d11va", "no")
+        Os.LINUX -> listOf("v4l2m2m-copy,auto-safe", "drm,auto-safe", "auto-safe", "no")
+        Os.MAC -> listOf("auto-safe", "videotoolbox", "no")
+    }
+
+    /** The id mpv gets for [c]: its native handle, or [NO_EMBED] where this OS cannot embed (or the handle fails). */
+    fun windowId(c: java.awt.Component, os: Os = Platform.os): Long {
+        if (os != Os.MAC) return com.sun.jna.Native.getComponentID(c) // Windows / Linux: as always
+        if (!embeds(os)) return NO_EMBED
+        return try { com.sun.jna.Native.getComponentID(c).takeIf { it != 0L } ?: NO_EMBED } catch (e: Throwable) {
+            Diag.log("no native window for the video (${e.javaClass.simpleName}): sound only"); NO_EMBED
+        }
+    }
+}
+
 data class Track(val id: String, val type: String, val title: String, val lang: String?, val selected: Boolean, val w: Int = 0, val h: Int = 0, val bitrate: Long = 0)
 
 /**
- * One mpv instance: drawing into the native window [wid], headless (wid 0, self-test), or a [recorder] that only
+ * One mpv instance: drawing into the native window [wid], sound only ([MpvVideo.NO_EMBED]), headless (wid 0, self-test), or a [recorder] that only
  * demuxes and writes `stream-record` (no decoding, no output). [onEnd] gets "eof" or "error: ..." (any thread);
  * [onLoaded] fires when a file is loaded and its tracks are known.
  */
@@ -276,11 +315,11 @@ class Mpv(private val lib: MpvLib, wid: Long, hwdec: String, recorder: Boolean =
 
     init {
         val o = { k: String, v: String -> lib.mpv_set_option_string(h!!, k, v) }
-        if (wid > 0) {
-            o("wid", wid.toString())
-            if (!Platform.windows) o("gpu-context", "x11egl") // AWT windows are X11 (XWayland under labwc)
-            o("vo", "gpu")
-        } else { o("vo", "null"); o("ao", "null") } // headless self-test or recorder
+        when {
+            wid > 0 -> for ((k, v) in MpvVideo.options(Platform.os, wid)) o(k, v)
+            wid == MpvVideo.NO_EMBED -> o("vo", "null") // this OS cannot embed the video yet (macOS): sound only
+            else -> { o("vo", "null"); o("ao", "null") } // headless self-test or recorder
+        }
         if (recorder) { o("vd-lavc-skipframe", "all"); o("vd-lavc-skipidct", "all"); o("vd-lavc-skiploopfilter", "all"); o("sid", "no"); o("network-timeout", "30") }
         o("hwdec", hwdec)
         System.getenv("TVBRO_MPV_LOG")?.let { o("log-file", it) } // diagnostics only; the log can contain stream URLs
