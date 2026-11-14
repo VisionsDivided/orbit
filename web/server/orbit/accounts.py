@@ -33,6 +33,9 @@ GATE_CACHE_SECS = 5                    # the per-request account check is cached
 SEEN_EVERY = 300                       # write last_seen at most every 5 minutes per session
 # account role -> the server session role that sets what the existing /api routes allow
 SESSION_ROLE = {"owner": "admin", "admin": "admin", "member": "viewer"}
+# session kinds of devices that play from the provider themselves: a TV linked with a pairing code, and the desktop
+# app signed in with its account. They get the household's playlists and never more than the viewer role.
+DEVICE_KINDS = ("tv", "desktop")
 
 
 class ApiError(Exception):
@@ -122,7 +125,8 @@ class Accounts:
         return self._issue(acc, device)
 
     # ---- sign in / out ----
-    def login(self, username, password, client: str, device: str = "") -> str:
+    def login(self, username, password, client: str, device: str = "", kind: str = "web") -> str:
+        """kind: "desktop" for the Orbit desktop app (watches and syncs like a linked TV), else a browser."""
         key = username.strip().lower() if isinstance(username, str) else ""
         try:
             self.throttle.check(client)
@@ -143,21 +147,21 @@ class Accounts:
         self.throttle.ok(client)
         self.user_throttle.ok("u:" + key)
         self._prune()
-        return self._issue(self._account(row), device)
+        return self._issue(self._account(row), device, kind="desktop" if kind == "desktop" else "web")
 
     def _issue(self, acc: dict, device: str, profile_id: Optional[str] = None, kind: str = "web") -> str:
         """A new account session (profile_id: one of the account's profiles, else its first;
-        kind: 'web' for a browser sign-in, 'tv' for a device linked with a pairing code)."""
-        # a linked TV only watches and syncs: never the server's admin role, whoever linked it
-        sid = self.auth.issue_session("viewer" if kind == "tv" else SESSION_ROLE[acc["role"]])
+        kind: 'web' for a browser sign-in, 'tv' for a device linked with a pairing code, 'desktop' for the desktop app signed in with its account)."""
+        kind = kind if kind in DEVICE_KINDS else "web"
+        # a linked TV or the desktop app only watches and syncs: never the server's admin role, whoever signed in
+        sid = self.auth.issue_session("viewer" if kind in DEVICE_KINDS else SESSION_ROLE[acc["role"]])
         h = self.auth._h(sid)
         first = (profile_id,) if profile_id else \
             self.db.one("SELECT id FROM profiles WHERE account_id=? ORDER BY created, id LIMIT 1", (acc["id"],))
         now = int(self.clock())
         dev = device.strip()[:60] if isinstance(device, str) else ""
         self.db.run("INSERT INTO account_sessions(sess_hash, id, account_id, profile_id, device, created, last_seen, kind) "
-                    "VALUES (?,?,?,?,?,?,?,?)", (h, _new_id(), acc["id"], first[0] if first else None, dev, now, now,
-                                                 "tv" if kind == "tv" else "web"))
+                    "VALUES (?,?,?,?,?,?,?,?)", (h, _new_id(), acc["id"], first[0] if first else None, dev, now, now, kind))
         old = self.db.q("SELECT sess_hash FROM account_sessions WHERE account_id=? ORDER BY last_seen DESC, created DESC "
                         "LIMIT -1 OFFSET ?", (acc["id"], MAX_SESSIONS_PER_ACCOUNT))
         for (oh,) in old:                       # this account's oldest beyond the cap, never anyone else's
