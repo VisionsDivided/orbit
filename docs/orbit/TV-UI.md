@@ -36,6 +36,8 @@ are: `96.dp` side margin, `112.sp` hero title. Legacy tvBro screens, written in 
 | `ui/live/EpgGrid.kt` | The EPG grid shared by Live TV ▸ Channels and the full guide (`EpgWindow`, `EpgActions`, `RowMarks`) | Live TV / player |
 | `ui/live/LiveParts.kt`, `LiveUi.kt` | Info block (`LiveInfo`), group tabs, channel tile, LIVE pill, HLS tag, ● REC, `flatFocus` | Live TV / player |
 | `ui/live/PlayerOverlay.kt` | Player overlay pieces: scrims, top line, info block, scrubber, "Try HLS?" chip, quick actions, `O5Popup` | Live TV / player |
+| `ui/live/RecordingsPage.kt`, `LiveCards.kt` | Live TV ▸ Recordings in direction 5 (`RecordingsSection` / `RecordingsView`); `ChannelArtCard` (logo on a gradient, badge, progress) | Live TV / player |
+| `ui/search/SearchSection.kt` | Search (top-bar magnifier) in direction 5: mic, big field, history chips, rows Channels · Live now · Movies · Shows · Later and catch-up | shell |
 | `ui/live/StreamPrompt.kt` | Stream-limit dialog (`StreamPromptCard`), used by `OrbitStreamPrompt` | Live TV / player |
 | `ui/discover/` | `DiscoverSection` (TV and phone), `DiscoverFeed` (rows, requests, live progress); client in `orbit/DiscoverApi.kt` | Discover / Settings / phone agent |
 | `ui/SettingsUi.kt` | Settings page: categories in the sub-menu, `SettingRow` / `ToggleRow` / `SegmentRow`, Profiles, Requests | Discover / Settings / phone agent |
@@ -46,7 +48,7 @@ are: `96.dp` side margin, `112.sp` hero title. Legacy tvBro screens, written in 
 | `orbit/OrbitProfiles.kt` | Profiles, the picker state, picker style and "ask at start" (settings of this TV) | shell agent |
 
 `Section` (AppModel.kt) gained `HOME` (now the default) and `DISCOVER`. Live TV is `TV`, and `RECORDINGS` and `MYLIST`
-are its sub-pages. `SEARCH` opens from the search icon. MainActivity routes `Screen.LIST / SETTINGS / VOD` to
+are its sub-pages. `SEARCH` opens from the search icon (direction 5 on the TV; phones keep the legacy page). MainActivity routes `Screen.LIST / SETTINGS / VOD` to
 `OrbitShell` and `Screen.DETAIL` to `ui/movies/DetailScreen` (under the same top bar, via `ShellFrame`). The guide
 and the live player are full-screen direction-5 screens (see "Live TV and the player"); link and add source are
 still full-screen legacy screens.
@@ -171,7 +173,7 @@ through those servers is not built on the TV yet.
 - `LiveLogicTest`: the yellow key's format cycle, which programme a recording marks, the stream prompt's words.
 - `DesignShotsTest` (Robolectric native graphics) renders Home, Browse, both pickers, Movies Recommended and Browse,
   a collection, a title page, Live TV ▸ Channels (`live-compact`), the side menu of groups (`live-sidemenu`,
-  `live-sidemenu-search`), the full guide (`guide`), the player overlay
+  `live-sidemenu-search`), Recordings (`recordings`, `recordings-scheduled`), Search (`search`, `search-results`), the full guide (`guide`), the player overlay
   (`player`) and the stream prompt (`stream-prompt`) at 1920 × 1080 to
   `app/build/orbit-shots/*.png`. It is a visual check only; nothing compares the images.
 

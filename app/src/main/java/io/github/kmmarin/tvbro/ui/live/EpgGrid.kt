@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -57,6 +58,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -150,8 +152,8 @@ fun EpgGrid(
             Ruler(win, metrics, dpm)
             if (channels.isEmpty()) Text(emptyText, style = LiveStyle.Small, modifier = Modifier.padding(start = 12.dp, top = 24.dp))
             LazyColumn(Modifier.fillMaxWidth().weight(1f), state = listState) {
-                items(channels) { ch ->
-                    EpgRow(ch, programmes, now, win, dpm, metrics, numW, targetKey, chFocus, nowFocus, actions)
+                itemsIndexed(channels) { i, ch ->
+                    EpgRow(ch, i == 0, programmes, now, win, dpm, metrics, numW, targetKey, chFocus, nowFocus, actions)
                 }
             }
         }
@@ -185,7 +187,7 @@ private fun Ruler(win: EpgWindow, metrics: EpgMetrics, dpm: Float) {
 
 @Composable
 private fun EpgRow(
-    ch: Channel, programmes: (Channel) -> Array<Programme>, now: Long, win: EpgWindow, dpm: Float, metrics: EpgMetrics, numW: Dp,
+    ch: Channel, first: Boolean, programmes: (Channel) -> Array<Programme>, now: Long, win: EpgWindow, dpm: Float, metrics: EpgMetrics, numW: Dp,
     targetKey: () -> String?, chFocus: SafeFocus, nowFocus: NowFocus, actions: EpgActions,
 ) {
     val isTarget by remember(ch.key) { derivedStateOf { targetKey() == ch.key } }
@@ -205,25 +207,30 @@ private fun EpgRow(
                 // Right: this row's programme on now (never a programme in another row); Left: the groups
                 .onPreviewKeyEvent { e ->
                     if (e.type != KeyEventType.KeyDown) false
-                    else when (e.key) { Key.DirectionRight -> toNow(); Key.DirectionLeft -> actions.toGroups(); else -> false }
+                    else when (e.key) {
+                        Key.DirectionRight -> toNow(); Key.DirectionLeft -> actions.toGroups()
+                        // Up from the top row: the selected group tab (the focus search skipped the tab row on the TV)
+                        Key.DirectionUp -> first && actions.toGroups()
+                        else -> false
+                    }
                 },
             onFocus = { actions.onFocus(ch, null) }, onLong = { actions.onChannelMenu(ch) }, onClick = { actions.onOpen(ch, null) })
         Box(Modifier.weight(1f).fillMaxHeight()) {
-            ProgrammeRow(ch, programmes(ch), now, win, dpm, nowFr, toLabel, actions)
+            ProgrammeRow(ch, first, programmes(ch), now, win, dpm, nowFr, toLabel, actions)
         }
     }
 }
 
 @Composable
 private fun ProgrammeRow(
-    ch: Channel, progs: Array<Programme>, now: Long, win: EpgWindow, dpm: Float, nowFr: SafeFocus, toLabel: () -> Boolean, actions: EpgActions,
+    ch: Channel, first: Boolean, progs: Array<Programme>, now: Long, win: EpgWindow, dpm: Float, nowFr: SafeFocus, toLabel: () -> Boolean, actions: EpgActions,
 ) {
     val winStart = win.start; val winEnd = win.end
     val total = dpm * GuideLayout.WINDOW_MIN
     // "No guide data" blocks take focus too (OK: the channel), so Up/Down never skip a row or jump far away
     val noData: @Composable (Float, Float, SafeFocus?) -> Unit = { x, w, fr ->
         Cell(x, w, "No guide data", null, past = false, live = false, progress = null, rec = false, focus = fr,
-            keys = { e -> if (e == Key.DirectionLeft && x < 1f) toLabel() else false },
+            keys = { e -> if (e == Key.DirectionLeft && x < 1f) toLabel() else if (e == Key.DirectionUp && first) actions.toGroups() else false },
             onFocus = { actions.onFocus(ch, null) }, onLong = { actions.onChannelMenu(ch) }, onClick = { actions.onOpen(ch, null) })
     }
     val inWindow = progs.any { it.stop > winStart && it.start < winEnd }
@@ -259,6 +266,7 @@ private fun ProgrammeRow(
                                 toLabel()
                             } else false
                         }
+                        Key.DirectionUp -> first && actions.toGroups()
                         else -> false
                     }
                 },
@@ -335,6 +343,7 @@ private fun ChannelCell(
             .drawBehind { drawRect(LiveStyle.Line, topLeft = Offset(0f, size.height - 1.dp.toPx()), size = Size(size.width, 1.dp.toPx())) }
             .cellFocusLook(f)
             .focusRequester(labelFr)
+            .testTag("ch-" + ch.key)
             .onFocusChanged { if (it.isFocused) onFocus() }
             .flatFocus(src, focus, onLongClick = onLong, onClick = onClick)
             .padding(horizontal = 15.dp),

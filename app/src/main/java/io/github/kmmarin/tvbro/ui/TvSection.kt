@@ -198,6 +198,7 @@ fun rememberGuideFocus(m: AppModel): GuideFocus {
  */
 @Composable
 fun GuideGroupTabs(m: AppModel, g: GuideFocus, modifier: Modifier = Modifier) {
+    val entry = io.github.kmmarin.tvbro.ui.orbit5.LocalShellEntry.current
     GroupTabs(
         m.liveTabs, m.group, { groupTabLabel(m, it) }, g.groupSel, g.groupState,
         onFocus = { gr ->
@@ -206,6 +207,8 @@ fun GuideGroupTabs(m: AppModel, g: GuideFocus, modifier: Modifier = Modifier) {
         },
         onClick = { gr -> if (gr == GROUP_MENU) g.menu.show() else m.selectGroup(gr) }, onLong = { gr -> m.openGroupMenu(gr) },
         onDown = { g.enterChannels() }, modifier = modifier, extraFocus = GROUP_MENU to g.menuTab,
+        // Up: the sub-menu's active pill (in the shell), not the info header's Favourite button
+        onUp = { entry?.targets()?.firstOrNull()?.request() ?: false },
     )
 }
 

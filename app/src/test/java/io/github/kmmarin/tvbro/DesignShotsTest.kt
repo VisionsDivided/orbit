@@ -337,6 +337,77 @@ class DesignShotsTest {
         }
     }
 
+    // ---- Live TV ▸ Recordings and Search in direction 5 (orbit/tv-live3) ----
+
+    private fun rec(id: String, title: String, ch: String, startMin: Long, durMin: Long, status: String, size: String, note: String = "", list: Boolean = false, prog: Float? = null) =
+        io.github.kmmarin.tvbro.ui.live.RecCardData(id, title, ch, null,
+            io.github.kmmarin.tvbro.ui.live.recTime((t0 + startMin * 60) * 1000, (t0 + (startMin + durMin) * 60) * 1000), size, status, note, list, prog)
+
+    @Test fun recordings() = shot("recordings") { recordingsPage(full = true) }
+
+    /** The lower part: the scheduled list, a series rule and downloads (no recordings yet). */
+    @Test fun recordingsScheduled() = shot("recordings-scheduled") { recordingsPage(full = false) }
+
+    @Composable
+    private fun recordingsPage(full: Boolean) {
+        OrbitCanvas {
+            ColorKeyActions(yellow = KeyAction("My list") {})
+            ShellFrame(active = NavTab.LIVE, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani") {
+                BackdropStill(null, MeshColors(Color(0xFFB8741A), Color(0xFFFFE2B0)), Modifier.fillMaxSize(), dim = true)
+                keyboardMode()
+                io.github.kmmarin.tvbro.ui.live.RecordingsView(
+                    storage = "Saving to Internal storage · 41.2 GB free (minimum 2048 MB free) · change in Settings ▸ Recording",
+                    recordNow = "Record Vista Cinema now",
+                    recording = if (!full) emptyList() else listOf(rec("r1", "Harbor City v Northgate", "Arcadia Sports", -40, 120, "recording", "1.3 GB", prog = 0.33f)),
+                    recorded = if (!full) emptyList() else listOf(
+                        rec("r2", "The Quiet Bureau", "Lumen Drama", -1500, 60, "done", "2.1 GB", list = true), rec("r3", "Meridian Debate", "Meridian News 24", -2900, 60, "done", "1.8 GB"),
+                        rec("r4", "Deep Ice", "Quarry Docs", -4300, 55, "done", "1.6 GB"), rec("r5", "Late Feature", "Vista Cinema", -5800, 115, "failed", "", "stream ended"),
+                    ),
+                    scheduled = listOf(rec("s1", "Night Ferry", "Lumen Drama", 150, 60, "scheduled", ""), rec("s2", "NHL Hockey on Arcadia", "Arcadia Hockey Night", 1440, 180, "scheduled", "", list = true)),
+                    rules = listOf(io.github.kmmarin.tvbro.ui.live.RuleData("u1", "Fathom Station", "Nova One", null)),
+                    downloads = listOf(
+                        io.github.kmmarin.tvbro.ui.live.DlCardData("d1", "m|p0|1", "Paper Comets", null, "Downloaded · 2.4 GB", null),
+                        io.github.kmmarin.tvbro.ui.live.DlCardData("d2", "s|p0|2", "Fathom Station S2 E5", null, "Downloading 42% · 610 MB", 0.42f),
+                        io.github.kmmarin.tvbro.ui.live.DlCardData("d3", "m|p0|3", "Glass Harbor", null, "Paused 12% · 180 MB", null),
+                    ),
+                    actions = io.github.kmmarin.tvbro.ui.live.RecordingsActions(),
+                )
+                SubMenuRow(listOf("Channels", "Guide", "Recordings", "My list"), 2, {}, Modifier.padding(top = 118.dp))
+            }
+        }
+    }
+
+    @Composable
+    private fun searchPage(query: String, groups: io.github.kmmarin.tvbro.ui.search.SearchGroups?, detail: String? = null) {
+        OrbitCanvas {
+            ColorKeyActions(yellow = KeyAction("My list") {})
+            ShellFrame(active = null, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani", searchActive = true) {
+                BackdropStill(null, MeshColors(Color(0xFF1B7FA3), Color(0xFFD8F3FF)), Modifier.fillMaxSize(), dim = true)
+                keyboardMode()
+                io.github.kmmarin.tvbro.ui.search.SearchView(query, listOf("hockey", "paper comets", "fathom station", "news", "the quiet bureau", "nfl"), groups, detail,
+                    io.github.kmmarin.tvbro.ui.search.SearchActions())
+            }
+        }
+    }
+
+    @Test fun searchHistory() = shot("search") { searchPage("", null) }
+
+    @Test fun searchResults() = shot("search-results") {
+        fun ph(id: String, ch: String, t: String, meta: String, st: io.github.kmmarin.tvbro.data.ProgState, p: Float? = null) = io.github.kmmarin.tvbro.ui.search.ProgHit(id, ch, null, t, meta, p, st)
+        searchPage("hockey", io.github.kmmarin.tvbro.ui.search.SearchGroups(
+            "Results for “hockey”  ·  14 ms",
+            channels = listOf(io.github.kmmarin.tvbro.ui.search.ChanHit("k8", "Arcadia Hockey Night", null, "NHL Hockey on Arcadia", 0.2f, true),
+                io.github.kmmarin.tvbro.ui.search.ChanHit("k9", "Hockey Classics", null, "1987 Final, Game 7", 0.6f, false)),
+            live = listOf(ph("l1", "Arcadia Hockey Night", "NHL Hockey on Arcadia", "Arcadia Hockey Night · 118 min left", io.github.kmmarin.tvbro.data.ProgState.NOW, 0.2f),
+                ph("l2", "Nova One", "Hockey Tonight", "Nova One · 22 min left", io.github.kmmarin.tvbro.data.ProgState.NOW, 0.7f), ph("l3", "Meridian News 24", "Sports Desk: Hockey", "Meridian News 24 · 9 min left", io.github.kmmarin.tvbro.data.ProgState.NOW, 0.85f)),
+            movies = listOf(io.github.kmmarin.tvbro.ui.search.VodHit("m1", "Ice Line", null, "★ 7.4", false), io.github.kmmarin.tvbro.ui.search.VodHit("m2", "The Long Shift", null, "★ 6.9", true),
+                io.github.kmmarin.tvbro.ui.search.VodHit("m3", "Northbound Quiet", null, "★ 7.1", false)),
+            shows = listOf(io.github.kmmarin.tvbro.ui.search.VodHit("s1", "Fathom Station", null, "★ 8.4", false), io.github.kmmarin.tvbro.ui.search.VodHit("s2", "Rink Rats", null, "★ 7.0", false)),
+            later = listOf(ph("f1", "Arcadia Sports", "Hockey Night Preview", "Today 21:00 – 21:30 · Arcadia Sports", io.github.kmmarin.tvbro.data.ProgState.FUTURE),
+                ph("c1", "Arcadia Hockey Night", "NHL Hockey on Arcadia", "Fri 13 Nov 19:00 – 22:00 · Arcadia Hockey Night", io.github.kmmarin.tvbro.data.ProgState.PAST_CATCHUP)),
+        ))
+    }
+
     @Test fun guide() = shot("guide") {
         OrbitCanvas {
             guideKeys()

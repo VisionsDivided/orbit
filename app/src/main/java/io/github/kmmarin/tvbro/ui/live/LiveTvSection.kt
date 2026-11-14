@@ -50,7 +50,7 @@ fun LiveTvSection(m: AppModel) {
     Box(Modifier.fillMaxSize()) {
         LiveBackdrop(m, Modifier.fillMaxSize())
         when (m.section) {
-            Section.RECORDINGS -> LegacyPage(190.dp) { RecordingsScreen(m) }
+            Section.RECORDINGS -> RecordingsSection(m)
             Section.MYLIST -> LegacyPage(190.dp) { MyListScreen(m) }
             else -> TvSection(m)
         }
