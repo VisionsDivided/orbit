@@ -19,6 +19,7 @@ import * as apiMod from './api.js';
 import { useStore } from './reminders.js';
 import { uiLoad, uiSave } from './uistate.js';
 import { ensureSignedIn } from './signin.js';
+import { orbitLoad, addNavChip } from './orbit.js';
 
 
 const main = document.getElementById('main');
@@ -136,6 +137,8 @@ document.addEventListener('error', (e) => { const t = e.target; if (t && t.tagNa
 (async function boot() {
   const sess = await ensureSignedIn();          // this device's session (sign-in page otherwise)
   if (!sess) return;
+  await orbitLoad();                            // Orbit: accounts mode and who is watching
+  addNavChip();
   document.documentElement.dataset.role = sess.role;
   signedIn = sess.signedIn;
   useStore(apiMod);

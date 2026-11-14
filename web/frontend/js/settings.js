@@ -8,6 +8,7 @@ import { prefs, setPref } from './prefs.js';
 import { storageDialog } from './recstore.js';
 import { parentalInfo, changePin, lockManager } from './parental.js';
 import { passwordDialog } from './signin.js';
+import { orbitMode, orbitSettingsCard } from './orbit.js';
 
 function ago(ts) {
   if (!ts) return 'never';
@@ -46,6 +47,7 @@ export function settingsScreen(main, nav, ctx) {
   main.append(scr);
   let alive = true, timer = null, status = null, adding = false, role = 'admin', viewerPw = false, required = false;
   const body = h('div', { class: 'set-body' }); scr.append(body);
+  const orbitCard = orbitSettingsCard(() => role === 'admin');   // Orbit: accounts and profiles
 
   (async () => {
     let s = { signedIn: false };
@@ -207,10 +209,13 @@ export function settingsScreen(main, nav, ctx) {
         h('button', { class: 'btn secondary focusable', onclick: async () => { if (confirm('Remove every playlist from the server? Every device loses the provider until it is set up again.')) { try { await withPin(() => api.signout()); ctx.setSignedIn(false); alive = false; settingsScreen(main, nav, ctx); } catch (e) { toast(e.message); } } } }, 'Remove all playlists (server)')) : null,
       h('div', { class: 'hint' }, 'The provider login stays on the server, encrypted; it is never sent to a browser.'));
     kids.push(sess);
+    kids.push(orbitCard);
     // Security: this device's sign-in, the admin / viewer passwords, sources on the local network
+    // (Orbit mode: accounts replace the shared admin / viewer passwords, so those rows are hidden)
     const admin = role === 'admin';
+    const shared = !orbitMode();
     kids.push(h('section', { class: 'card glass' }, h('div', { class: 'card-h' }, h('h3', {}, 'Security')),
-      admin ? row('Require a password', select(required ? 'on' : 'off', [['off', 'Off (anyone on your network)'], ['on', 'On']], async (v) => {
+      admin && shared ? row('Require a password', select(required ? 'on' : 'off', [['off', 'Off (anyone on your network)'], ['on', 'On']], async (v) => {
         try {
           if (v === 'on') {
             const vals = await passwordDialog('Require a password', ['Admin password (8 characters or more)', 'Again'],
@@ -228,15 +233,15 @@ export function settingsScreen(main, nav, ctx) {
         } catch (e) { toast('Not changed: ' + e.message); }
         render();
       }), required ? null : h('div', { class: 'set-warn' }, 'Without a password anyone on your network can use and change the app (playlists, settings, recordings).')) : null,
-      required ? row('This device', admin ? 'Signed in as admin' : 'Signed in as viewer (watch only)',
+      required && shared ? row('This device', admin ? 'Signed in as admin' : 'Signed in as viewer (watch only)',
         h('button', { class: 'btn secondary focusable', 'data-k': 'logout', onclick: async () => { try { await api.authLogout(); } catch {} location.reload(); } }, 'Sign out on this device')) : null,
-      admin && required ? row('Admin password', h('button', { class: 'btn secondary focusable', 'data-k': 'adminpw', onclick: async () => {
+      admin && required && shared ? row('Admin password', h('button', { class: 'btn secondary focusable', 'data-k': 'adminpw', onclick: async () => {
         const v = await passwordDialog('Change the admin password', ['Current admin password', 'New admin password (8 characters or more)', 'New admin password again']);
         if (!v) return;
         if (v[1] !== v[2]) { toast('The new passwords differ'); return; }
         try { await api.authPassword(v[0], v[1]); toast('Admin password changed; other admin sign-ins ended'); } catch (e) { toast('Not changed: ' + e.message); }
       } }, 'Change…')) : null,
-      admin && required ? row('Viewer password', viewerPw ? 'Set' : 'Not set',
+      admin && required && shared ? row('Viewer password', viewerPw ? 'Set' : 'Not set',
         h('button', { class: 'btn secondary focusable', 'data-k': 'viewpw', onclick: async () => {
           const v = await passwordDialog(viewerPw ? 'New viewer password' : 'Viewer password', ['Viewer password (8 characters or more)', 'Again']);
           if (!v) return;
@@ -253,7 +258,8 @@ export function settingsScreen(main, nav, ctx) {
           const v = window.prompt('Proxmox container id of tvBro (pct list), empty to clear', S.ctid || ''); if (v === null) return;
           save({ ctid: v.trim() });
         } }, 'Set…')) : null,
-      h('div', { class: 'hint' }, 'With a password required, every device signs in once: the admin password changes playlists, settings, storage and restores; the viewer password (optional) only watches. Turn it on when the server can be reached from beyond your own trusted home network. Wrong passwords are slowed down. The server never fetches addresses on your own network (router, NAS, hypervisor) unless you allow it here, e.g. for a tvheadend box; loopback and link-local addresses are always refused.')));
+      !shared ? h('div', { class: 'hint' }, 'Every device signs in with an account (see Accounts above). The server never fetches addresses on your own network (router, NAS, hypervisor) unless you allow it here; loopback and link-local addresses are always refused.') : null,
+      shared && h('div', { class: 'hint' }, 'With a password required, every device signs in once: the admin password changes playlists, settings, storage and restores; the viewer password (optional) only watches. Turn it on when the server can be reached from beyond your own trusted home network. Wrong passwords are slowed down. The server never fetches addresses on your own network (router, NAS, hypervisor) unless you allow it here, e.g. for a tvheadend box; loopback and link-local addresses are always refused.')));
     body.replaceChildren(...kids.flat().filter(Boolean));
     if (focusKey) { const f = body.querySelector(`[data-k="${focusKey}"]`); if (f) f.focus(); }
   }

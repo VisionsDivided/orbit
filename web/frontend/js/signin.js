@@ -5,13 +5,17 @@
 // viewer password (watch only). The session is an HttpOnly cookie; nothing is kept in the page.
 import { api } from './api.js';
 import { h } from './util.js';
+import { orbitLoad, showAccountSignIn } from './orbit.js';
 
 let shown = false;
 
 /** Covers the app until the password is right, then reloads. */
-export function showSignIn() {
+export async function showSignIn() {
   if (shown) return;
   shown = true;
+  // Orbit: a server with accounts asks for a username and password instead of the shared password
+  const { status } = await orbitLoad();
+  if (status && status.accounts) { showAccountSignIn(); return; }
   const pw = h('input', { type: 'password', class: 'focusable signin-input', autocomplete: 'current-password', 'aria-label': 'Password', maxlength: '200' });
   const msg = h('div', { class: 'hint signin-msg', role: 'status' });
   const btn = h('button', { class: 'btn focusable', type: 'submit' }, 'Sign in');

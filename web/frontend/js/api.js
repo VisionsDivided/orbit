@@ -32,7 +32,7 @@ export const SID = (() => {
   try { let s = sessionStorage.getItem('tvbro.sid'); if (!s || s.length < 32) { s = fresh(); sessionStorage.setItem('tvbro.sid', s); } return s; }
   catch { return fresh(); }
 })();
-function deviceLabel() {
+export function deviceLabel() {
   const ua = navigator.userAgent;
   const br = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
   const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Mac OS/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : '';
@@ -104,6 +104,8 @@ async function preq(path, body) {
   return j;
 }
 const withSid = (u) => u + (u.includes('?') ? '&' : '?') + 'sid=' + SID;
+// Orbit (orbit.js): the same request helpers for the /v1 account API
+export { req as apiReq, authPost as apiAuthPost };
 
 export const api = {
   health: () => req('/api/health'),
