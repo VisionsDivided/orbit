@@ -7,6 +7,7 @@
 import { h, fmtDur } from './util.js';
 import { api, getResume, isWatched, inMyList } from './api.js';
 import { iptvRef, tmdbProxy } from './catalog.js';
+import { tmdbImage, etaSecs, etaText, seerrStatus } from './discoverlogic.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 /** An icon from the sprite in index.html. */
@@ -24,6 +25,8 @@ export function imgUrl(u) {
   if (u.startsWith('https://image.tmdb.org/')) return tmdbProxy(u);
   return api.img(u);
 }
+/** Discover (Seerr) artwork through /v1/discover/image (discoverlogic.tmdbImage), else as imgUrl. */
+export function discoverImg(u) { return tmdbImage(u) || imgUrl(u); }
 export const ratingText = (r) => { const n = parseFloat(r); return n ? (n > 10 ? (n / 10).toFixed(1) : n.toFixed(1)) : ''; };
 const SRC = { iptv: ['IPTV', 'bI'], plex: ['Plex', 'bL'], jellyfin: ['Jellyfin', 'bL'], local: ['Local', 'bL'] };
 /** Source badge: Local (cyan) / IPTV (violet). */
@@ -64,12 +67,15 @@ export function cachedTitle(key) { return titleCache.get(key) || null; }
 const watched = (it) => !!(it.raw && it.raw.progress && it.raw.progress.watched) || (it.vod && it.vod.kind === 'movie' && isWatched('m|' + it.vod.id));
 const frac = (p) => (p && p.dur ? Math.max(0, Math.min(1, p.secs / p.dur)) : 0);
 
-function pic(it, cls, wide) {
+function pic(it, cls, wide, defer) {
   const src = imgUrl(wide ? (it.still || it.backdrop || it.poster) : (it.poster || it.backdrop));
   const box = h('span', { class: 'pic ' + cls });
   box.append(h('span', { class: 'pic-t', 'aria-hidden': 'true' }, it.title || ''));
   if (src) {
-    const im = h('img', { alt: '', loading: 'lazy', decoding: 'async', src });
+    // defer: the caller sets src itself when the card comes near (deferImages); else the browser's lazy loading
+    // (no placeholder src when deferred: util.h's blank image would fire `error` and drop the poster)
+    const im = defer ? Object.assign(document.createElement('img'), { alt: '', decoding: 'async' }) : h('img', { alt: '', loading: 'lazy', decoding: 'async', src });
+    if (defer) im.dataset.src = src;
     im.addEventListener('error', () => { im.remove(); box.classList.add('noart'); });
     box.append(im);
   } else box.classList.add('noart');
@@ -78,7 +84,7 @@ function pic(it, cls, wide) {
 /** Poster card (2:3) with source badges, watched mark, progress and a caption. */
 export function posterCard(it, o = {}) {
   rememberTitle(it);
-  const p = pic(it, 'po5');
+  const p = pic(it, 'po5', false, o.defer);
   const b = o.noBadge ? null : srcBadge(it.source);
   if (b) p.append(h('span', { class: 'po-b' }, b));
   if (o.num != null) p.append(h('span', { class: 'num' }, String(o.num)));
@@ -95,7 +101,7 @@ export function posterCard(it, o = {}) {
 /** Landscape card (16:9): Continue watching, episodes, collections, requests. */
 export function landCard(it, o = {}) {
   rememberTitle(it);
-  const p = pic(it, 'land5', true);
+  const p = pic(it, 'land5', true, o.defer);
   if (o.badge !== false && it.source && o.badges) p.append(h('span', { class: 'po-b' }, srcBadge(it.source)));
   const f = frac(it.progress);
   if (f) p.append(h('span', { class: 'pg' }, h('i', { style: { width: (f * 100).toFixed(1) + '%' } })));
@@ -110,7 +116,29 @@ export function landCard(it, o = {}) {
 export function fmtLeft(s) { s = Math.max(0, Math.round(s || 0)); const hh = Math.floor(s / 3600), mm = Math.round((s % 3600) / 60); return hh ? `${hh}h ${String(mm).padStart(2, '0')}m left` : `${Math.max(1, mm)} min left`; }
 function wire(card, it, o) {
   card.addEventListener('click', () => { if (o.onOpen) o.onOpen(it, card); else location.hash = itemHref(it); });
-  if (o.onFocus) { card.addEventListener('focus', () => o.onFocus(it, card)); card.addEventListener('mouseenter', () => o.onFocus(it, card)); }
+  if (o.onFocus) { card.addEventListener('focus', () => o.onFocus(it, card)); if (o.hoverFocus !== false) card.addEventListener('mouseenter', () => o.onFocus(it, card)); }
+}
+/**
+ * Loads the deferred card images (posterCard / landCard with `defer`) in `root` once they come within
+ * `margin` px of a horizontally scrolling strip's visible part (or of the window, for grids). The browser's own
+ * lazy loading does not look ahead inside a horizontal scroller, so a row loaded its posters only as they were
+ * scrolled into view. Returns {watch(node), stop()}; watch() takes cards added later.
+ */
+export function deferImages(root, margin = 1200) {
+  const load = (im) => { if (im.dataset.src) { im.src = im.dataset.src; delete im.dataset.src; } };
+  if (typeof IntersectionObserver !== 'function') { const all = { watch: (n) => n.querySelectorAll('img[data-src]').forEach(load), stop() {} }; all.watch(root); return all; }
+  const obs = new Map();          // scroll root (a strip or null for the window) -> IntersectionObserver
+  const ioFor = (strip) => {
+    if (!obs.has(strip)) {
+      obs.set(strip, new IntersectionObserver((es, io) => { for (const e of es) if (e.isIntersecting) { io.unobserve(e.target); load(e.target); } },
+        { root: strip, rootMargin: strip ? `0px ${margin}px` : `${margin}px 0px` }));
+    }
+    return obs.get(strip);
+  };
+  const watch = (node) => node.querySelectorAll('img[data-src]').forEach((im) => ioFor(im.closest('.strip'))
+    .observe(im));
+  watch(root);
+  return { watch, stop() { obs.forEach((io) => io.disconnect()); obs.clear(); } };
 }
 
 /** A titled horizontal row of cards. */
@@ -196,32 +224,9 @@ export function colorKey(e, keys) {
 }
 
 // ---------------------------------------------------------------- Discover status badges
-/**
- * The status badge of a Seerr title or request (DESIGN-SPEC-5 §1): {cls, label, icon, pct}.
- * download (optional, when the server has it): {progress: 0..100, eta: seconds}.
- */
-export function seerrStatus(t, req) {
-  const media = (req && req.mediaStatus) || (t && t.status) || 'requestable';
-  const rs = (req && req.status) || (t && t.requestStatus) || null;
-  const dl = (req && (req.download || req.downloadStatus)) || (t && (t.download || t.downloadStatus)) || null;
-  if (media === 'available' || rs === 'completed') return { cls: 'st-avail', label: 'Available', icon: 'check' };
-  if (media === 'partial') return { cls: 'st-avail', label: 'Partly available', icon: 'check' };
-  if (rs === 'declined') return { cls: 'st-pend', label: 'Declined', icon: 'info' };
-  if (rs === 'failed') return { cls: 'st-pend', label: 'Failed', icon: 'info' };
-  if (dl && (dl.progress != null || dl.eta != null)) {
-    const pct = dl.progress != null ? Math.max(0, Math.min(100, Math.round(+dl.progress))) : null;
-    const eta = dl.eta ? ' · ~' + etaText(dl.eta) : '';
-    return { cls: 'st-dl', label: 'Downloading' + (pct != null ? ` ${pct}%` : '') + eta, icon: 'req', pct };
-  }
-  if (media === 'processing') return rs === 'pending' ? { cls: 'st-reqd', label: 'Requested', icon: 'clock' } : { cls: 'st-dl', label: 'Downloading', icon: 'req', pct: null };
-  if (rs === 'approved') return { cls: 'st-appr', label: 'Approved', icon: 'check' };
-  if (rs === 'pending' || media === 'pending') return { cls: 'st-reqd', label: 'Requested', icon: 'clock' };
-  return { cls: 'st-req', label: 'Request', icon: 'req', action: true };
-}
-function etaText(s) { s = Math.round(+s || 0); if (s >= 3600) return Math.round(s / 3600) + ' h'; return Math.max(1, Math.round(s / 60)) + ' min'; }
 export function statusBadge(st) {
   const b = h('span', { class: 'stb ' + st.cls }, ic(st.icon), st.label);
   if (st.pct != null) b.style.setProperty('--p', st.pct + '%');
   return b;
 }
-export { fmtDur };
+export { fmtDur, etaSecs, etaText, seerrStatus };
