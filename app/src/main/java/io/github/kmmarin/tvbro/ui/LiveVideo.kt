@@ -159,7 +159,8 @@ fun LiveVideo(m: AppModel) {
     var shown by remember { mutableStateOf(false) }
     // drawn full screen, or at the preview spot (with a channel chosen); leaving full screen before the preview spot is
     // laid out the video stays full size until it is, then shrinks into it: the surface is never taken down
-    val draw = full || (vis && m.screen == Screen.LIST && m.current != null && (m.previewRect != null || shown))
+    // (the full guide has a preview spot too: what plays goes on there, picture and sound)
+    val draw = full || (vis && (m.screen == Screen.LIST || m.screen == Screen.GUIDE) && m.current != null && (m.previewRect != null || shown))
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val w = constraints.maxWidth.toFloat(); val h = constraints.maxHeight.toFloat()
         val target = if (full) Rect(0f, 0f, w, h) else m.previewRect ?: Rect(0f, 0f, w, h)

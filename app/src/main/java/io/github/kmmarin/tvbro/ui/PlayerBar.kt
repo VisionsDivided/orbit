@@ -30,6 +30,17 @@ import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
 import io.github.kmmarin.tvbro.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.ui.text.font.FontWeight
+import io.github.kmmarin.tvbro.ui.live.QuickAction
+import io.github.kmmarin.tvbro.ui.live.QuickActionRow
+import io.github.kmmarin.tvbro.ui.live.playerScrims
+import io.github.kmmarin.tvbro.ui.orbit5.O5
+import io.github.kmmarin.tvbro.ui.orbit5.OrbitCanvas
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -95,33 +106,31 @@ private fun SeekBar(exo: ExoPlayer, mod: Modifier) {
                 Key.DirectionRight -> { exo.seekTo(exo.currentPosition + step); pos = exo.currentPosition; true }
                 else -> false
             }
-        }.countFocus().focusable().background(if (f) FocusBg else Color.Transparent).border(if (f) 2.dp else 0.dp, if (f) Accent else Color.Transparent).padding(8.dp),
+        }.countFocus().focusable()
+            .background(if (f) Color(0x1FFFFFFF) else Color.Transparent, RoundedCornerShape(14.dp))
+            .border(if (f) 3.dp else 0.dp, if (f) Color.White else Color.Transparent, RoundedCornerShape(14.dp)).padding(horizontal = 18.dp, vertical = 12.dp),
     ) {
-        Text(t(pos) + " / " + t(dur) + if (f) "    Left/Right: 10 s (hold to speed up)" else "", color = TextMain, fontSize = 14.sp)
-        Box(Modifier.fillMaxWidth().padding(top = 6.dp).height(8.dp).background(Surface)) {
-            Box(Modifier.fillMaxWidth(if (dur > 0) (pos.toFloat() / dur).coerceIn(0f, 1f) else 0f).height(8.dp).background(Accent))
-        }
+        Text(t(pos) + " / " + t(dur) + if (f) "    Left/Right: 10 s (hold to speed up)" else "", color = O5.Text, fontSize = 22.sp)
+        io.github.kmmarin.tvbro.ui.live.Scrubber(if (dur > 0) pos.toFloat() / dur else 0f, Modifier.fillMaxWidth().padding(top = 10.dp))
     }
 }
 
+/**
+ * Quick settings of the player (direction 5, spec section 10): a row of 84 px circles along the bottom, each with its
+ * label and current value. Live TV order: Guide, Favourite, Record, Audio, Subtitles, Start over, Format, Channels,
+ * Sleep timer, Info, then Video, Audio delay, Aspect, Settings ([extra] brings the live-only ones, by id: guide, fav,
+ * rec, startover, format, channels, info). Films and episodes get the seek bar and their playback controls first.
+ * Hides itself after 5 s without a key press, never while one of its menus is open.
+ */
 @Composable
-private fun BarButton(label: String, value: String, mod: Modifier = Modifier, onClick: () -> Unit) {
-    Column(mod.width(150.dp).tvFocus(onClick = onClick).padding(horizontal = 10.dp, vertical = 8.dp)) {
-        Text(label, color = TextMain, fontSize = 15.sp, maxLines = 1)
-        Text(value, color = Accent, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
-
-/** Quick settings along the bottom of the player: channels, video, audio, subtitles, aspect, sleep timer, settings. */
-@Composable
-fun QuickBar(m: AppModel, exo: ExoPlayer, pv: PlayerView?, live: Boolean, onClose: () -> Unit) {
+fun QuickBar(m: AppModel, exo: ExoPlayer, pv: PlayerView?, live: Boolean, extra: Map<String, QuickAction> = emptyMap(), onClose: () -> Unit) {
     BackHandler { onClose() }
-    val fr = remember { FocusRequester() }
-    LaunchedEffect(Unit) { delay(100); runCatching { fr.requestFocus() } }
+    val first = remember { SafeFocus() }
+    val seekFr = remember { FocusRequester() }
+    LaunchedEffect(Unit) { delay(100); if (live) first.request() else runCatching { seekFr.requestFocus() } }
     var tick by remember { mutableIntStateOf(0) }
     val now = remember(tick) { System.currentTimeMillis() }
     LaunchedEffect(Unit) { while (true) { delay(15_000); tick++ } }
-    val fmt = remember { SimpleDateFormat("EEE d MMM  HH:mm", Locale.getDefault()) }
     val v = exo.videoFormat
     val a = exo.audioFormat
     val textOff = exo.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
@@ -140,51 +149,56 @@ fun QuickBar(m: AppModel, exo: ExoPlayer, pv: PlayerView?, live: Boolean, onClos
             "Reset to 0" to { m.changeAudioDelay(0, dk); delayMenu() },
         ))
     }
-    // Hides itself after 5 s without a key press (any key restarts the timer); never while one of its menus is open.
     var lastKey by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(lastKey, m.menu, m.prompt) {
         if (m.menu != null || m.prompt != null) return@LaunchedEffect
         delay(5_000); onClose()
     }
-    Box(Modifier.fillMaxSize().onPreviewKeyEvent { lastKey = System.currentTimeMillis(); false }) {
-        Text(io.github.kmmarin.tvbro.data.TimeFmt.dayTime(now, "EEE d MMM "), color = TextMain, fontSize = 18.sp,
-            modifier = Modifier.align(Alignment.TopEnd).padding(24.dp).background(Color(0xAA000000)).padding(10.dp))
-        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0xE60E1116)).padding(horizontal = 16.dp, vertical = 10.dp)) {
-        if (!live) Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            SeekBar(exo, Modifier.weight(1f).focusRequester(fr))
-            if (chips.isNotEmpty()) Text(chips, color = Accent, fontSize = 13.sp, maxLines = 2, modifier = Modifier.widthIn(max = 420.dp).padding(start = 12.dp))
-        }
-        // scrolls sideways: the buttons are wider than the screen and the focused one must always be in view
-        Row(Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (live) BarButton("Channels", "list", Modifier.focusRequester(fr)) { onClose(); m.leavePlayer() }
+    val std = linkedMapOf(
+        "audio" to QuickAction("Audio", glyph = "♪", value = listOfNotNull(lang(a?.language), a?.channelCount?.let { layout(it) }?.ifEmpty { null }).joinToString(" ").ifBlank { "Default" }) {
+            pick("Audio track", trackRows(exo, C.TRACK_TYPE_AUDIO, null, { l, _ -> if (!live) m.rememberTrack(true, l, true) }) { m.menu = null })
+        },
+        "subs" to QuickAction("Subtitles", glyph = "CC", value = if (textOff || subSel == null) "Off" else (lang(subSel.language) ?: subSel.label ?: "On")) {
+            pick("Subtitles", trackRows(exo, C.TRACK_TYPE_TEXT, "  Off", { l, on -> if (!live) m.rememberTrack(false, l, on) }) { m.menu = null })
+        },
+        "sleep" to QuickAction("Sleep timer", glyph = "Zz", value = if (sleepLeft > 0) "$sleepLeft min" else "Off", on = sleepLeft > 0) {
+            pick("Sleep timer", listOf(0, 15, 30, 60, 90).map { (if (it == 0) "  Off" else "  $it minutes") to { m.setSleep(it) } })
+        },
+        "video" to QuickAction("Video", glyph = "HD", value = if (v != null && v.width > 0) "${v.width}x${v.height}" else "Auto") {
+            pick("Video quality", trackRows(exo, C.TRACK_TYPE_VIDEO, null) { m.menu = null })
+        },
+        "delay" to QuickAction("Audio delay", glyph = "±", value = "%+d ms".format(m.audioDelayMs)) { delayMenu() },
+        "aspect" to QuickAction("Aspect", glyph = "▭", value = ASPECTS[m.aspectMode.coerceIn(0, ASPECTS.size - 1)].first) {
+            pick("Aspect / zoom", ASPECTS.mapIndexed { i, p -> ((if (i == m.aspectMode) "* " else "  ") + p.first) to { m.aspectMode = i; pv?.resizeMode = p.second } })
+        },
+        "settings" to QuickAction("Settings", icon = Icons.Filled.Settings) { onClose(); if (live) m.settingsBack = Screen.PLAYER; m.screen = Screen.SETTINGS },
+    )
+    val actions: List<QuickAction> = if (live) {
+        listOf("guide", "fav", "rec", "audio", "subs", "startover", "format", "channels", "sleep", "info", "video", "delay", "aspect", "settings")
+            .mapNotNull { extra[it] ?: std[it] }
+    } else {
+        listOfNotNull(
+            QuickAction("Restart", icon = Icons.Filled.Refresh, value = "from the start") { exo.seekTo(0); onClose() },
+            QuickAction("Rewind", glyph = "-10", value = "10 s") { exo.seekTo((exo.currentPosition - 10_000).coerceAtLeast(0)) },
+            QuickAction("Forward", glyph = "+10", value = "10 s") { exo.seekTo(exo.currentPosition + 10_000) },
+            QuickAction(if (exo.playWhenReady) "Pause" else "Play", icon = if (exo.playWhenReady) null else Icons.Filled.PlayArrow, glyph = "II") { exo.playWhenReady = !exo.playWhenReady },
+            if (m.vodPlay?.key?.startsWith("e|") == true) QuickAction("Previous", glyph = "◀", value = "episode") { onClose(); m.stepEpisode(-1) } else null,
+            if (m.vodPlay?.key?.startsWith("e|") == true) QuickAction("Next", glyph = "▶", value = "episode") { onClose(); m.stepEpisode(1) } else null,
+        ) + listOf("audio", "subs", "video", "delay", "aspect", "sleep", "settings").mapNotNull { std[it] }
+    }
+    OrbitCanvas {
+        Box(Modifier.fillMaxSize().onPreviewKeyEvent { lastKey = System.currentTimeMillis(); false }) {
             if (!live) {
-                BarButton("Restart", "from the beginning") { exo.seekTo(0); onClose() }
-                BarButton("Rewind", "10 s") { exo.seekTo((exo.currentPosition - 10_000).coerceAtLeast(0)) }
-                BarButton("Forward", "10 s") { exo.seekTo(exo.currentPosition + 10_000) }
-                BarButton(if (exo.playWhenReady) "Pause" else "Play", "") { exo.playWhenReady = !exo.playWhenReady }
-                if (m.vodPlay?.key?.startsWith("e|") == true) {
-                    BarButton("Previous", "episode") { onClose(); m.stepEpisode(-1) }
-                    BarButton("Next", "episode") { onClose(); m.stepEpisode(1) }
+                // films and episodes: their own scrim, date and seek bar (live TV draws its overlay around the bar)
+                Box(Modifier.fillMaxSize().playerScrims())
+                Text(io.github.kmmarin.tvbro.data.TimeFmt.dayTime(now, "EEE d MMM "), color = O5.Text, fontSize = 32.sp, fontWeight = FontWeight.Light,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(top = 60.dp, end = 96.dp))
+                Column(Modifier.padding(start = 78.dp, end = 78.dp, top = 690.dp)) {
+                    SeekBar(exo, Modifier.fillMaxWidth().focusRequester(seekFr))
+                    if (chips.isNotEmpty()) Text(chips, color = O5.Muted, fontSize = 17.sp, maxLines = 2, modifier = Modifier.padding(start = 18.dp, top = 6.dp))
                 }
             }
-            BarButton("Video", if (v != null && v.width > 0) "${v.width}x${v.height}" else "Auto") {
-                pick("Video quality", trackRows(exo, C.TRACK_TYPE_VIDEO, null) { m.menu = null })
-            }
-            BarButton("Audio", listOfNotNull(lang(a?.language), a?.channelCount?.let { layout(it) }?.ifEmpty { null }).joinToString(" ").ifBlank { "Default" }) {
-                pick("Audio track", trackRows(exo, C.TRACK_TYPE_AUDIO, null, { l, _ -> if (!live) m.rememberTrack(true, l, true) }) { m.menu = null })
-            }
-            BarButton("Audio delay", "%+d ms".format(m.audioDelayMs)) { delayMenu() }
-            BarButton("Subtitles", if (textOff || subSel == null) "Off" else (lang(subSel.language) ?: subSel.label ?: "On")) {
-                pick("Subtitles", trackRows(exo, C.TRACK_TYPE_TEXT, "  Off", { l, on -> if (!live) m.rememberTrack(false, l, on) }) { m.menu = null })
-            }
-            BarButton("Aspect", ASPECTS[m.aspectMode.coerceIn(0, ASPECTS.size - 1)].first) {
-                pick("Aspect / zoom", ASPECTS.mapIndexed { i, p -> ((if (i == m.aspectMode) "* " else "  ") + p.first) to { m.aspectMode = i; pv?.resizeMode = p.second } })
-            }
-            BarButton("Sleep timer", if (sleepLeft > 0) "$sleepLeft min" else "Off") {
-                pick("Sleep timer", listOf(0, 15, 30, 60, 90).map { (if (it == 0) "  Off" else "  $it minutes") to { m.setSleep(it) } })
-            }
-            BarButton("Settings", "open") { onClose(); if (live) m.settingsBack = Screen.PLAYER; m.screen = Screen.SETTINGS }
-        }
+            QuickActionRow(actions, first, Modifier.padding(top = 846.dp))
         }
     }
 }
