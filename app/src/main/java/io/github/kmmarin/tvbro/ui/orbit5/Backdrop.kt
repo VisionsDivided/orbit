@@ -26,12 +26,11 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.withTransform
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.delay
 
@@ -114,18 +113,23 @@ fun Modifier.mesh(c: MeshColors): Modifier = drawWithCache {
     }
 }
 
-/** The artwork's mask: `radial-gradient(130% 120% at 100% 0%, #000 36%, transparent 76%)`, no hard edge. */
-private fun Modifier.artMask(): Modifier = graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-    .drawWithCache {
-        val w = size.width; val h = size.height
-        val brush = Brush.radialGradient(0.36f to Color.Black, 0.76f to Color.Transparent, center = Offset(w, 0f), radius = 1.3f * w)
-        onDrawWithContent {
-            drawContent()
-            withTransform({ scale(1f, (1.2f * h) / (1.3f * w), Offset(w, 0f)) }) {
-                drawRect(brush, topLeft = Offset(w - 1.3f * w, -1.3f * w), size = Size(2.6f * w, 2.6f * w), blendMode = BlendMode.DstIn)
-            }
-        }
+/**
+ * The artwork's mask: two linear fades, no ellipse and no rounded edge (owner feedback 2026-11-14: the curved cut
+ * looked hard). The left edge fades in over 40% of the width, the bottom fades out over the last 35% of the height.
+ * One saved layer holds the artwork while the fades cut its alpha (a canvas layer, not a graphics-layer node).
+ */
+private fun Modifier.artMask(): Modifier = drawWithCache {
+    val left = Brush.horizontalGradient(0f to Color.Transparent, 0.40f to Color.Black, startX = 0f, endX = size.width)
+    val bottom = Brush.verticalGradient(0.65f to Color.Black, 1f to Color.Transparent, startY = 0f, endY = size.height)
+    val bounds = androidx.compose.ui.geometry.Rect(Offset.Zero, size)
+    onDrawWithContent {
+        drawIntoCanvas { it.saveLayer(bounds, androidx.compose.ui.graphics.Paint()) }
+        drawContent()
+        drawRect(left, blendMode = BlendMode.DstIn)
+        drawRect(bottom, blendMode = BlendMode.DstIn)
+        drawIntoCanvas { it.restore() }
     }
+}
 
 private val vigLeft = Brush.horizontalGradient(0f to Color(0x80000000), 0.45f to Color(0x29000000), 0.70f to Color.Transparent)
 private val vigLeftDim = Brush.horizontalGradient(0f to Color(0x80000000), 0.60f to Color.Transparent)
