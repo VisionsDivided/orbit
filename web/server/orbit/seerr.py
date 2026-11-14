@@ -100,7 +100,6 @@ class SeerrConfig:
         self._store = None
         self._lock = threading.Lock()
         self._data: Optional[dict] = None
-        self._probe: set = set()             # a host being tested before it is saved
 
     def _st(self):
         if self._store is None:
@@ -167,30 +166,27 @@ class SeerrConfig:
             d["map"] = m
             self._save(d)
 
-    # the LAN allowlist (net.set_private_hosts): the saved Seerr host, plus one being tested right now
+    # the LAN allowlist (net.set_private_hosts): the saved Seerr host only
     def private_hosts(self) -> set:
-        out = set(self._probe)
         try:
             with self._lock:
                 base = self._load().get("baseUrl") or ""
             hp = host_port(base)
         except Exception:                    # noqa: BLE001 (never break a fetch because of this)
             hp = None
-        if hp:
-            out.add(hp)
-        return out
+        return {hp} if hp else set()
 
+    @staticmethod
     @contextlib.contextmanager
-    def probing(self, base_url: str):
-        """Allow ``base_url``'s host on the LAN while it is being tested (before it is saved)."""
+    def probing(base_url: str):
+        """Allow ``base_url``'s host on the LAN while it is being tested (before it is saved): only for the calls
+        made inside this block by this request's thread (``net.private_host_here``), never for other requests."""
         hp = host_port(base_url)
-        with self._lock:
-            self._probe = self._probe | ({hp} if hp else set())
-        try:
+        if hp is None:
             yield
-        finally:
-            with self._lock:
-                self._probe = self._probe - {hp}
+            return
+        with NET.private_host_here(*hp):
+            yield
 
 
 # ---------------------------------------------------------------- client

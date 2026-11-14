@@ -290,9 +290,43 @@ class Discover(unittest.TestCase):
         self.assertEqual(self.disc.private_hosts(), {("seerr.example.lan", 5055)})
         self.cfg.set_server("https://seerr.example.com/sub", KEY)
         self.assertEqual(self.disc.private_hosts(), {("seerr.example.com", 443)})
+
+    def test_probe_allowance_is_scoped_to_the_testing_request(self):
+        # review L8: testing a Seerr address never widens the global LAN allowlist, not even while it runs
+        NET.set_private_hosts(self.disc.private_hosts)
+        self.addCleanup(NET.set_private_hosts, lambda: set())
+        hp = ("192.0.2.30", 5055)
+        other = {}
         with self.cfg.probing("http://192.0.2.30:5055"):
-            self.assertIn(("192.0.2.30", 5055), self.disc.private_hosts())
-        self.assertNotIn(("192.0.2.30", 5055), self.disc.private_hosts())
+            self.assertNotIn(hp, self.disc.private_hosts())
+            self.assertTrue(NET._host_listed(*hp), "this request may reach it")
+            self.assertFalse(NET._host_listed("192.0.2.30", 5056), "only that port")
+            t = threading.Thread(target=lambda: other.setdefault("listed", NET._host_listed(*hp)))
+            t.start()
+            t.join()
+        self.assertFalse(other["listed"], "another request at the same moment may not")
+        self.assertFalse(NET._host_listed(*hp))
+        # and nested / failing probes undo themselves
+        with self.assertRaises(RuntimeError):
+            with self.cfg.probing("http://192.0.2.30:5055"):
+                raise RuntimeError
+        self.assertFalse(NET._host_listed(*hp))
+
+    def test_settings_probe_reaches_a_lan_seerr_only_inside_the_test(self):
+        # every fetch of the settings test (made before anything is saved) sees the address allowed for itself
+        NET.set_private_hosts(self.disc.private_hosts)
+        self.addCleanup(NET.set_private_hosts, lambda: set())
+        calls = []
+        real = NET._host_listed
+
+        def spy(host, port):
+            ok = real(host, port)
+            calls.append(ok)
+            return ok
+        with mock.patch.object(NET, "_host_listed", spy):
+            self.configure()
+        self.assertEqual(len(calls), 2, "status and auth/me")
+        self.assertTrue(all(calls), "every probe fetch saw the scoped allowance")
 
     # ---- discovery ----
     def test_rows_normalized_with_status_mapping(self):

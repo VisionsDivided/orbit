@@ -16,6 +16,8 @@ provider API, images, streams, HLS segments, recordings).
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import http.client
 import ipaddress
 import os
@@ -60,9 +62,27 @@ def set_private_hosts(fn: Callable[[], set]):
     _private_hosts = fn
 
 
+# Orbit: (host, port) pairs allowed on the LAN for the code running in this context only (one thread / request),
+# e.g. a Seerr address being tested before it is saved. Other requests never see them.
+_scoped_hosts: contextvars.ContextVar = contextvars.ContextVar("tvbro_scoped_private_hosts", default=frozenset())
+
+
+@contextlib.contextmanager
+def private_host_here(host: str, port: int):
+    """Allow ``host:port`` to resolve to a private address, only for fetches made inside this ``with`` block by
+    this thread (the global allowlist is not touched). Loopback and link-local stay refused."""
+    key = (str(host).lower().strip("[]"), int(port))
+    token = _scoped_hosts.set(_scoped_hosts.get() | {key})
+    try:
+        yield
+    finally:
+        _scoped_hosts.reset(token)
+
+
 def _host_listed(host: str, port: int) -> bool:
     try:
-        return (str(host).lower().strip("[]"), int(port)) in _private_hosts()
+        key = (str(host).lower().strip("[]"), int(port))
+        return key in _scoped_hosts.get() or key in _private_hosts()
     except Exception:                       # noqa: BLE001
         return False
 
