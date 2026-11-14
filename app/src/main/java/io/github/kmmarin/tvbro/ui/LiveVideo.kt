@@ -44,6 +44,16 @@ object LivePlayer {
     @Volatile var preferHls = false
 }
 
+/**
+ * The phone player: where the video goes when the phone is upright (the 16:9 spot at the top of the player page,
+ * PhonePlayerView), null = full screen. [forcedLandscape]: the full-screen button turned the phone sideways; leaving
+ * the player gives the orientation back to the sensor.
+ */
+object PhoneVideo {
+    var rect by mutableStateOf<Rect?>(null)
+    var forcedLandscape = false
+}
+
 /** Live connections open right now (the live player's data sources between open and close). */
 object LiveConns {
     @Volatile var open = 0
@@ -147,6 +157,16 @@ fun LiveVideo(m: AppModel) {
         life.addObserver(o)
         onDispose { life.removeObserver(o) }
     }
+    // phone: off the player, the video spot is gone and a full-screen button's sideways lock ends
+    val ctx = LocalContext.current
+    LaunchedEffect(m.screen) {
+        if (m.screen == Screen.PLAYER) return@LaunchedEffect
+        PhoneVideo.rect = null
+        if (PhoneVideo.forcedLandscape) {
+            PhoneVideo.forcedLandscape = false
+            (ctx as? android.app.Activity)?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
     val vis = liveVisible(m)
     // Sound whenever the picture shows (user rule 2026-11-12): full screen always, the preview unless the user muted
     // it in Settings. Set here, the one place that knows which surface shows: the preview started muted and stayed
@@ -163,7 +183,7 @@ fun LiveVideo(m: AppModel) {
     val draw = full || (vis && (m.screen == Screen.LIST || m.screen == Screen.GUIDE) && m.current != null && (m.previewRect != null || shown))
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val w = constraints.maxWidth.toFloat(); val h = constraints.maxHeight.toFloat()
-        val target = if (full) Rect(0f, 0f, w, h) else m.previewRect ?: Rect(0f, 0f, w, h)
+        val target = if (full) PhoneVideo.rect ?: Rect(0f, 0f, w, h) else m.previewRect ?: Rect(0f, 0f, w, h)
         val anim = remember { Animatable(target, Rect.VectorConverter) }
         LaunchedEffect(target, draw) {
             if (!draw) { shown = false; return@LaunchedEffect }

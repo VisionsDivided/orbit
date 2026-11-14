@@ -219,6 +219,28 @@ the device density through `legacy { }`. On a phone it is the same page scaled d
 
 `OrbitShell` switches to `PhoneShell` when `isPhoneLayout` (touch, not leanback, smallest width < 600 dp or
 portrait). There is no `OrbitCanvas` on phones: 1 dp is the spec's phone px. Sections read `LocalIsPhone` and pad by
-`LocalPhoneInsets` (header, bottom bar). Home and Discover have phone layouts; `SubMenuRow` becomes scrolling chips;
-`LegacyPage` sits between header and bar. Movies / Shows and Live TV still show their TV pages until their owners add
-phone variants. The activity no longer forces landscape (`screenOrientation="unspecified"`).
+`LocalPhoneInsets` (header, bottom bar). `SubMenuRow` becomes scrolling chips; `LegacyPage` sits between header and
+bar. The activity no longer forces landscape (`screenOrientation="unspecified"`). Every phone page is touch-first:
+targets at least 48 dp (`PhoneTouch`), plain scrolling, no D-pad focus or colour keys (long press opens the menus).
+
+- **Shared parts** (`ui/orbit5/PhoneParts.kt`): `PhoneChip` / `PhoneChipRow`, `PhoneSegmented`, `PhoneAction` (the
+  round actions), `PhoneRoundButton`, `PhoneWideButton`, `PhoneSheet` / `PhoneSheetRow` (bottom sheets), `bleed`.
+- **Movies / Shows** (`ui/movies/PhoneMovies.kt` views, `PhoneMoviesPage.kt` bound to the feed): sub-menu chips;
+  Browse adds `All | Local | IPTV` and genre / sort chips, then a 3-column poster grid (more columns on its side,
+  `phoneGridColumns`); Recommended = hero with Play / My list, then rows; Collections grid and a collection page.
+- **Title page** (`ui/movies/PhoneDetail.kt`): `DetailScreen` draws full screen without the top bar; backdrop header
+  with Back, gradient Play / Resume, round actions (My list, Trailer, Watched, More; `phoneDetailActions`), season
+  chips and a vertical episode list.
+- **Live TV** (`ui/live/PhoneLive.kt`): chips Channels · Guide · Recordings · My list, the live preview (the video is
+  drawn over it as on the TV), group chips, then the channel list (now with progress, next, marks) or the vertical
+  guide (channel tiles, then that channel's programmes; tap = watch / catch-up / remind-record menu). On its side the
+  preview is left and the list right.
+- **Player** (`ui/live/PhonePlayer.kt`, `PlayerScreen`): upright the video is a 16:9 spot at the top (`PhoneVideo.rect`
+  tells `LiveVideo` where), tap shows its controls (Back, LIVE, full screen, progress) for 5 s; below: channel with up /
+  down, programme, the "Try HLS?" chip, round actions and the group's channels. On its side the video is full screen
+  with the controls over it. Full screen turns the phone sideways (`requestedOrientation`, reset when the player
+  closes). More opens the quick bar as a sheet (`QuickBar(phone = true)`); Record's choices are a sheet.
+- **Stream limit** (`PhoneStreamSheet`): a bottom sheet with the same rows; Cancel (or a tap outside) keeps everything.
+- Shots: `phone-home`, `phone-movies`, `phone-detail`, `phone-live`, `phone-guide`, `phone-player`,
+  `phone-stream-prompt` at 412 × 915 dp. `PhoneLogicTest` covers the grid columns, episode titles, title-page actions
+  and the guide's rows.

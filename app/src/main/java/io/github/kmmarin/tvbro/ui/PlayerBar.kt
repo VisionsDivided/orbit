@@ -123,7 +123,7 @@ private fun SeekBar(exo: ExoPlayer, mod: Modifier) {
  * Hides itself after 5 s without a key press, never while one of its menus is open.
  */
 @Composable
-fun QuickBar(m: AppModel, exo: ExoPlayer, pv: PlayerView?, live: Boolean, extra: Map<String, QuickAction> = emptyMap(), onClose: () -> Unit) {
+fun QuickBar(m: AppModel, exo: ExoPlayer, pv: PlayerView?, live: Boolean, extra: Map<String, QuickAction> = emptyMap(), phone: Boolean = false, onClose: () -> Unit) {
     BackHandler { onClose() }
     val first = remember { SafeFocus() }
     val seekFr = remember { FocusRequester() }
@@ -151,7 +151,8 @@ fun QuickBar(m: AppModel, exo: ExoPlayer, pv: PlayerView?, live: Boolean, extra:
     }
     var lastKey by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(lastKey, m.menu, m.prompt) {
-        if (m.menu != null || m.prompt != null) return@LaunchedEffect
+        // (a phone's sheet stays until it is closed: reading it by touch takes longer than 5 s)
+        if (phone || m.menu != null || m.prompt != null) return@LaunchedEffect
         delay(5_000); onClose()
     }
     val std = linkedMapOf(
@@ -185,6 +186,20 @@ fun QuickBar(m: AppModel, exo: ExoPlayer, pv: PlayerView?, live: Boolean, extra:
             if (m.vodPlay?.key?.startsWith("e|") == true) QuickAction("Previous", glyph = "◀", value = "episode") { onClose(); m.stepEpisode(-1) } else null,
             if (m.vodPlay?.key?.startsWith("e|") == true) QuickAction("Next", glyph = "▶", value = "episode") { onClose(); m.stepEpisode(1) } else null,
         ) + listOf("audio", "subs", "video", "delay", "aspect", "sleep", "settings").mapNotNull { std[it] }
+    }
+    // a phone: every action as a round button in a bottom sheet (spec section 13)
+    if (phone) {
+        io.github.kmmarin.tvbro.ui.orbit5.PhoneSheet(onClose) {
+            Text("Options", color = O5.Text, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(bottom = 10.dp))
+            for (row in actions.chunked(5)) Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                row.forEach { a -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    io.github.kmmarin.tvbro.ui.live.PhoneQuickAction(a)
+                    a.value?.let { Text(it, color = Color(0x80E4E9FF), fontSize = 10.sp, maxLines = 1, modifier = Modifier.width(64.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center) }
+                } }
+                repeat(5 - row.size) { Spacer(Modifier.width(64.dp)) }
+            }
+        }
+        return
     }
     OrbitCanvas {
         Box(Modifier.fillMaxSize().onPreviewKeyEvent { lastKey = System.currentTimeMillis(); false }) {

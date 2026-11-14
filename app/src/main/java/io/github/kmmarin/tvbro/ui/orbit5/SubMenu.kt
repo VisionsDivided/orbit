@@ -136,16 +136,7 @@ fun Dropdown(text: String, onClick: () -> Unit) {
 /** The sub-menu on a phone (spec section 13): scrolling chips (13 px, 7 x 13), white when selected, 20 px margins. */
 @Composable
 private fun PhoneSubMenu(tabs: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier) {
-    Row(
-        modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
-    ) {
-        tabs.forEachIndexed { i, t ->
-            val on = i == selected
-            Box(
-                Modifier.clip(O5Shape.Pill).background(if (on) Color.White else Color(0x1AFFFFFF)).clickable { onSelect(i) }
-                    .padding(horizontal = 13.dp, vertical = 9.dp),
-            ) { Text(t, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (on) O5.Bg else Color.White, maxLines = 1) }
-        }
+    PhoneChipRow(modifier) {
+        tabs.forEachIndexed { i, t -> PhoneChip(t, i == selected) { onSelect(i) } }
     }
 }

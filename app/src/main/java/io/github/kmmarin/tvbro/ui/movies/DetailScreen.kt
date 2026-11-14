@@ -81,7 +81,10 @@ import io.github.kmmarin.tvbro.ui.orbit5.O5Type
 import io.github.kmmarin.tvbro.ui.orbit5.OrbitCanvas
 import io.github.kmmarin.tvbro.ui.orbit5.SourceBadge
 import io.github.kmmarin.tvbro.ui.orbit5.o5Focus
+import io.github.kmmarin.tvbro.ui.shell.LocalIsPhone
 import io.github.kmmarin.tvbro.ui.shell.ShellFrame
+import io.github.kmmarin.tvbro.ui.shell.rememberIsPhone
+import androidx.compose.runtime.CompositionLocalProvider
 import io.github.kmmarin.tvbro.ui.shell.openTab
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -130,7 +133,13 @@ fun DetailView(
     seasons: List<String> = emptyList(), season: Int = 0, onSeason: (Int) -> Unit = {}, onSeasonLong: (Int) -> Unit = {},
     episodes: List<EpCard> = emptyList(), onEpFocus: (EpCard?) -> Unit = {}, onEp: (EpCard) -> Unit = {}, onEpLong: (EpCard) -> Unit = {},
     playFocus: SafeFocus? = null, epFocusKey: String? = null, epFocus: SafeFocus? = null, rowState: LazyListState = rememberLazyListState(),
+    onBack: () -> Unit = {}, watched: DetailButton? = null,
 ) {
+    // a phone: the touch layout (PhoneDetail.kt); [onBack] and [watched] are only used there
+    if (LocalIsPhone.current) {
+        PhoneDetailView(d, buttons, onBack, modifier, watched, seasons, season, onSeason, onSeasonLong, episodes, onEp, onEpLong)
+        return
+    }
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 150.dp, bottom = 120.dp).testTag("detail")) {
         Column(Modifier.padding(start = O5Space.Side).widthIn(max = 1150.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -236,6 +245,13 @@ fun DetailScreen(m: AppModel) {
     val known = m.movies.known(item.key)
     // a title the TV cannot play: Plex / Jellyfin, or a source not on this TV (from My list)
     val media = known?.media ?: (!m.isDirect(item) && m.sources.none { it.id == item.sourceId } && (m.sources.isNotEmpty() || m.orbit.link != null))
+    // the same APK on a phone: the touch title page, full screen (no top bar; Back at top left)
+    if (rememberIsPhone()) {
+        CompositionLocalProvider(LocalIsPhone provides true) {
+            Box(Modifier.fillMaxSize().background(O5.Bg)) { if (media) MediaDetail(m, item, known) else IptvDetail(m, item, known) }
+        }
+        return
+    }
     OrbitCanvas {
         ShellFrame(
             active = if (series) NavTab.SHOWS else NavTab.MOVIES, onTab = { t -> openTab(m, t) },
@@ -372,6 +388,12 @@ private fun IptvDetail(m: AppModel, item: VodItem, known: Title?) {
                 if (s != null && s.inProgress && durMs > 0) s.posMs.toFloat() / durMs else if (w) 1f else null, w)
         }
     }
+    // the phone's round "Watched" action: what yellow does without a focused episode (the film, or the whole show)
+    val filmWatched = !series && m.isWatched(item.key)
+    val watchedButton = DetailButton(if (filmWatched || allWatched) "Unwatched" else "Watched", Icons.Filled.Check) {
+        if (series) { if (info != null && info.episodes.isNotEmpty()) m.markEpisodes(item, info.episodes, !allWatched) }
+        else { m.markWatched(item.key, !filmWatched); m.toast(if (filmWatched) "Marked as unwatched" else "Marked as watched"); tick++ }
+    }
     val playFocus = remember { SafeFocus() }
     val epFocus = remember { SafeFocus() }
     val rowState = rememberLazyListState()
@@ -381,7 +403,7 @@ private fun IptvDetail(m: AppModel, item: VodItem, known: Title?) {
         if (i > 0) rowState.scrollToItem(i)
     }
     Box(Modifier.fillMaxSize()) {
-        CinematicBackdrop(BackdropSpec(info?.backdrop ?: known?.backdrop ?: item.poster, known?.colors), Modifier.fillMaxSize(), settleMs = 0)
+        DetailBackdrop(BackdropSpec(info?.backdrop ?: known?.backdrop ?: item.poster, known?.colors))
         DetailView(
             d, buttons,
             seasons = if (series) seasonNums.map { if (it > 0) "Season $it" else "Episodes" } else emptyList(), season = season,
@@ -390,6 +412,7 @@ private fun IptvDetail(m: AppModel, item: VodItem, known: Title?) {
             onEp = { c -> eps.firstOrNull { it.id == c.key }?.let { m.playEpisode(item, it) } },
             onEpLong = { c -> eps.firstOrNull { it.id == c.key }?.let { epMenu(it) } },
             playFocus = playFocus, epFocusKey = target?.id, epFocus = epFocus, rowState = rowState,
+            onBack = { m.screen = Screen.LIST }, watched = watchedButton,
         )
     }
 }
@@ -445,10 +468,12 @@ private fun MediaDetail(m: AppModel, item: VodItem, known: Title?) {
     val playFocus = remember { SafeFocus() }
     LaunchedEffect(item.key) { repeat(10) { delay(100); if (playFocus.request()) return@LaunchedEffect } }
     Box(Modifier.fillMaxSize()) {
-        CinematicBackdrop(BackdropSpec(i?.backdrop ?: known?.backdrop ?: item.poster, known?.colors), Modifier.fillMaxSize(), settleMs = 0)
+        DetailBackdrop(BackdropSpec(i?.backdrop ?: known?.backdrop ?: item.poster, known?.colors))
         DetailView(
             d, buttons, seasons = seasons.map { it.title }, season = season, onSeason = { season = it },
             episodes = cards, onEp = { m.toast("Playing from ${name ?: "this source"} is not on the TV yet") }, playFocus = playFocus,
+            onBack = { m.screen = Screen.LIST },
+            watched = if (src != null) DetailButton(if (i?.watched == true) "Unwatched" else "Watched", Icons.Filled.Check) { mediaWatched(m, title, !(i?.watched ?: false)) } else null,
         )
     }
 }

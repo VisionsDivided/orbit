@@ -40,6 +40,11 @@ import kotlinx.coroutines.delay
  */
 @Composable
 fun LiveTvSection(m: AppModel) {
+    // the same APK on a phone: channel list and a vertical guide (PhoneLive.kt)
+    if (io.github.kmmarin.tvbro.ui.shell.LocalIsPhone.current) {
+        Box(Modifier.fillMaxSize()) { LiveBackdrop(m, Modifier.fillMaxSize()); PhoneLiveSection(m) }
+        return
+    }
     val tabs = listOf("Channels", "Guide", "Recordings", "My list")
     val sel = when (m.section) { Section.RECORDINGS -> 2; Section.MYLIST -> 3; else -> 0 }
     Box(Modifier.fillMaxSize()) {
