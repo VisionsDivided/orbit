@@ -80,7 +80,9 @@ py -3 tools/demo/demo_provider.py [--port 8795] [--bind 127.0.0.1] [--no-video] 
   doesn't change between requests.
 - **get.php:** an M3U of the live channels.
 - **Catalogue:**
-  - **Live:** 60 channels in News, Sports, Entertainment, Movies, Kids and Locals. Every third channel has catch-up.
+  - **Live:** 60 channels in News, Sports, Entertainment, Movies, Kids and Locals, plus about 200 groups named the way
+    big providers do ("Sports | NHL Teams", "UK | News", "Ambiance | News"…) with two channels each (six in
+    "Sports | NHL Teams", whose guide has overlapping entries on purpose). Every third channel has catch-up.
   - **Films:** 150, over eight categories. They include franchises that Orbit's collections pick up: *The
     Hollowmere Saga* (8 films), *Copper Sky* (3), *Fathom Station* (3), *Neon Orchard* (2) and *Starfall Ridge* (2).
   - **Shows:** 40, each with 1 to 4 seasons of 6 to 10 episodes.

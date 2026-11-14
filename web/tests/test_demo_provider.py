@@ -64,9 +64,14 @@ class Answers(DemoProvider):
 
     def test_live(self):
         cats = P.parse_categories(self.api("get_live_categories"))
-        self.assertEqual({c.category_name for c in cats}, {"News", "Sports", "Entertainment", "Movies", "Kids", "Locals"})
+        names = [c.category_name for c in cats]
+        self.assertLessEqual({"News", "Sports", "Entertainment", "Movies", "Kids", "Locals"}, set(names))
+        # a big provider's shape: about 200 more "<prefix> | <group>" groups, "Sports | NHL Teams" among them
+        self.assertGreaterEqual(len([n for n in names if " | " in n]), 200)
+        self.assertIn("Sports | NHL Teams", names)
+        self.assertEqual(len(set(names)), len(names))
         live = json.loads(self.api("get_live_streams"))
-        self.assertGreaterEqual(len(live), 55)
+        self.assertGreaterEqual(len(live), 400)
         self.assertEqual(len({c["stream_id"] for c in live}), len(live))
         self.assertEqual(len(json.loads(self.api("get_live_streams", category_id="1"))), 10)
         epg = json.loads(self.api("get_short_epg", stream_id=live[0]["stream_id"], limit=3))["epg_listings"]
@@ -102,6 +107,17 @@ class Answers(DemoProvider):
         self.assertGreaterEqual(len(chans), 55)
         self.assertTrue({p.get("channel") for p in progs} <= chans)
         self.assertGreater(len(progs), len(chans) * 15, "about a day for every channel")
+
+    def test_overlapping_guide_entries(self):
+        """The NHL channels send overlapping entries on purpose (the server normalises them)."""
+        c = D.Catalogue(n_films=10)
+        ch = next(x for x in c.channels if x["group"] == "Sports | NHL Teams")
+        progs = sorted(c.programmes(ch, 1794409200, 1794409200 + 86400))
+        self.assertTrue(any(b[0] < a[1] for a, b in zip(progs, progs[1:])), "overlaps")
+        self.assertIn("Next Game Today", {p[2] for p in progs})
+        other = next(x for x in c.channels if x["group"] == "UK | News")
+        op = c.programmes(other, 1794409200, 1794409200 + 86400)
+        self.assertTrue(all(b[0] >= a[1] for a, b in zip(op, op[1:])), "the other channels do not overlap")
 
     def test_artwork(self):
         films = json.loads(self.api("get_vod_streams"))

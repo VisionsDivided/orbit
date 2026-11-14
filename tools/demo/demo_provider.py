@@ -79,6 +79,40 @@ PROGRAMMES = {
                "Neighbourhood Kitchen", "Town Hall", "Around the Valley", "Harbor Report", "Evening Local"],
 }
 
+# A big provider's shape: about 200 more groups named "<prefix> | <group>" (the owner's real list has 229 groups such
+# as "Sports | NHL Teams" and "UK | News"), two channels each, so the Live TV quick tabs, the "All groups" side menu
+# with its folders and its search can be tried. The channels of "Sports | NHL Teams" send overlapping guide entries
+# (a long game with a short filler inside it, plus duplicates), which the server normalises.
+SPORTS_GROUPS = ["NHL Teams", "NHL Replays", "NFL Replays", "NBA", "MLB", "MLS", "Soccer", "Golf", "Tennis", "Racing",
+                 "Boxing", "Cricket", "Rugby", "Cycling", "Darts", "Snooker", "Wrestling", "College", "Extreme",
+                 "Fishing", "Horse Racing", "Esports", "Outdoors", "Events"]
+TOPIC_GROUPS = ["News", "Sports", "Entertainment", "Movies", "Kids", "Documentaries", "Music", "Locals", "Lifestyle",
+                "Comedy", "Drama", "Reality", "Food", "Travel", "Science", "History", "Nature", "Faith", "Shopping",
+                "Classics", "Weather", "Business", "Regional", "Plus 1", "4K", "Radio", "Events", "Westerns", "Anime",
+                "Crime", "Game Shows"]
+PREFIX_SIZES = [("UK", 18), ("US", 31), ("CA", 14), ("FR", 12), ("DE", 12), ("ES", 10), ("IT", 10), ("NL", 8),
+                ("PT", 8), ("LATAM", 12), ("IN", 10), ("AR", 8), ("Ambiance", 6), ("Music", 8), ("PPV", 6),
+                ("24/7", 8)]
+EXTRA_PROGRAMMES = ["Live Coverage", "Highlights", "Replay", "The Magazine", "Studio Live", "Late Show",
+                    "Morning Show", "Feature Presentation", "Special Edition", "Countdown"]
+HOCKEY_TEAMS = ["Harbor City Mariners", "Northgate Lynx", "Valley Comets", "Lakeshore Pike", "Riverside Owls",
+                "Eastfield Foxes"]
+
+
+def extra_groups() -> list:
+    """[(category id, group name, [channel names])] for the generated groups (deterministic)."""
+    out, cid = [], 100
+    named = [("Sports", g) for g in SPORTS_GROUPS] + [(pre, g) for pre, n in PREFIX_SIZES for g in TOPIC_GROUPS[:n]]
+    for pre, g in named:
+        cid += 1
+        if (pre, g) == ("Sports", "NHL Teams"):
+            names = [f"Hockey: {t}" for t in HOCKEY_TEAMS]
+        else:
+            names = [f"{pre} {g} {i}" for i in (1, 2)]
+        out.append((str(cid), f"{pre} | {g}", names))
+    return out
+
+
 VOD_CATS = [("10", "Action & Adventure"), ("11", "Comedy"), ("12", "Drama"), ("13", "Sci-Fi & Fantasy"),
             ("14", "Thriller & Mystery"), ("15", "Horror"), ("16", "Kids & Family"), ("17", "Documentary")]
 CAT_GENRES = {"10": ["Action", "Adventure"], "11": ["Comedy", "Romance"], "12": ["Drama", "Romance"],
@@ -180,11 +214,13 @@ class Catalogue:
         anchor = day_anchor()
         self.channels = []
         n = 0
-        for cid, group, names in LIVE_GROUPS:
+        self.live_groups = LIVE_GROUPS + extra_groups()
+        for cid, group, names in self.live_groups:
             for name in names:
                 n += 1
                 self.channels.append({"num": n, "name": name, "id": 100 + n, "group": group, "cat": cid,
-                                      "epg": slug(name) + ".demo", "archive": 1 if n % 3 == 0 else 0})
+                                      "epg": slug(name) + ".demo", "archive": 1 if n % 3 == 0 else 0,
+                                      "overlap": group == "Sports | NHL Teams"})
         self.films = []
         seen = set()
         rnd = random.Random(7)
@@ -242,10 +278,22 @@ class Catalogue:
         out = []
         day0 = start - start % 86400
         t = day0
-        names = PROGRAMMES[ch["group"]]
+        names = PROGRAMMES.get(ch["group"], EXTRA_PROGRAMMES)
         while t < end:
             day = t - t % 86400
             r = random.Random(seed_of("epg", ch["id"], day, t))
+            if ch.get("overlap") and (t - day) % 21600 == 0:
+                # a provider that overlaps: a 5-hour game, a filler inside it, the game listed twice and a
+                # same-title piece inside it (every 6 hours)
+                game = f"NHL Hockey on {ch['name'].split(': ', 1)[-1]}"
+                stop = t + 6 * 3600
+                if stop > start:
+                    out += [(t, t + 5 * 3600, game, f"{game}. {plot(r)}"), (t, t + 5 * 3600, game, f"{game}. {plot(r)}"),
+                            (t + 2 * 3600, t + 2 * 3600 + 1800, "Next Game Today", "What is on next."),
+                            (t + 3600, t + 7200, game, "Second period."),
+                            (t + 5 * 3600, stop, "Hockey Tonight", "Highlights and analysis.")]
+                t = stop
+                continue
             mins = r.choice([30, 30, 60, 60, 60, 90, 120]) if ch["group"] != "Movies" else r.choice([90, 105, 120])
             stop = min(t + mins * 60, day + 86400)
             if stop > start:
@@ -450,7 +498,7 @@ class Provider:
                                     "rtmp_port": "", "timezone": "UTC", "timestamp_now": now,
                                     "time_now": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(now))}}
         if a == "get_live_categories":
-            return [{"category_id": cid, "category_name": g, "parent_id": 0} for cid, g, _ in LIVE_GROUPS]
+            return [{"category_id": cid, "category_name": g, "parent_id": 0} for cid, g, _ in c.live_groups]
         if a == "get_live_streams":
             return [{"num": ch["num"], "name": ch["name"], "stream_type": "live", "stream_id": ch["id"],
                      "stream_icon": art("logo", ch["name"]), "epg_channel_id": ch["epg"], "added": "1700000000",
