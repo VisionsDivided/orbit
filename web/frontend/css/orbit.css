@@ -738,6 +738,82 @@ body[data-screen="settings"] .ck { display: none; }
   .stream-ask .pin-btns .btn { flex: 1; justify-content: center; }
 }
 
+/* ---------------------------------------------------------------- Search (like the TV's SearchSection) */
+/* Own class names only (srch5-*, plus the shared cards and rows): the guide's .prog and the old .stile /
+   .sdetail / .search-box rules in style.css are not used here. */
+.srch5-top { display: flex; align-items: center; gap: 2.4rem; padding: 15rem var(--side) 0; }
+.srch5-mic { all: unset; box-sizing: border-box; flex: none; width: 8.4rem; height: 8.4rem; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(255,255,255,.12); color: #fff; cursor: pointer; transition: transform .2s ease, background .2s ease; }
+.srch5-mic .ic { width: 3.8rem; height: 3.8rem; }
+.srch5-mic:hover { background: rgba(255,255,255,.2); }
+.srch5-mic.focusable, .srch5-in.focusable { border: 0; }
+.srch5-mic.focusable:focus, .srch5-in.focusable:focus { box-shadow: none; }
+.kbd .srch5-mic:focus, .srch5-mic:focus-visible { outline: var(--ring) solid #fff; outline-offset: .5rem; transform: scale(1.06); }
+.srch5-mic.on, .srch5-mic.on.focusable:focus { box-shadow: 0 0 0 .4rem var(--live), 0 0 3rem rgba(255,59,92,.6); }
+.srch5-field { flex: 1; min-width: 0; display: flex; align-items: center; gap: 1.8rem; height: 8.4rem; padding: 0 3rem; box-sizing: border-box; border-radius: 4.2rem;
+  background: rgba(255,255,255,.09); box-shadow: inset 0 0 0 1px rgba(255,255,255,.2); cursor: text; transition: box-shadow .2s ease; }
+.srch5-field > .ic { width: 3.8rem; height: 3.8rem; color: var(--muted); }
+.srch5-field:focus-within { box-shadow: inset 0 0 0 .3rem var(--accent); outline: var(--ring) solid #fff; outline-offset: .5rem; }
+.srch5-in { all: unset; flex: 1; min-width: 0; height: 100%; font-size: 3.4rem; font-weight: 600; color: #fff; }
+.srch5-in::placeholder { color: var(--muted); font-weight: 400; opacity: 1; }
+/* the line under the field: the status, or the focused / hovered item's details (fixed height: no jumps) */
+.srch5-info { box-sizing: border-box; height: 13rem; padding: 1.6rem var(--side) 0 calc(var(--side) + 10.8rem); overflow: hidden; }
+.srch5-top.nomic + .srch5-info { padding-left: calc(var(--side) + 3rem); }
+.srch5.idle .srch5-info { height: 4rem; }          /* recent searches: no status line */
+.srch5-st { font-size: 2rem; color: var(--muted); }
+.srch5-d .t { display: block; font-size: 2.6rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.srch5-d .m { font-size: 2rem; color: rgba(228,233,255,.82); margin-top: .4rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.srch5-d .m .ch { color: var(--accent); font-weight: 600; }
+.srch5-d .m i { font-style: normal; color: var(--muted); }
+.srch5-d .d { margin: .6rem 0 0; max-width: 150rem; font-size: 1.9rem; line-height: 1.4; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.srch5-d .d:empty { display: none; }
+/* the field and the details stay put; only the results scroll (as on the TV) */
+.srch5 { height: 100%; display: flex; flex-direction: column; padding-bottom: 0; }
+.srch5-top, .srch5-info { flex: none; }
+.srch5-body { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding-bottom: 14rem; box-sizing: border-box; scrollbar-width: none; transition: opacity .12s .08s;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 1.2rem); mask-image: linear-gradient(180deg, transparent 0, #000 1.2rem); }
+.srch5-body::-webkit-scrollbar { display: none; }
+.srch5-body.busy { opacity: .55; }                 /* older results stay while the next query runs */
+.srch5 .rows5 { padding-top: .6rem; }
+/* recent searches */
+.srch5-hist { padding: 1rem var(--side) 0; }
+.srch5-hist .mut { font-size: 2rem; margin: 1.4rem 0 0; }
+.srch5-chips { display: flex; flex-wrap: wrap; gap: 1.8rem 1.6rem; margin-top: 2.2rem; }
+.srch5-chips .pill { color: #fff; }
+.srch5-chips .pill.srch5-clear { background: transparent; color: var(--muted); }
+/* programme cards: the channel's logo with a state pill */
+.srch5-pill { position: absolute; left: 1rem; top: 1rem; z-index: 1; font: 800 1.5rem/1 var(--ff); letter-spacing: .06em; padding: .6rem 1rem; border-radius: .6rem; color: #fff; background: rgba(0,0,0,.6); }
+.srch5-pill.live { background: var(--live); }
+.srch5-pill.cu { background: rgba(27,127,163,.85); }
+
+/* phones (5b): the results stack vertically (channels and programmes as list rows, posters in a grid) */
+@media (max-width: 899px) {
+  .srch5 { height: auto; display: block; padding-bottom: 110px; }
+  .srch5-body { overflow: visible; padding-bottom: 0; -webkit-mask-image: none; mask-image: none; }
+  .srch5-top { padding: calc(var(--tbh) + 12px) var(--side) 0; gap: 10px; }
+  .srch5-mic { width: 48px; height: 48px; } .srch5-mic .ic { width: 22px; height: 22px; }
+  .srch5-field { height: 48px; padding: 0 16px; gap: 10px; border-radius: 24px; }
+  .srch5-field > .ic { width: 20px; height: 20px; }
+  .srch5-field:focus-within { outline-width: 2px; outline-offset: 3px; box-shadow: inset 0 0 0 2px var(--accent); }
+  .srch5-in { font-size: 16px; }
+  .srch5-info, .srch5-top.nomic + .srch5-info { height: auto; min-height: 30px; padding: 10px var(--side) 2px; }
+  .srch5-st { font-size: 13px; }
+  .srch5-d .t { font-size: 15px; } .srch5-d .m, .srch5-d .d { font-size: 12.5px; }
+  .srch5-hist { padding: 8px var(--side) 0; } .srch5-hist .mut { font-size: 13px; }
+  .srch5-chips { gap: 10px; margin-top: 12px; } .srch5-chips .pill { font-size: 14px; padding: 8px 16px; }
+  .srch5 .strip:not(.posters) { flex-direction: column; overflow: visible; gap: 12px; padding: 8px var(--side) 4px 0; margin-left: 0; }
+  .srch5 .strip:not(.posters) .cap5 { width: auto; display: grid; grid-template-columns: 112px minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 12px; align-content: center; }
+  .srch5 .strip:not(.posters) .cap5 > .pic { grid-row: 1 / span 2; }
+  .srch5 .strip:not(.posters) .cap5.has-menu { padding-right: 40px; }
+  .srch5 .strip:not(.posters) .cap5 .item-more { top: 50%; right: 0; transform: translateY(-50%); }
+  .srch5 .strip:not(.posters) .cap5 > b { margin-top: 0; align-self: end; font-size: 14px; }
+  .srch5 .strip:not(.posters) .cap5 > span:not(.pic) { align-self: start; font-size: 12px; }
+  .srch5 .strip.posters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; gap: 14px 12px; padding: 8px var(--side) 4px 0; margin-left: 0; }
+  .srch5 .strip.posters .pc { width: auto; }
+  .srch5-pill { font-size: 8px; padding: 3px 5px; left: 5px; top: 5px; border-radius: 4px; }
+  .srch5 .chcard .ch-name { font-size: 11px; }
+}
+
 /* ---------------------------------------------------------------- reduced motion */
 @media (prefers-reduced-motion: reduce) {
   #scene .bgl, .hero5 > .hero-l, .pic, .btn5, .op-tile, .op-av, .dots5 .dot, #topbar::before { transition: none !important; }
