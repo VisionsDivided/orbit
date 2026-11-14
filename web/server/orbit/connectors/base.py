@@ -172,6 +172,28 @@ def colors(c1, c2) -> Optional[list]:
     return out
 
 
+def direct_ok(caps, container, vcodec=None, acodec=None) -> bool:
+    """May a device play the original file? ``caps`` (optional, from the device): {"direct": false} never;
+    "containers" / "videoCodecs" / "audioCodecs" lists, when given, must contain the file's. Without caps:
+    yes (ExoPlayer and mpv play most files)."""
+    if not isinstance(caps, dict):
+        return True
+    if caps.get("direct") is False:
+        return False
+    for name, val in (("containers", container), ("videoCodecs", vcodec), ("audioCodecs", acodec)):
+        lst = caps.get(name)
+        if isinstance(lst, list) and lst and val:
+            have = {str(x).strip().lower() for x in lst}
+            if not any(v.strip() in have for v in str(val).lower().split(",")):
+                return False
+    return True
+
+
+MIME = {"mp4": "video/mp4", "m4v": "video/mp4", "mov": "video/quicktime", "mkv": "video/x-matroska",
+        "webm": "video/webm", "avi": "video/x-msvideo", "ts": "video/mp2t", "mpegts": "video/mp2t",
+        "wmv": "video/x-ms-wmv", "flv": "video/x-flv"}
+
+
 class Http:
     """JSON over net.open_url with error mapping; ``label`` names the server kind in messages."""
 
@@ -292,6 +314,47 @@ class Connector:
 
     def mark_watched(self, item_id: str, watched: bool) -> None:
         raise NotImplementedError
+
+    # ---- playing through the home server (orbit/mediaplay.py) ----
+    # Paths are relative to ``self.base`` and never carry the token (the relay sends ``auth_headers``).
+    RELAY_PREFIXES: tuple = ()          # upstream paths an HLS playlist of this server may point at
+
+    def play_info(self, item_id: str, hls: bool, caps: Optional[dict], audio: Optional[str] = None) -> dict:
+        """What to relay for one film / episode:
+        {"kind": "hls"|"file", "path", "container", "durationSecs", "resumeSecs", "title", "subtitle",
+         "audio": [{id, label, lang, default}], "subtitles": [{id, label, lang, path, fmt: "srt"|"vtt"}],
+         "seriesId", "season", "episode", "ref": {...}}. ``hls``: the client asked for HLS (the web);
+        else the original file when ``caps`` allow it. ``ref`` is kept for ``play_report`` / ``play_stop``."""
+        raise ConnectorError(400, f"{self.label}: playing through the home server is not supported")
+
+    def play_report(self, ref: dict, item_id: str, secs: float, dur: float, state: str, first: bool) -> None:
+        """Progress of a relayed playback (``first``: the first report of this playback)."""
+        self.report_progress(item_id, secs, dur, state)
+
+    def play_stop(self, ref: dict) -> None:
+        """Best effort: end the server's transcode of a relayed playback."""
+
+    def next_episode(self, series_id: Optional[str], season, episode) -> Optional[dict]:
+        """The episode after (season, episode) of a series, into the next season, or None."""
+        if not series_id or season is None or episode is None:
+            return None
+        try:
+            seasons = sorted((s for s in self.get_seasons(series_id) if s.get("season") is not None),
+                             key=lambda s: s["season"])
+        except ConnectorError:
+            return None
+        for s in seasons:
+            if s["season"] < season:
+                continue
+            try:
+                eps = sorted((e for e in self.get_episodes(s["id"]) if e.get("episode") is not None),
+                             key=lambda e: e["episode"])
+            except ConnectorError:
+                return None
+            for e in eps:
+                if s["season"] > season or e["episode"] > episode:
+                    return e
+        return None
 
     # ---- the catalogue (orbit/catalog.py) ----
     def collections(self) -> list:

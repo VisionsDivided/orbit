@@ -135,6 +135,8 @@ class Api:
 
     def _logout(self, c: Call) -> Reply:
         self.acc.logout(c.sess)
+        if self.media is not None and c.sess.get("h"):
+            self.media.end_plays(c.sess["h"])         # its Plex / Jellyfin playbacks end with it
         return Reply({"ok": True}, session="")
 
     def _delete_profile(self, c: Call) -> Reply:

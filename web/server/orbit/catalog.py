@@ -567,6 +567,13 @@ class Catalog:
             self._refresh_local(sess, loc, full=False)
         return loc
 
+    def media_played(self, account_id: str) -> None:
+        """A Plex / Jellyfin playback through this server ended: fetch its Continue watching again on the next
+        request (the media server has the new position)."""
+        loc = self._locals.get(account_id)
+        if loc is not None:
+            loc.cont_at = 0.0
+
     def _refresh_local(self, sess: dict, loc: Local, full: bool):
         acc = sess["account_id"]
         with self._lock:

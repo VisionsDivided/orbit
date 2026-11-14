@@ -9,11 +9,12 @@ stored, so the link works with that server only. Requests send the token as the 
 ask for JSON (``Accept: application/json``)."""
 from __future__ import annotations
 
+import secrets
 import urllib.parse
 from typing import Optional
 
 from .base import (DEVICE_NAME, LIST_KINDS, PAGE, PRODUCT, STATES, VERSION, Connector, ConnectorError, Http, Linked,
-                   colors, item, normalize_base_url, safe_id, ticks)
+                   colors, direct_ok, item, normalize_base_url, safe_id, ticks)
 
 PLEX_TV = "https://plex.tv"            # tests point this at a mock
 LINK_URL = "https://plex.tv/link"
@@ -23,6 +24,14 @@ TYPE_NUM = {"movie": 1, "series": 2}
 LIB_KIND = {"movie": "movie", "show": "series"}
 MAX_SERVERS = 10
 MAX_COLLECTIONS = 300                 # per server, for the catalogue
+TRANSCODE = "/video/:/transcode/universal"
+# what a browser plays: HLS in MPEG-TS with H.264 video and AAC audio (Plex copies streams that already are)
+PROFILE_EXTRA = ("add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mpegts"
+                 "&videoCodec=h264&audioCodec=aac,mp3)"
+                 "+add-limitation(scope=videoCodec&scopeName=h264&type=upperBound&name=video.level&value=41)"
+                 "+add-limitation(scope=videoAudioCodec&scopeName=aac&type=upperBound&name=audio.channels&value=2)")
+SUB_FMT = {"srt": "srt", "subrip": "srt", "vtt": "vtt", "webvtt": "vtt"}
+SCROBBLE_AT = 0.9                     # "watched" from 90 % on
 
 
 def client_headers(device_id: str, token: Optional[str] = None) -> dict:
@@ -290,3 +299,80 @@ class Plex(Connector):
 
     def mark_watched(self, item_id: str, watched: bool) -> None:
         self._send("/:/scrobble" if watched else "/:/unscrobble", {"key": safe_id(item_id), "identifier": LIB})
+
+    # ---- playing through the home server ----
+    RELAY_PREFIXES = (TRANSCODE + "/",)
+
+    def play_info(self, item_id: str, hls: bool, caps, audio=None) -> dict:
+        iid = safe_id(item_id)
+        d = self._meta(iid)
+        if d.get("type") not in ("movie", "episode"):
+            raise ConnectorError(400, "only films and episodes can be played")
+        media = (d.get("Media") or [{}])[0] or {}
+        part = (media.get("Part") or [{}])[0] or {}
+        key = str(part.get("key") or "")
+        if not key.startswith("/library/parts/") or ".." in key or "?" in key:
+            raise ConnectorError(409, "Plex: this title has no playable file")
+        streams = [s for s in part.get("Stream") or [] if isinstance(s, dict) and s.get("id") is not None]
+        auds = [s for s in streams if s.get("streamType") == 2]
+        audio_out = [{"id": str(s["id"]), "label": str(s.get("extendedDisplayTitle") or s.get("displayTitle") or
+                                                         s.get("language") or f"Track {i + 1}")[:120],
+                      "lang": s.get("languageCode") or s.get("languageTag") or None,
+                      "default": bool(s.get("selected") or s.get("default"))} for i, s in enumerate(auds)]
+        subs = []
+        for s in streams:
+            fmt = SUB_FMT.get(str(s.get("codec") or "").lower())
+            skey = str(s.get("key") or "")
+            if s.get("streamType") == 3 and fmt and skey.startswith("/library/streams/") and ".." not in skey:
+                subs.append({"id": str(s["id"]), "label": str(s.get("extendedDisplayTitle") or s.get("displayTitle") or
+                                                             s.get("language") or "Subtitles")[:120],
+                             "lang": s.get("languageCode") or s.get("languageTag") or None,
+                             "path": skey.split("?", 1)[0], "fmt": fmt})
+        container = str(media.get("container") or part.get("container") or "").lower() or None
+        direct = not hls and direct_ok(caps, container, media.get("videoCodec"), media.get("audioCodec"))
+        ref = {"session": secrets.token_hex(12), "rated": False, "partId": str(part.get("id") or "")}
+        if direct:
+            path, kind = key, "file"
+        else:
+            if audio and part.get("id") is not None and any(a["id"] == str(audio) and not a["default"] for a in audio_out):
+                # the Plex way to pick the audio of a transcode: the part's selected stream (as Plex's own apps do)
+                self.http.raw("PUT", self.base + f"/library/parts/{safe_id(part['id'])}?" + urllib.parse.urlencode(
+                    {"audioStreamID": safe_id(audio, "audio"), "allParts": 1}), self.auth_headers())
+                for a in audio_out:
+                    a["default"] = a["id"] == str(audio)
+            q = {"path": f"/library/metadata/{iid}", "mediaIndex": 0, "partIndex": 0, "protocol": "hls",
+                 "fastSeek": 1, "directPlay": 0, "directStream": 1, "directStreamAudio": 1, "copyts": 1,
+                 "subtitles": "none", "subtitleSize": 100, "audioBoost": 100, "location": "lan",
+                 "addDebugOverlay": 0, "autoAdjustQuality": 0, "mediaBufferSize": 102400,
+                 "maxVideoBitrate": 20000, "videoQuality": 100, "videoResolution": "1920x1080",
+                 "session": ref["session"], "X-Plex-Session-Identifier": ref["session"],
+                 "X-Plex-Client-Profile-Name": "Generic", "X-Plex-Client-Profile-Extra": PROFILE_EXTRA}
+            path, kind = TRANSCODE + "/start.m3u8?" + urllib.parse.urlencode(q), "hls"
+        ep = d.get("type") == "episode"
+        return {"kind": kind, "path": path, "container": container if kind == "file" else "ts",
+                "durationSecs": int(ticks(d.get("duration") or media.get("duration")) / 1000) or None,
+                "resumeSecs": int(ticks(d.get("viewOffset")) / 1000) or None,
+                "title": str((d.get("grandparentTitle") if ep else None) or d.get("title") or "")[:300],
+                "subtitle": (f"S{d.get('parentIndex')} E{d.get('index')} · {d.get('title') or ''}".strip(" ·")
+                             if ep else None),
+                "audio": audio_out, "subtitles": subs,
+                "seriesId": (str(d.get("grandparentRatingKey") or "") or None) if ep else None,
+                "season": d.get("parentIndex") if ep else None, "episode": d.get("index") if ep else None,
+                "ref": ref}
+
+    def play_report(self, ref: dict, item_id: str, secs: float, dur: float, state: str, first: bool) -> None:
+        if state not in STATES:
+            raise ConnectorError(400, "state: playing, paused or stopped")
+        iid = safe_id(item_id)
+        self.http.raw("GET", self.base + "/:/timeline?" + urllib.parse.urlencode(
+            {"ratingKey": iid, "key": f"/library/metadata/{iid}", "identifier": LIB, "state": state,
+             "time": int(secs * 1000), "duration": int(dur * 1000)}),
+            {**self.auth_headers(), "X-Plex-Session-Identifier": str(ref.get("session") or "")})
+        if dur and secs >= dur * SCROBBLE_AT and not ref.get("rated"):
+            ref["rated"] = True               # once per playback
+            self.mark_watched(iid, True)
+
+    def play_stop(self, ref: dict) -> None:
+        if ref.get("session"):
+            self.http.raw("GET", self.base + TRANSCODE + "/stop?" + urllib.parse.urlencode(
+                {"session": ref["session"]}), self.auth_headers(), timeout=5)

@@ -57,16 +57,20 @@ class Mock(http.server.BaseHTTPRequestHandler):
                "headers": {k.lower(): v for k, v in self.headers.items()}, "body": json.loads(raw) if raw else None}
         self.server.seen.append(req)
         fn = self.server.routes.get((self.command, u.path))
-        code, ctype, body = fn(req) if fn else (404, "text/plain", b"no")
+        ans = fn(req) if fn else (404, "text/plain", b"no")
+        code, ctype, body = ans[:3]
+        extra = ans[3] if len(ans) > 3 else {}        # (code, ctype, body, {header: value}) for media answers
         if isinstance(body, (dict, list, bool)):
             body, ctype = json.dumps(body).encode(), "application/json"
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        for k, v in extra.items():
+            self.send_header(k, v)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
-    do_GET = do_POST = do_DELETE = _go
+    do_GET = do_POST = do_DELETE = do_PUT = _go
 
     def log_message(self, *a):
         pass
