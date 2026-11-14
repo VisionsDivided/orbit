@@ -28,8 +28,13 @@ It is written so another implementation (for example Rust) could replace the ser
 ## Objects
 - `Account`: `{"id", "username", "displayName", "role": "owner"|"admin"|"member", "disabled": bool, "created"}`
 - `Profile`: `{"id", "name", "kids": bool, "created"}`
-- `Session`: `{"id", "device", "created", "lastSeen", "current": bool}`
-- `Me`: `{"account": Account, "profiles": [Profile], "profile": Profile|null, "csrf"}`
+- `Session`: `{"id", "device", "name", "kind": "web"|"tv", "created", "lastSeen", "current": bool}`. `device` is the label
+  the client sent at sign-in ("Chrome on Windows", "TV (Model)"); `name` the name the household gave it ("Kitchen"),
+  `""` while it has none.
+- `Me`: `{"account": Account, "profiles": [Profile], "profile": Profile|null, "csrf", "deviceName"}`. `deviceName` is
+  the calling device's own `name` (`""` when not named).
+- `Device` (a linked TV): `{"id", "name", "device", "created", "lastSeen", "current": bool, "account": {"id",
+  "displayName"}, "profile": "<profile name>", "canUnlink": bool}`. `id` is the same as the `Session` id.
 
 ## Endpoints
 
@@ -39,7 +44,7 @@ It is written so another implementation (for example Rust) could replace the ser
 | GET | `/v1/status` | anyone (public) | → `{"accounts": bool, "setup": bool}`. `setup` is true while the first owner can be created. |
 | POST | `/v1/setup` | anyone, only while no account exists | `{"token", "username", "password", "displayName"?}` → `Me` + session cookie. `token` is the one-time setup token from the server's data folder (`orbit-setup-token`). |
 | POST | `/v1/auth/login` | anyone | `{"username", "password", "device"?}` → `Me` + session cookie. Wrong username or password: 403, the same message either way. Throttled like tvBro's login. |
-| POST | `/v1/auth/logout` | signed in | `{}` → `{"ok": true}`, session ends, cookie cleared. |
+| POST | `/v1/auth/logout` | signed in | `{}` → `{"ok": true}`, session ends, cookie cleared. The web app then removes what the browser cached for the account and profile (localStorage `tvbro.ui`, `tvbro.reminders`; sessionStorage `tvbro.parental`, `tvbro.sid`; no IndexedDB is used), and does the same whenever it shows the sign-in page because the server ended its session, so the next person starts clean. |
 | GET | `/v1/me` | signed in | → `Me` |
 | GET | `/v1/profiles` | signed in | → `{"profiles": [Profile]}` (own account only) |
 | POST | `/v1/profiles` | signed in | `{"name", "kids"?}` → `Profile` (at most 8 per account) |
@@ -65,6 +70,22 @@ shows the code and a QR code of `<server>/#pair:<code>`, which opens the web app
 filled in. Pairings live 10 minutes in memory; an approved session that is never collected is ended. The device
 appears under "Your devices" and can be signed out there; the TV notices on its next request (401) and offers to
 link again.
+
+### Device names and linked TVs
+
+| Method | Path | Who | Body → Answer |
+|---|---|---|---|
+| POST | `/v1/device/name` | signed in (the device itself: a TV after linking or from Settings ▸ Home server ▸ Name this TV) | `{"name"}` → `{"ok": true, "name"}` (the name as stored). |
+| GET | `/v1/devices` | signed in | → `{"devices": [Device]}`: linked TVs (sessions of kind `tv`), newest first. Owner and admins get the household's; members their own account's. |
+| POST | `/v1/devices/rename` | signed in | `{"id", "name"}` → `Device`. Owner and admins may rename any linked TV; members only their own account's (others answer 404). |
+| POST | `/v1/devices/unlink` | signed in | `{"id"}` → `{"ok": true}`: the TV's session ends (it removes the account's data on its next request). Your own account's TVs; the owner any; admins also members' (never the owner's or another admin's: 403). Unknown ids, browser sessions and (for members) other accounts' TVs answer 404. |
+
+Names (`orbit.db` migration 004, column `account_sessions.name`): 1 to 32 characters, letters (any language), digits,
+spaces and `' - . _ ( ) & + #`; leading and trailing spaces are dropped and runs of spaces become one; anything else
+(control characters, quotes, `<`, emoji) is 400. A name belongs to the session, so linking a TV again starts unnamed.
+Right after linking, the TV offers to name itself (the field offers its model, e.g. "SHIELD Android TV"); the step can
+be skipped. The web app lists linked TVs for the owner and admins under Settings ▸ Accounts ▸ Linked TVs, with Rename
+and Unlink.
 
 The server checks the `Host` header, so the address the TV uses (for example `192.0.2.10:8750`) must be listed in
 `TVBRO_ALLOWED_HOSTS`.
@@ -106,14 +127,20 @@ has a random stream session id (`sid`, 32+ characters) that it keeps to itself.
 | POST | `/api/stream/heartbeat` | signed in | `{"sid"}` every ~10 s → `{"ok": true}`, or `{"stopped": "replaced"\|"recording"}` once another device took the slot. |
 | POST | `/api/stream/stop` | signed in | `{"sid"}` → `{"ok": true}`: the slot is free again. |
 
-- `StreamUse`: `{"id", "sid", "label", "what", "profile", "since", "idleSec", "recording": bool}`. `id` is a public
+- `StreamUse`: `{"id", "sid", "label", "what", "profile", "device", "name", "since", "idleSec", "recording": bool}`. `id` is a public
   id of the stream (a hash of its `sid`, 12 hex characters) to pass as `replace`; knowing it does not let anyone send
   that device's heartbeats. `sid` is the first 6 characters of the session id (kept for older clients to recognise
   their own stream). `label` is the device as the client named it ("Chrome on Windows", "TV (…)"), `profile` the
-  Orbit profile that started it (empty in tvBro mode and for recordings), `what` what is playing.
-- The TV lists every active stream when the limit is full and offers one "Stop <name> and watch" per viewer
-  (recordings are listed but cannot be chosen), plus Cancel. The web app still stops the oldest without asking
-  (it never had a prompt).
+  Orbit profile that started it (empty in tvBro mode and for recordings), `device` the name the household gave the
+  device ("Kitchen", see "Device names" above; empty when not named), `what` what is playing. `name` is what to call
+  the stream: `device`, else `profile`, else `label` ("Recording" for a recording). The device name is read when the
+  stream starts, so a rename shows from the device's next start.
+- The TV and the web player list every active stream when the limit is full and offer one "Stop <name> and watch"
+  per viewer (recordings are listed but cannot be chosen), plus Cancel. Names: `device`, else `profile`, else `label`;
+  two equal names get the label added ("Kitchen on TV (Model)"), then a number (shared/.../StreamChoice.kt and
+  web/frontend/js/streamprompt.js). Cancel starts nothing (the web player closes). The small live preview never
+  stops anyone: when every stream is in use it stays off. In tvBro mode (no `/v1/streams`) the web app still stops
+  the oldest without asking.
 
 ## Show progress for devices (step 7b)
 
@@ -191,7 +218,9 @@ cache it) and fetch a fresh one for each playback.
 **Local network.** The server reaches each linked server's exact `host:port` even when "local network sources" is
 off (`net.set_private_hosts`); loopback and link-local addresses stay refused. Only an owner or admin can link a
 server at a new local address; a member can link their own user on a server the household already linked (or
-any public address). Jellyfin uses one `DeviceId` per link (Jellyfin ends older tokens of a device that signs in
+any public address). While an owner or admin signs in, the new address is allowed only for that sign-in's own
+requests (start, each poll, the password sign-in: `net.private_hosts_scope`, per request thread), never in the
+server-wide list, until the link is saved; a Plex server found during the sign-in is added the same way. Jellyfin uses one `DeviceId` per link (Jellyfin ends older tokens of a device that signs in
 again); Plex gets the same per-link `X-Plex-Client-Identifier` and stores each server's own access token.
 
 ## What belongs to a profile (step 4)
