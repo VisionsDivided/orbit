@@ -18,8 +18,8 @@ Orbit is a private media app built on tvBro (see the note at the top of the main
 | 3. Accounts, profiles, sessions (`/v1`) | done (server; no UI yet) |
 | 4. Per-profile state (My list, resume, favourites, series progress) | done (server) |
 | 5. Web sign-in and profile picker | done |
-| 6. TV pairing | next |
-| 7. Android sync | to do |
+| 6. TV pairing | done (server, web, Android) |
+| 7. Android sync | next |
 | 8. Docker Compose deploy | to do |
 
 Web app: Settings ▸ Accounts sets up accounts (owner, with the one-time code from the server's data folder),

@@ -297,7 +297,7 @@ fun SettingsScreen(m: AppModel) {
     var shown by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { shown = true }
     val x by androidx.compose.animation.core.animateDpAsState(if (shown) 0.dp else 820.dp, label = "panel")
-    val names = listOf("General", "Playlists", "Sync", "EPG", "Appearance", "Playback", "Remote control", "Parental controls", "Recording", "Channels and groups", "About")
+    val names = listOf("Home server" /* Orbit */, "General", "Playlists", "Sync", "EPG", "Appearance", "Playback", "Remote control", "Parental controls", "Recording", "Channels and groups", "About")
     var sec by m::settingsSec // remembered (also across restarts): Settings reopens on the same page
     val firstSec = remember { sec.coerceIn(0, names.size - 1) }
     val fr = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -330,8 +330,9 @@ fun SettingsScreen(m: AppModel) {
             }
             LazyColumn(Modifier.weight(1f).fillMaxHeight().padding(16.dp).focusRequester(pageFr).focusGroup(), state = pageState) {
                 when (sec) {
-                    0 -> general(m); 1 -> playlists(m); 2 -> syncSection(m); 3 -> epgSection(m); 4 -> appearance(m); 5 -> playback(m)
-                    6 -> remote(); 7 -> parental(m); 8 -> recording(m); 9 -> other(m); else -> about()
+                    0 -> orbitSection(m)
+                    1 -> general(m); 2 -> playlists(m); 3 -> syncSection(m); 4 -> epgSection(m); 5 -> appearance(m); 6 -> playback(m)
+                    7 -> remote(); 8 -> parental(m); 9 -> recording(m); 10 -> other(m); else -> about()
                 }
             }
         }
@@ -377,6 +378,10 @@ fun AddSourceScreen(m: AppModel) {
     Row(Modifier.fillMaxSize().background(Bg).padding(32.dp)) {
     LazyColumn(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item(key = "title") { Text("Add source", color = Accent, fontSize = 28.sp) }
+        // Orbit: link to the home server first (the playlist can come from there later)
+        val ol = m.orbit.link
+        if (ol == null) item(key = "orbit") { TvButton("Link to your Orbit home server") { m.orbit.clearMessage(); m.screen = Screen.ORBIT_LINK } }
+        else item(key = "orbit") { Text("Linked to Orbit as ${ol.account}, profile ${ol.profile}", color = TextDim, fontSize = 15.sp) }
         if (ls == null) item(key = "phone") { TvButton("Use your phone (scan a QR code, type on the phone)") { m.startLink(null) } }
         item(key = "type") { SettingRow("Type", if (xtream) "Xtream login (server, username, password)" else "M3U URL", mod = Modifier.focusRequester(typeFr)) { xtream = !xtream } }
         item(key = "name") { TvField("Name (optional)", name, { name = it }) }

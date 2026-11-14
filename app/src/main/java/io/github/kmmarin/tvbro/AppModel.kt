@@ -23,7 +23,8 @@ import java.util.UUID
 
 enum class Section { SEARCH, TV, MOVIES, SHOWS, RECORDINGS, MYLIST }
 
-enum class Screen { LIST, PLAYER, GUIDE, SETTINGS, ADD_SOURCE, GUIDE_SEARCH, MAPPING, VOD, DETAIL, VODPLAY, RECORDINGS, EDITOR }
+enum class Screen { LIST, PLAYER, GUIDE, SETTINGS, ADD_SOURCE, GUIDE_SEARCH, MAPPING, VOD, DETAIL, VODPLAY, RECORDINGS, EDITOR,
+    ORBIT_LINK /* Orbit: link this TV to the home server */ }
 
 data class CatchupPlay(val url: String, val title: String)
 data class VodPlay(val key: String, val url: String, val title: String)
@@ -45,6 +46,8 @@ const val GROUP_FAV = "Favourites"
 
 class AppModel(private val app: Application) : AndroidViewModel(app) {
     val store = Store(app)
+    /** Orbit: the home-server link and TV pairing (orbit/OrbitModel.kt). */
+    val orbit = io.github.kmmarin.tvbro.orbit.OrbitModel(app, viewModelScope)
     private val repo = Repository(app)
 
     var sources by mutableStateOf<List<Source>>(emptyList())

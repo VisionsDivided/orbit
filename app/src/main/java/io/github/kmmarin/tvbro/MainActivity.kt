@@ -137,6 +137,7 @@ class MainActivity : ComponentActivity() {
                         Screen.VOD -> HomeScreen(m)
                         Screen.RECORDINGS -> RecordingsScreen(m)
                         Screen.EDITOR -> EditorScreen(m)
+                        Screen.ORBIT_LINK -> OrbitLinkScreen(m)
                         Screen.DETAIL -> DetailPage(m)
                         Screen.VODPLAY -> androidx.compose.runtime.key(m.vodPlay?.key) { VodPlayerScreen(m) }
                     }
