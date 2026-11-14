@@ -90,7 +90,7 @@ test('parity items in a real browser', { skip, timeout: 300000 }, async (t) => {
   const PIN = '2468';
   const typePin = async (p, pin) => { await p.waitForSelector('.pin-input', { timeout: 5000 }); await p.fill('.pin-input', pin); await p.keyboard.press('Enter'); await sleep(250); };
   await t.test('3. parental PIN: set in Settings, lock a channel from its menu; a new browser must give the PIN to play it', async () => {
-    await page.goto(B + '/#settings');
+    await page.goto(B + '/#settings:profiles');          // Settings ▸ Profiles holds the parental controls
     await page.waitForSelector('[data-k="ppin"]', { timeout: 15000 });
     await page.click('[data-k="ppin"]');
     await typePin(page, PIN); await typePin(page, PIN);
@@ -167,7 +167,7 @@ test('parity items in a real browser', { skip, timeout: 300000 }, async (t) => {
     const alpha = byName('Alpha News');
     await getJson(B + '/api/state/mylist', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'put', key: alpha.key, value: { key: alpha.key, kind: 'live', name: alpha.name } }) });
     await getJson(B + '/api/state/prefs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'put', key: 'timeFormat', value: '24' }) });
-    await page.goto(B + '/#settings');
+    await page.goto(B + '/#settings:about');             // Settings ▸ About holds backup & restore
     await page.waitForSelector('[data-k="backup"]', { timeout: 15000 });
     const [dl] = await Promise.all([page.waitForEvent('download'), page.click('[data-k="backup"]')]);
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tvbro-bk-')), 'backup.json');

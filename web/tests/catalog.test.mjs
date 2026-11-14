@@ -1,7 +1,7 @@
 // Copyright 2026 The Orbit authors. SPDX-License-Identifier: Apache-2.0
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeItem, normalizeRows, normalizeCollection, iptvRef, pathKind, normKind, ROUTES, getJson, configure, forgetMissing } from '../frontend/js/catalog.js';
+import { normalizeItem, normalizeRows, normalizeCollection, iptvRef, pathKind, normKind, ROUTES, getJson, configure, forgetMissing, tmdbProxy } from '../frontend/js/catalog.js';
 
 test('an Item is normalised (contract fields, other names tolerated)', () => {
   const it = normalizeItem({ key: 'm|p0|7', kind: 'movie', title: 'Ember Line', year: '2025', poster: '/img?a', backdrop: null, rating: 7.9,
@@ -63,4 +63,11 @@ test('401: missing in tvBro mode, signed out in Orbit mode', async () => {
   await assert.rejects(getJson('/v1/catalog/home', null, async () => res(500, { error: 'boom' })), /boom/);
   const ok = await getJson('/v1/catalog/home', null, async () => res(200, { rows: [] }));
   assert.deepEqual(ok, { ok: true, data: { rows: [] } });
+});
+
+test('TMDB artwork goes through the server proxy; anything else gives no image', () => {
+  assert.equal(tmdbProxy('https://image.tmdb.org/t/p/w342/abc_D-1.jpg'), '/v1/discover/image?p=%2Fw342%2Fabc_D-1.jpg');
+  assert.equal(tmdbProxy('https://image.tmdb.org/t/p/original/x.webp'), '/v1/discover/image?p=%2Foriginal%2Fx.webp');
+  for (const u of ['https://image.tmdb.org/t/p/w999/a.jpg', 'https://image.tmdb.org/t/p/w500/a.svg', 'http://image.tmdb.org/t/p/w500/a.jpg',
+    'https://image.tmdb.org/t/p/w500/../a.jpg', 'https://evil.example.com/t/p/w500/a.jpg', null]) assert.equal(tmdbProxy(u), '', String(u));
 });

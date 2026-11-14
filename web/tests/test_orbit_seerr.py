@@ -626,6 +626,9 @@ class Server(unittest.TestCase):
         code, _, j = self.req("GET", "/v1/discover/title?type=movie&tmdb=550", headers=auth)
         self.assertEqual((code, j["title"]), (200, "Requestable Film"))
         self.assertNotIn(KEY, json.dumps(self.req("GET", "/v1/discover/status", headers=auth)[2]))
+        # the TMDB image proxy is mounted, signed in only, and refuses anything but a size + file name
+        self.assertEqual(self.req("GET", "/v1/discover/image?p=/w500/a.jpg")[0], 401)
+        self.assertEqual(self.req("GET", "/v1/discover/image?p=/w500/a.svg", headers=auth)[0], 400)
         self.proc.terminate()
         self.proc.wait(10)
         self.logf.flush()

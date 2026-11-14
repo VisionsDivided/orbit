@@ -1028,7 +1028,8 @@ class App:
         self.v1 = V1.Api(self.orbit, playlists=self._device_playlists, stores=self.profiles.for_session,
                          streams=self._streams_status, media=self.media, device_view=self._device_view)
         # Orbit: Seerr discover and requests (orbit/discover.py), mounted into the /v1 route table
-        self.discover = ODISC.Discover(self.orbit, OSEERR.SeerrConfig(DATA_DIR))
+        self.discover = ODISC.Discover(self.orbit, OSEERR.SeerrConfig(DATA_DIR), fetch_image=_fetch_tmdb_image,
+                                       image_cache=self.images, sniff=_img_ctype)
         self.v1.routes.update(self.discover.routes())
         self.v1.routes.update(OSYNC.routes(self.profiles.for_session))   # /v1/sync: revision check, batches
         # Orbit: /v1/catalog (Home, Movies, Shows): IPTV VOD + the account's Plex / Jellyfin + the profile's state
@@ -3102,6 +3103,12 @@ class ImageCache:
                 total -= size
             except OSError:
                 pass
+
+
+def _fetch_tmdb_image(url: str) -> bytes:
+    """GET /v1/discover/image: one TMDB file (the URL was built from an allowlisted size + file name)."""
+    with NET.open_url(url, timeout=20, headers={"Accept": "image/*"}) as r:
+        return r.read(MAX_IMG_BYTES + 1)
 
 
 def _img_ctype(data: bytes):

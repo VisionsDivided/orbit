@@ -80,7 +80,6 @@ html.solid #scene .bgart { opacity: .35 !important; }
 #tabbar { display: none; }
 
 /* ---------------------------------------------------------------- focus (all screens) */
-.kbd .focusable:focus, .focusable:focus-visible { outline: none; }
 .card5.focusable, .btn5.focusable, .pill.focusable, .seg5 .focusable, .tab.focusable, .dd.focusable, .op-tile.focusable { border: 0; }
 .card5.focusable:focus, .card5.focusable:focus-visible, .pill.focusable:focus, .seg5 .focusable:focus, .tab.focusable:focus, .op-tile.focusable:focus { box-shadow: none; }
 .kbd .btn5:focus, .btn5:focus-visible, .kbd .pill:focus, .pill:focus-visible, .kbd .seg5 button:focus, .seg5 button:focus-visible,

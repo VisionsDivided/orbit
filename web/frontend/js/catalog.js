@@ -111,6 +111,13 @@ export function iptvRef(it) {
   return { kind, id: src === 'p0' ? raw : `${src}~${raw}` };
 }
 
+/** A TMDB artwork URL (Seerr titles) as the server's same-origin proxy: https://image.tmdb.org/t/p/w500/x.jpg ->
+ *  /v1/discover/image?p=/w500/x.jpg. Anything the proxy would refuse gives '' (no image). */
+export function tmdbProxy(u) {
+  const m = /^https:\/\/image\.tmdb\.org\/t\/p\/(w92|w154|w185|w300|w342|w500|w780|w1280|original)\/([A-Za-z0-9_-]{1,100}\.(?:jpg|jpeg|png|webp))$/.exec(String(u || ''));
+  return m ? '/v1/discover/image?p=' + encodeURIComponent('/' + m[1] + '/' + m[2]) : '';
+}
+
 // ---------------------------------------------------------------- requests
 let cfg = { headers: () => ({}), onUnauthorized: () => {}, accounts: () => true };
 /** headers(): extra request headers (the parental token); onUnauthorized(): the session ended;

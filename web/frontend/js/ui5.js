@@ -6,7 +6,7 @@
 
 import { h, fmtDur } from './util.js';
 import { api, getResume, isWatched, inMyList } from './api.js';
-import { iptvRef } from './catalog.js';
+import { iptvRef, tmdbProxy } from './catalog.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 /** An icon from the sprite in index.html. */
@@ -17,11 +17,11 @@ export function ic(name, cls) {
   return s;
 }
 /** Image URLs the page may load: the server's own proxies (signed /img, /v1/media/image) and data:.
- *  TMDB artwork (Discover) is passed through too; the page's CSP decides whether it loads. */
+ *  TMDB artwork (Discover) goes through the server's /v1/discover/image (the page's CSP allows only its own images). */
 export function imgUrl(u) {
   if (typeof u !== 'string' || !u) return '';
   if (u.startsWith('/img?') || u.startsWith('/v1/') || u.startsWith('data:')) return u;
-  if (u.startsWith('https://image.tmdb.org/')) return u;
+  if (u.startsWith('https://image.tmdb.org/')) return tmdbProxy(u);
   return api.img(u);
 }
 export const ratingText = (r) => { const n = parseFloat(r); return n ? (n > 10 ? (n / 10).toFixed(1) : n.toFixed(1)) : ''; };
