@@ -36,6 +36,29 @@ import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
 import io.github.kmmarin.tvbro.*
 import io.github.kmmarin.tvbro.data.Net
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.ui.text.font.FontWeight
+import io.github.kmmarin.tvbro.ui.live.HlsHintChip
+import io.github.kmmarin.tvbro.ui.live.LiveLogic
+import io.github.kmmarin.tvbro.ui.live.LiveStyle
+import io.github.kmmarin.tvbro.ui.live.O5Popup
+import io.github.kmmarin.tvbro.ui.live.PlayerInfo
+import io.github.kmmarin.tvbro.ui.live.PlayerInfoBlock
+import io.github.kmmarin.tvbro.ui.live.PlayerTop
+import io.github.kmmarin.tvbro.ui.live.QuickAction
+import io.github.kmmarin.tvbro.ui.live.playerScrims
+import io.github.kmmarin.tvbro.ui.orbit5.ColorKeyActions
+import io.github.kmmarin.tvbro.ui.orbit5.ColorKeyLegend
+import io.github.kmmarin.tvbro.ui.orbit5.KeyAction
+import io.github.kmmarin.tvbro.ui.orbit5.O5
+import io.github.kmmarin.tvbro.ui.orbit5.O5Shape
+import io.github.kmmarin.tvbro.ui.orbit5.OrbitCanvas
 
 @Composable
 fun PlayerScreen(m: AppModel) {
@@ -90,10 +113,10 @@ fun PlayerScreen(m: AppModel) {
     }
 
     var overlay by remember { mutableStateOf(true) }
-    var tech by remember { mutableStateOf("") }
     var bar by remember { mutableStateOf(false) }
+    var tech by remember { mutableStateOf("") }
     LaunchedEffect(ch.key) { m.applyDelayFor(ch.key) }
-    LaunchedEffect(overlay) { while (overlay) { tech = listOf(techInfo(exo), io.github.kmmarin.tvbro.orbit.PlayStats.live.snapshot()?.line().orEmpty()).filter { it.isNotEmpty() }.joinToString("\n"); delay(1000) } }
+    LaunchedEffect(overlay || bar) { while (overlay || bar) { tech = listOf(techInfo(exo), io.github.kmmarin.tvbro.orbit.PlayStats.live.snapshot()?.line().orEmpty()).filter { it.isNotEmpty() }.joinToString("\n"); delay(1000) } }
     // Orbit: a TS channel that stalls again and again in its first two minutes gets a small hint to try HLS (once per
     // channel, never a silent switch). It takes no focus: OK while it shows says yes, otherwise it goes away.
     var hlsHint by remember { mutableStateOf(false) }
@@ -131,6 +154,33 @@ fun PlayerScreen(m: AppModel) {
     val fr = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { fr.requestFocus() } }
     LaunchedEffect(recMenu, bar) { if (recMenu == null && !bar) runCatching { fr.requestFocus() } }
+    val (cur, next) = m.epg.nowNext(ch, now)
+    /** Record (green, R, the quick action): stop the running recording, or the record choices. */
+    val openRec: () -> Unit = {
+        val a = m.activeRec(ch)
+        recMenu = if (a != null) listOf("Stop recording" to { m.stopRec(a); recMenu = null })
+        else {
+            val c = m.epg.nowNext(ch, System.currentTimeMillis() / 1000).first
+            listOfNotNull(
+                "Record until stopped" to { m.recordNow(ch, 0); recMenu = null },
+                "Record 30 minutes" to { m.recordNow(ch, 30); recMenu = null },
+                "Record 1 hour" to { m.recordNow(ch, 60); recMenu = null },
+                "Record 2 hours" to { m.recordNow(ch, 120); recMenu = null },
+                c?.let { "Record until end of programme" to { m.recordNow(ch, 0, it.stop * 1000 + 60_000); recMenu = null } },
+            )
+        }
+    }
+    // Colour keys of the player overlay (spec section 9): Favourite, Record, Format TS / HLS (yellow also answers the
+    // "Try HLS?" hint), Options (the channel menu)
+    ColorKeyActions(
+        red = KeyAction("Favourite") { m.toggleFav(ch) },
+        green = KeyAction("Record") { openRec() },
+        yellow = KeyAction("Format: TS / HLS") { if (hlsHint) acceptHls() else io.github.kmmarin.tvbro.ui.live.cycleFormat(m, ch) },
+        blue = KeyAction("Options") { m.openChannelMenu(ch) },
+    )
+    val showInfo = overlay || bar
+    var clock by remember { mutableStateOf(hhmm(System.currentTimeMillis() / 1000)) }
+    LaunchedEffect(showInfo) { while (showInfo) { clock = hhmm(System.currentTimeMillis() / 1000); delay(5000) } }
 
     // Touch screens (no remote, maybe no Back button): a tap shows / hides the player bar, a swipe down leaves full
     // screen into the preview like Back (same animation, picture and sound go on). Remote keys are not affected.
@@ -148,28 +198,14 @@ fun PlayerScreen(m: AppModel) {
                 val code = e.nativeKeyEvent.keyCode
                 if (recMenu != null || bar) return@onPreviewKeyEvent false
                 when {
-                    e.key == Key.ProgramRed || e.key == Key.R -> {
-                        val a = m.activeRec(ch)
-                        recMenu = if (a != null) listOf("Stop recording" to { m.stopRec(a); recMenu = null })
-                        else {
-                            val cur = m.epg.nowNext(ch, now).first
-                            listOfNotNull(
-                                "Record until stopped" to { m.recordNow(ch, 0); recMenu = null },
-                                "Record 30 minutes" to { m.recordNow(ch, 30); recMenu = null },
-                                "Record 1 hour" to { m.recordNow(ch, 60); recMenu = null },
-                                "Record 2 hours" to { m.recordNow(ch, 120); recMenu = null },
-                                cur?.let { "Record until end of programme" to { m.recordNow(ch, 0, it.stop * 1000 + 60_000); recMenu = null } },
-                            )
-                        }
-                        true
-                    }
+                    e.key == Key.R -> { openRec(); true }
                     code in AKeyEvent.KEYCODE_0..AKeyEvent.KEYCODE_9 -> { if (digits.length < 4) digits += (code - AKeyEvent.KEYCODE_0); true }
                     code in AKeyEvent.KEYCODE_NUMPAD_0..AKeyEvent.KEYCODE_NUMPAD_9 -> { if (digits.length < 4) digits += (code - AKeyEvent.KEYCODE_NUMPAD_0); true }
                     e.key == Key.DirectionUp || e.key == Key.ChannelUp -> { m.zap(1); true }
                     e.key == Key.ChannelDown -> { m.zap(-1); true }
                     e.key == Key.DirectionDown || e.key == Key.Menu -> { bar = true; true }
                     e.key == Key.DirectionLeft -> { m.leavePlayer(); true }
-                    e.key == Key.DirectionRight -> { m.screen = Screen.GUIDE; true }
+                    e.key == Key.DirectionRight -> { GuideReturn.toList = false; m.screen = Screen.GUIDE; true }
                     e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter || e.key == Key.ButtonA -> {
                         if (hlsHint) acceptHls() else if (overlay) overlay = false else tick++
                         true
@@ -179,57 +215,70 @@ fun PlayerScreen(m: AppModel) {
                 }
             },
     ) {
-        if (bar) QuickBar(m, exo, m.livePv, true) { bar = false }
-        if (status.isNotEmpty()) {
-            Text(status, color = TextMain, fontSize = 18.sp,
-                modifier = Modifier.align(Alignment.TopEnd).padding(24.dp).background(Color(0xAA000000)).padding(10.dp))
-        }
-        if (hlsHint) {
-            Column(
-                Modifier.align(Alignment.TopCenter).padding(top = 24.dp).background(Color(0xDD0E1116)).padding(horizontal = 18.dp, vertical = 12.dp)
-                    .pointerInput(Unit) { detectTapGestures(onTap = { acceptHls() }) },
-            ) {
-                Text("This channel keeps buffering. Try HLS for it?", color = TextMain, fontSize = 18.sp)
-                Text("Press OK to play ${ch.name} as HLS from now on (Default / TS / HLS: channel options)", color = TextDim, fontSize = 14.sp)
+        OrbitCanvas {
+            Box(Modifier.fillMaxSize()) {
+                if (showInfo) {
+                    val live = m.catchup == null && cur != null
+                    val info = PlayerInfo(
+                        channel = ch.name, sub = "Channel ${ch.number} · ${m.groupLabel(ch.group).removeSuffix("  *")}", logo = ch.logo, clock = clock,
+                        title = m.catchup?.title ?: cur?.title ?: "No guide information",
+                        time = if (m.catchup != null) "Catch-up" else cur?.let { p ->
+                            listOfNotNull(hhmm(p.start) + " – " + hhmm(p.stop), io.github.kmmarin.tvbro.data.EpisodeNum.line(p.ep, p.sub)).joinToString(" · ")
+                        },
+                        live = m.catchup == null, catchup = m.catchup != null,
+                        progress = if (live) LiveLogic.progress(cur!!.start, cur.stop, now) else null,
+                        start = if (live) hhmm(cur!!.start) else null, end = if (live) hhmm(cur!!.stop) else null,
+                        next = if (m.catchup == null) next?.let { "Next · ${hhmm(it.start)} ${it.title}" } else null,
+                        tech = tech.ifEmpty { null }, rec = m.activeRec(ch) != null,
+                    )
+                    Box(Modifier.fillMaxSize().playerScrims())
+                    PlayerTop(info)
+                    PlayerInfoBlock(info, Modifier.padding(top = 612.dp))
+                }
+                if (hlsHint) HlsHintChip(Modifier.align(Alignment.TopEnd).padding(top = 618.dp, end = 96.dp)) { acceptHls() }
+                if (status.isNotEmpty()) {
+                    Text(status, color = O5.Text, fontSize = 22.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.align(Alignment.TopEnd).padding(top = if (showInfo) 230.dp else 60.dp, end = 96.dp)
+                            .background(O5.ScrimPanel, O5Shape.Pill).padding(horizontal = 22.dp, vertical = 10.dp))
+                }
+                if (digits.isNotEmpty()) {
+                    Text(digits, color = O5.Text, fontSize = 96.sp, fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.align(Alignment.TopStart).padding(start = 96.dp, top = 170.dp)
+                            .background(O5.ScrimPanel, RoundedCornerShape(20.dp)).padding(horizontal = 32.dp, vertical = 8.dp))
+                }
+                if (showInfo) ColorKeyLegend(Modifier.align(Alignment.BottomStart).padding(start = 96.dp, bottom = 28.dp),
+                    hints = if (bar) listOf("OK" to "Select", "BACK" to "Close") else listOf("DOWN" to "Options", "BACK" to "Channels"))
             }
         }
-        if (digits.isNotEmpty()) {
-            Text(digits, color = Accent, fontSize = 48.sp,
-                modifier = Modifier.align(Alignment.TopStart).padding(32.dp).background(Color(0xAA000000)).padding(12.dp))
+        if (bar) {
+            val fmt = m.channelFormat(ch.key)
+            val fav = ch.key in m.favourites
+            val recNow = m.activeRec(ch) != null
+            val extra = buildMap {
+                put("guide", QuickAction("Guide", icon = Icons.Filled.DateRange) { bar = false; GuideReturn.toList = false; m.screen = Screen.GUIDE })
+                put("fav", QuickAction("Favourite", icon = Icons.Filled.Star, tint = if (fav) O5.Rating else null, on = fav, value = if (fav) "in My list" else null) { m.toggleFav(ch) })
+                put("rec", QuickAction(if (recNow) "Stop rec" else "Record", glyph = "●", tint = LiveStyle.Rec, on = recNow) { bar = false; openRec() })
+                if (m.catchup != null) put("startover", QuickAction("Back to live", glyph = "LIVE") { bar = false; m.catchup = null })
+                else if (cur != null && io.github.kmmarin.tvbro.data.CatchupUrl.supports(ch, cur.start, now)) put("startover", QuickAction("Start over", icon = Icons.Filled.Refresh, value = cur.title) {
+                    val t = System.currentTimeMillis() / 1000
+                    val u = io.github.kmmarin.tvbro.data.CatchupUrl.build(ch, cur.start, cur.stop, t)
+                    if (u == null) m.toast("Catch-up not available for this programme") else { bar = false; m.catchup = CatchupPlay(u, cur.title) }
+                })
+                if (io.github.kmmarin.tvbro.data.LiveFormat.canHls(ch.url)) put("format", QuickAction("Format · " + LiveLogic.effectiveFormat(fmt, m.liveHls),
+                    glyph = LiveLogic.effectiveFormat(fmt, m.liveHls), tint = if (fmt != null) LiveStyle.FmtText else null, value = if (fmt == null) "default" else "this channel") {
+                    io.github.kmmarin.tvbro.ui.live.cycleFormat(m, ch)
+                })
+                put("channels", QuickAction("Channels", icon = Icons.AutoMirrored.Filled.List) { bar = false; m.leavePlayer() })
+                put("info", QuickAction("Info", icon = Icons.Filled.Info) { if (cur != null) m.progMenu = ch to cur else m.toast("No programme info") })
+            }
+            QuickBar(m, exo, m.livePv, true, extra) { bar = false }
         }
         recMenu?.let { rows ->
-            val mfr = remember { FocusRequester() }
-            LaunchedEffect(Unit) { delay(100); runCatching { mfr.requestFocus() } }
-            androidx.compose.foundation.lazy.LazyColumn(Modifier.align(Alignment.Center).width(420.dp).background(Color(0xEE0E1116)).padding(16.dp)) {
-                itemsIndexed(rows) { i, r ->
-                    Text(r.first, color = TextMain, fontSize = 18.sp,
-                        modifier = Modifier.fillMaxWidth().then(if (i == 0) Modifier.focusRequester(mfr) else Modifier).tvFocus { r.second() }.padding(10.dp))
-                }
-            }
-        }
-        if (overlay) {
-            val (cur, next) = m.epg.nowNext(ch, now)
-            Column(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0xDD0E1116)).padding(24.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Logo(ch.logo, ch.name, 56.dp)
-                    Spacer(Modifier.width(16.dp))
-                    Text("${ch.number}  ${ch.name}", color = TextMain, fontSize = 26.sp)
-                    m.catchup?.let { Text("   Catch-up: ${it.title}", color = Accent, fontSize = 18.sp) }
-                }
-                if (m.catchup == null) {
-                    Spacer(Modifier.height(10.dp))
-                    if (cur != null) {
-                        Text("Now  ${hhmm(cur.start)}-${hhmm(cur.stop)}  ${cur.title}", color = TextMain, fontSize = 18.sp)
-                        Box(Modifier.fillMaxWidth().padding(vertical = 6.dp).height(6.dp).background(Surface)) {
-                            val f = ((now - cur.start).toFloat() / (cur.stop - cur.start).coerceAtLeast(1)).coerceIn(0f, 1f)
-                            Box(Modifier.fillMaxWidth(f).height(6.dp).background(Accent))
-                        }
-                    } else Text("No guide information", color = TextDim, fontSize = 16.sp)
-                    Text(if (m.activeRec(ch) != null) "REC  (red: stop)" else "Red button: record", color = TextDim, fontSize = 13.sp)
-                    if (tech.isNotEmpty()) Text(tech, color = Accent, fontSize = 14.sp)
-                    if (next != null) Text("Next ${hhmm(next.start)}-${hhmm(next.stop)}  ${next.title}", color = TextDim, fontSize = 16.sp)
+            val first = remember { SafeFocus() }
+            LaunchedEffect(Unit) { delay(100); first.request() }
+            OrbitCanvas {
+                Box(Modifier.fillMaxSize().background(Color(0x99000000)), contentAlignment = Alignment.Center) {
+                    O5Popup("Record ${ch.name}", rows, first)
                 }
             }
         }
