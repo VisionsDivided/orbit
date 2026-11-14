@@ -26,6 +26,7 @@ class Call:
     sess: Optional[dict]                 # the gated session (account_id, profile_id, ...) or None
     body: dict = field(default_factory=dict)
     client: str = ""                     # client address, for sign-in throttling
+    query: dict = field(default_factory=dict)   # the query string of a GET, first value of each name
 
 
 @dataclass
