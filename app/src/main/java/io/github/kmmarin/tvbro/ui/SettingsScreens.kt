@@ -281,6 +281,7 @@ private fun LazyListScope.about() {
     head("About")
     note("tvBro ${io.github.kmmarin.tvbro.BuildConfig.VERSION_NAME} - open source, Apache-2.0. A player only: it ships no channels or content.")
     updateSection()
+    playbackStatsSection()   // Orbit: playback statistics (OrbitScreens.kt)
     item {
         var tick by remember { mutableIntStateOf(0) }
         SettingRow("Diagnostics (OK to refresh)", "last load counts and errors") { tick++ }

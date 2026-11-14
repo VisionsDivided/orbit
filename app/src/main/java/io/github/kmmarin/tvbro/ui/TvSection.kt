@@ -68,7 +68,7 @@ private fun Preview(m: AppModel, ch: Channel?, modifier: Modifier) {
         // and sound exactly as they are, no re-buffer
         if (m.liveKey == ch.key && m.liveUrl != null && exo.playbackState != androidx.media3.common.Player.STATE_IDLE) { exo.playWhenReady = true; return@LaunchedEffect }
         m.liveUrl = ch.url; m.liveKey = ch.key
-        liveLoad(exo, ch.url)
+        liveLoad(exo, ch.url, ch.name)
     }
     // a preview stream that fails (dropped connection, provider hiccup) tries again, like full screen does
     DisposableEffect(exo) {
@@ -92,7 +92,7 @@ private fun Preview(m: AppModel, ch: Channel?, modifier: Modifier) {
         delay(minOf(2000L * m.previewRetry, 15_000L))
         if (m.liveKey != null) return@LaunchedEffect // something else started a stream meanwhile
         m.liveUrl = ch.url; m.liveKey = ch.key
-        liveLoad(exo, ch.url)
+        liveLoad(exo, ch.url, ch.name)
     }
     Box(modifier.background(Color.Black).onGloballyPositioned { m.previewRect = it.boundsInRoot() }) {
         if (!m.previewOn) Text("Preview off", color = TextDim, modifier = Modifier.align(Alignment.Center))

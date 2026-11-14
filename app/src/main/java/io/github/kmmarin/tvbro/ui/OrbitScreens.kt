@@ -105,3 +105,29 @@ fun OrbitLinkScreen(m: AppModel) {
         }
     }
 }
+
+/** Settings ▸ About: playback statistics of recent streams (Phase 2: measure buffering before tuning), with export. */
+fun LazyListScope.playbackStatsSection() {
+    item {
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        var tick by remember { mutableIntStateOf(0) }
+        var saved by remember { mutableStateOf("") }
+        val sessions = remember(tick) { io.github.kmmarin.tvbro.orbit.PlayStats.sessions().takeLast(8).reversed() }
+        Column(Modifier.padding(vertical = 6.dp)) {
+            Text("Playback stats (start time, stalls, bitrate, reconnects)", color = TextDim, fontSize = 15.sp, modifier = Modifier.padding(bottom = 4.dp))
+            if (sessions.isEmpty()) Text("Nothing yet: watch a channel or a film for a while.", color = TextDim, fontSize = 13.sp)
+            for (s in sessions) {
+                Text("${hhmm(s.startedAt / 1000)}  ${s.label.ifEmpty { s.kind }}  (${s.durationMs / 60_000} min)", color = TextMain, fontSize = 13.sp)
+                Text(s.line(), color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(start = 12.dp, bottom = 2.dp))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 6.dp)) {
+                TvButton("Refresh") { tick++ }
+                TvButton("Export") {
+                    saved = runCatching { io.github.kmmarin.tvbro.orbit.PlayStats.export(ctx).name }.getOrElse { "export failed" }
+                }
+            }
+            if (saved.isNotEmpty()) Text("Saved $saved in the app's diag folder (names and numbers only, no addresses or logins)",
+                color = Ok, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+        }
+    }
+}

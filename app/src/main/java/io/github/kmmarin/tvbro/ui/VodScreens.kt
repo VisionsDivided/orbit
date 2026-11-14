@@ -157,6 +157,14 @@ fun VodPlayerScreen(m: AppModel) {
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
             .build()
     }
+    // Orbit playback stats for this film / episode (the session ends with the player screen)
+    DisposableEffect(exo, vp.key) {
+        val st = io.github.kmmarin.tvbro.orbit.PlayStats
+        val l = st.listener(st.vod)
+        exo.addAnalyticsListener(l)
+        st.keep(st.vod.begin(vp.key.hashCode(), "vod", vp.title))
+        onDispose { exo.removeAnalyticsListener(l); st.keep(st.vod.end()) }
+    }
     // in the background (Home, another app on top) the movie pauses; back in front it goes on
     val life = androidx.compose.ui.platform.LocalLifecycleOwner.current.lifecycle
     DisposableEffect(life) {
@@ -176,7 +184,7 @@ fun VodPlayerScreen(m: AppModel) {
     var pv by remember { mutableStateOf<PlayerView?>(null) }
     var bar by remember { mutableStateOf(false) }
     LaunchedEffect(vp.key) { m.applyDelayFor(vp.key) }
-    LaunchedEffect(overlay) { while (overlay) { tech = techInfo(exo); delay(1000) } }
+    LaunchedEffect(overlay) { while (overlay) { tech = listOf(techInfo(exo), io.github.kmmarin.tvbro.orbit.PlayStats.vod.snapshot()?.line().orEmpty()).filter { it.isNotEmpty() }.joinToString("\n"); delay(1000) } }
     var tick by remember { mutableIntStateOf(0) }
     var menu by remember { mutableStateOf<List<TrackRow>?>(null) }
     var status by remember { mutableStateOf("") }

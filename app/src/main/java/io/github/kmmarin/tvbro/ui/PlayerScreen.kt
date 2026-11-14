@@ -84,14 +84,14 @@ fun PlayerScreen(m: AppModel) {
         // already playing this channel (opened from the preview): keep going, no re-buffer
         if (a == 0 && m.liveUrl == url && exo.playbackState != Player.STATE_IDLE) { exo.playWhenReady = true; m.liveKey = ch.key; return@LaunchedEffect }
         m.liveUrl = url; m.liveKey = ch.key
-        liveLoad(exo, url)
+        liveLoad(exo, url, if (m.catchup != null) ch.name + " (catch-up)" else ch.name)
     }
 
     var overlay by remember { mutableStateOf(true) }
     var tech by remember { mutableStateOf("") }
     var bar by remember { mutableStateOf(false) }
     LaunchedEffect(ch.key) { m.applyDelayFor(ch.key) }
-    LaunchedEffect(overlay) { while (overlay) { tech = techInfo(exo); delay(1000) } }
+    LaunchedEffect(overlay) { while (overlay) { tech = listOf(techInfo(exo), io.github.kmmarin.tvbro.orbit.PlayStats.live.snapshot()?.line().orEmpty()).filter { it.isNotEmpty() }.joinToString("\n"); delay(1000) } }
     var tick by remember { mutableIntStateOf(0) }
     LaunchedEffect(ch.key, tick, m.catchup) { overlay = true; delay(5000); overlay = false }
 

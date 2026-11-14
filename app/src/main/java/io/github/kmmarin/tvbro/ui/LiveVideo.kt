@@ -72,7 +72,9 @@ private class Counting(private val d: androidx.media3.datasource.DataSource) : a
  * is stopped and its connection closed before the new one opens (zapping opened the next channel while the old
  * connection was still open, two at once for a moment). Waits at most 3 s for a connection that does not close.
  */
-suspend fun liveLoad(exo: ExoPlayer, url: String) {
+suspend fun liveLoad(exo: ExoPlayer, url: String, label: String = "") {
+    // Orbit playback stats: the same stream again is a reconnect, another one a new session (by URL hash, never the URL)
+    io.github.kmmarin.tvbro.orbit.PlayStats.run { keep(live.begin(url.hashCode(), "live", label)) }
     if (LiveConns.open > 0) {
         exo.stop()
         kotlinx.coroutines.withTimeoutOrNull(3000) { while (LiveConns.open > 0) kotlinx.coroutines.delay(20) }
@@ -101,7 +103,7 @@ fun rememberLiveExo(m: AppModel): ExoPlayer {
                         .setTargetBufferBytes(32 * 1024 * 1024)
                         .setPrioritizeTimeOverSizeThresholds(false)
                         .build(),
-                ).build().also { m.liveExo = it; LivePlayer.exo = it }
+                ).build().also { m.liveExo = it; LivePlayer.exo = it; it.addAnalyticsListener(io.github.kmmarin.tvbro.orbit.PlayStats.listener(io.github.kmmarin.tvbro.orbit.PlayStats.live)) }
         }
     }
 }
