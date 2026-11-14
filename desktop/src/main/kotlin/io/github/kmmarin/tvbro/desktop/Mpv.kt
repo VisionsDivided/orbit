@@ -282,7 +282,3 @@ class Mpv(private val lib: MpvLib, wid: Long, hwdec: String, recorder: Boolean =
         lib.mpv_terminate_destroy(hh)
     }
 }
-
-object Platform {
-    val windows = System.getProperty("os.name").lowercase().contains("win")
-}
