@@ -312,6 +312,39 @@ body[data-screen="live"] .ck, body[data-screen="settings"] .ck { display: none; 
 .srow5 .seg5 { font-size: max(14px, 2.2rem); background: rgba(10,12,22,.6); box-shadow: var(--chip-ring); padding: .5rem; }
 .srow5 .seg5 button { padding: 1rem 2.4rem; }
 .srow5 .seg5 button.on { background: #fff; color: #05060c; }
+/* Settings ▸ Requests (Seerr) and Sources ▸ Media servers (setupcards.js) */
+.setup5 .srow5 > .btn5, .setup5 .srow5 > select { flex: none; }
+.st5 { display: inline-flex; align-items: center; gap: .9rem; font-size: max(13px, 2rem); font-weight: 600; color: var(--muted); white-space: nowrap; }
+.st5::before { content: ""; width: 1.1rem; height: 1.1rem; min-width: 8px; min-height: 8px; border-radius: 50%; background: rgba(255,255,255,.35); }
+.st5.ok { color: #7ff0bb; } .st5.ok::before { background: #46dc96; box-shadow: 0 0 1rem rgba(70,220,150,.6); }
+.st5.warn { color: #ffd27a; } .st5.warn::before { background: #ffbe50; }
+.form5 { display: flex; flex-direction: column; gap: 1.6rem; margin: .4rem 0 1.6rem; }
+.srow5 .form5 { flex: 1 1 60rem; margin: 0; }
+.jf5 { align-items: flex-start; flex-wrap: wrap; }
+.jf5 > .srow-l { flex: 1 1 36rem; }
+.fld5-row { display: flex; gap: 1.6rem; flex-wrap: wrap; }
+.fld5 { display: flex; flex-direction: column; gap: .7rem; flex: 1 1 30rem; min-width: 0; font-size: max(12px, 1.9rem); font-weight: 600; color: var(--muted); }
+.in5 { all: unset; box-sizing: border-box; width: 100%; font-size: max(15px, 2.2rem); font-weight: 500; color: #fff; padding: 1.3rem 1.8rem; border-radius: 1.2rem;
+  background: rgba(10,12,22,.6); box-shadow: inset 0 0 0 1px rgba(255,255,255,.14); }
+.in5::placeholder { color: rgba(228,233,255,.4); }
+.in5:focus { box-shadow: 0 0 0 4px #fff; background: rgba(255,255,255,.1); }
+.in5:disabled { opacity: .5; }
+.btns5 { display: flex; gap: 1.2rem; flex-wrap: wrap; align-items: center; }
+.setup5 .btn5 { font-size: max(14px, 2.2rem); padding: 1.2rem 2.4rem; }
+.setup5 .btn5[disabled] { opacity: .45; cursor: default; }
+.res5 { font-size: max(13px, 2rem); font-weight: 600; padding: 1.2rem 1.8rem; border-radius: 1.2rem; background: rgba(255,255,255,.07); margin-bottom: 1.2rem; }
+.res5.ok { background: rgba(70,220,150,.16); color: #7ff0bb; box-shadow: inset 0 0 0 2px rgba(70,220,150,.5); }
+.res5.warn { background: rgba(255,190,80,.16); color: #ffd27a; box-shadow: inset 0 0 0 2px rgba(255,190,80,.5); }
+.sub5-h { font-size: max(12px, 2rem); font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin: 2.4rem 0 .8rem; }
+.map5 .hint { margin-bottom: 1.4rem; }
+.setup5 select { max-width: 100%; }
+.code5 { display: flex; align-items: center; gap: 3rem; flex-wrap: wrap; padding: 2.4rem 2.8rem; border-radius: 1.6rem; margin-bottom: 1.2rem;
+  background: linear-gradient(90deg, rgba(47,211,255,.12), rgba(138,92,255,.16)); box-shadow: inset 0 0 0 1px rgba(170,150,255,.45); }
+.code5-l { flex: 1 1 50rem; min-width: 0; }
+.code5 .sub5-h { margin-top: 0; }
+.code5 p { margin: 0 0 1.4rem; font-size: max(14px, 2.2rem); }
+.code5-code { font-size: max(32px, 6.4rem); font-weight: 800; letter-spacing: .18em; font-variant-numeric: tabular-nums; line-height: 1.1; margin-bottom: .8rem; }
+.code5 small { font-size: max(12px, 1.9rem); color: var(--muted); }
 .prof5-pv { flex: 0 1 50rem; }
 .pv5-h { font-size: max(12px, 2rem); font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: 1.4rem; }
 .pv5 { position: relative; height: 19rem; border-radius: 1.6rem; background: rgba(5,6,12,.7); box-shadow: inset 0 0 0 2px rgba(255,255,255,.12); overflow: hidden; margin-bottom: 2rem; }
@@ -511,6 +544,15 @@ body[data-screen="live"] .ck, body[data-screen="settings"] .ck { display: none; 
   .set5 .set-body { margin: 0 12px; }
   .srow5 { padding: 14px 16px; gap: 12px; flex-wrap: wrap; font-size: 15px; } .srow5 small { font-size: 12px; }
   .prof5-pv { display: none; }
+  .setup5 .srow5 .srow-l { flex: 1 1 100%; }
+  .setup5 .btn5 { font-size: 14px; padding: 10px 16px; }
+  .setup5 .btns5 .btn5 { flex: 1 1 auto; }
+  .st5 { white-space: normal; font-size: 13px; }
+  .setup5 .srow5 > .st5 { flex: 1 1 100%; }
+  .fld5 { flex-basis: 100%; font-size: 12px; } .in5 { font-size: 16px; padding: 11px 14px; border-radius: 10px; }
+  .res5 { font-size: 13px; padding: 10px 12px; } .sub5-h { font-size: 12px; margin-top: 18px; }
+  .code5 { padding: 16px; gap: 14px; } .code5 p { font-size: 14px; } .code5-code { font-size: 34px; } .code5 .btns5 { flex: 1 1 100%; }
+  .setup5 .srow5 > select { flex: 1 1 100%; }
   /* older screens */
   .screen:not(.screen5) { padding: calc(var(--tbh) + 8px) 12px 110px; }
   .screen:not(.screen5) > h1 { font-size: 24px; }

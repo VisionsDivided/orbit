@@ -10,9 +10,8 @@ import { prefs, setPref } from './prefs.js';
 import { storageDialog } from './recstore.js';
 import { parentalInfo, changePin, lockManager } from './parental.js';
 import { passwordDialog } from './signin.js';
-import { orbitMode, orbitMe, orbitSettingsCard, showProfilePicker, formDialog } from './orbit.js';
-import { getJson } from './catalog.js';
-import { apiReq } from './api.js';
+import { orbitMode, orbitMe, orbitSettingsCard, showProfilePicker } from './orbit.js';
+import { requestsSetupCard, sourcesSetupCard } from './setupcards.js';
 import { uiLoad, uiSave } from './uistate.js';
 import { plainScene } from './backdrop.js';
 
@@ -243,7 +242,7 @@ export function settingsScreen(main, nav, ctx, arg) {
       role === 'admin' ? h('div', { class: 'set-actions' },
         h('button', { class: 'btn secondary focusable', onclick: async () => { if (confirm('Remove every playlist from the server? Every device loses the provider until it is set up again.')) { try { await withPin(() => api.signout()); ctx.setSignedIn(false); alive = false; settingsScreen(main, nav, ctx); } catch (e) { toast(e.message); } } } }, 'Remove all playlists (server)')) : null,
       h('div', { class: 'hint' }, 'The provider login stays on the server, encrypted; it is never sent to a browser.'));
-    kids.push(sess);
+    kids.push(mediaCard.el, sess);
     kids.push(orbitCard);
     // Security: this device's sign-in, the admin / viewer passwords, sources on the local network
     // (Orbit mode: accounts replace the shared admin / viewer passwords, so those rows are hidden)
@@ -301,7 +300,7 @@ export function settingsScreen(main, nav, ctx, arg) {
       !shared ? h('div', { class: 'hint' }, 'Every device signs in with an account (see Accounts above). The server never fetches addresses on your own network (router, NAS, hypervisor) unless you allow it here; loopback and link-local addresses are always refused.') : null,
       shared && h('div', { class: 'hint' }, 'With a password required, every device signs in once: the admin password changes playlists, settings, storage and restores; the viewer password (optional) only watches. Turn it on when the server can be reached from beyond your own trusted home network. Wrong passwords are slowed down. The server never fetches addresses on your own network (router, NAS, hypervisor) unless you allow it here, e.g. for a tvheadend box; loopback and link-local addresses are always refused.')));
     kids.unshift(profilesCard());
-    kids.push(liveTvCard(), requestsCard, aboutCard());
+    kids.push(liveTvCard(), requestsCard.el, aboutCard());
     body.replaceChildren(...kids.flat().filter(Boolean));
     applyCat();
     if (focusKey) { const f = body.querySelector(`[data-k="${focusKey}"]`); if (f) f.focus(); }
@@ -396,43 +395,8 @@ export function settingsScreen(main, nav, ctx, arg) {
     return h('section', { class: 'card glass', 'data-cat': 'about' }, h('div', { class: 'card-h' }, h('h3', {}, 'About')),
       row('App', 'Orbit for the web'), row('Server mode', orbitMode() ? 'Orbit accounts' : 'Shared household (no accounts)'));
   }
-  /** Requests: the household's Seerr (Discover). Owners and admins connect it here. */
-  const requestsCard = h('section', { class: 'card glass', 'data-cat': 'requests' }, h('div', { class: 'card-h' }, h('h3', {}, 'Requests')), h('div', { class: 'hint' }, 'Loading…'));
-  async function drawRequests() {
-    const kids = [h('div', { class: 'card-h' }, h('h3', {}, 'Requests'))];
-    if (!orbitMode()) { kids.push(h('div', { class: 'hint' }, 'Discover and requests (Seerr) need Orbit accounts: set them up under Profiles ▸ Accounts.')); requestsCard.replaceChildren(...kids); return; }
-    let st = null;
-    try { const r = await getJson('/v1/discover/status', null); st = r.ok ? r.data : null; } catch {}
-    const me = orbitMe(), admin = me && me.account && me.account.role !== 'member';
-    kids.push(row('Seerr', st ? (st.configured ? (st.reachable === false ? 'Connected, but it cannot be reached now' : 'Connected' + (st.version ? ' · ' + st.version : '')) : 'Not connected') : 'Unknown'));
-    if (st && st.configured) kids.push(row('Your Seerr user', st.linked ? 'Linked: you can request' : 'Not linked: ask the owner to link it'));
-    if (admin) {
-      kids.push(h('div', { class: 'set-actions' },
-        h('button', { class: 'btn secondary focusable', 'data-k': 'seerr-set', onclick: async () => {
-          const v = await formDialog('Connect Seerr', [
-            { name: 'baseUrl', label: 'Seerr address (http://host:5055)', value: (st && st.baseUrl) || '' },
-            { name: 'apiKey', label: st && st.keySet ? 'API key (leave empty to keep the saved one)' : 'API key (Seerr ▸ Settings ▸ General)', type: 'password' },
-          ], 'The server keeps the key encrypted; browsers never see it.', 'Connect', (x) => (x.baseUrl.trim() ? null : 'Enter the address'));
-          if (!v) return;
-          const body = { baseUrl: v.baseUrl.trim() }; if (v.apiKey) body.apiKey = v.apiKey;
-          try { await apiReq('/v1/discover/settings', { method: 'POST', body: JSON.stringify(body) }); toast('Seerr connected'); } catch (e) { toast('Not connected: ' + e.message); }
-          drawRequests();
-        } }, st && st.configured ? 'Change…' : 'Connect Seerr…'),
-        st && st.configured ? h('button', { class: 'btn secondary focusable', 'data-k': 'seerr-map', onclick: async () => {
-          try { const r = await apiReq('/v1/discover/map', { method: 'POST', body: JSON.stringify({ auto: true }) }); toast(`${(r.linked || []).length} account(s) linked`); } catch (e) { toast(e.message); }
-          drawRequests();
-        } }, 'Link accounts automatically') : null,
-        st && st.configured ? h('button', { class: 'btn secondary focusable', 'data-k': 'seerr-rm', onclick: async () => {
-          if (!confirm('Disconnect Seerr? Discover and requests stop working until it is connected again.')) return;
-          try { await apiReq('/v1/discover/settings', { method: 'POST', body: JSON.stringify({ remove: true }) }); toast('Seerr disconnected'); } catch (e) { toast(e.message); }
-          drawRequests();
-        } }, 'Disconnect') : null));
-    }
-    kids.push(h('div', { class: 'hint' }, 'Discover shows what is trending and lets each person request films and shows as their own Seerr user, so Seerr\'s permissions and quotas apply.'));
-    requestsCard.replaceChildren(...kids);
-    applyCat();
-  }
-  drawRequests();
+  /** Requests (Seerr) and Sources ▸ Media servers (Plex, Jellyfin): setupcards.js. Kept across redraws. */
+  const requestsCard = requestsSetupCard(), mediaCard = sourcesSetupCard();
 
   return {
     onKey(e) {
@@ -447,7 +411,7 @@ export function settingsScreen(main, nav, ctx, arg) {
       return false;
     },
     focusIn() { const f = subRow.querySelector('.pill.on') || scr.querySelector('.focusable'); if (f) f.focus(); },
-    destroy() { alive = false; clearTimeout(timer); },
+    destroy() { alive = false; clearTimeout(timer); mediaCard.destroy(); },
   };
 }
 

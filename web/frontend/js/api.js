@@ -94,7 +94,7 @@ async function req(path, opts = {}) {
   if (r.status === 401) { let j = {}; try { j = await r.json(); } catch {} signedOut(j); const e = new Error('sign in first'); e.status = 401; throw e; }
   if (r.status === 423) { const e = new Error('locked: the parental PIN is needed'); e.locked = true; e.status = 423; throw e; }
   if (r.status === 403) { let m = 'forbidden'; try { m = (await r.json()).error || m; } catch {} const e = new Error(m); e.status = 403; throw e; }
-  if (!r.ok) { let m = 'HTTP ' + r.status; try { m = (await r.json()).error || m; } catch {} throw new Error(m); }
+  if (!r.ok) { let m = 'HTTP ' + r.status; try { m = (await r.json()).error || m; } catch {} const e = new Error(m); e.status = r.status; throw e; }
   return r.json();
 }
 /** Sign-in endpoints (no session yet): JSON + X-TvBro, so no other site can post them. */
