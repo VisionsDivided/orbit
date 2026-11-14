@@ -70,6 +70,8 @@ test('focus navigation, guide window, preview and full screen in a real browser'
     assert.ok(i >= 0, 'avatar menu has ' + label);
     await key('ArrowDown', i); await key('Enter'); await sleep(600);
   };
+  /** Up to the guide's first row (one more Up would go to the group tabs above it). */
+  const toRow0 = async () => { for (let i = 0; i < 20; i++) { const s = await tv(); if (s.row === 0 && (s.zone === 'label' || s.zone === 'grid')) return; await key('ArrowUp'); } };
   const assertFocus = async (msg) => { const f = await focusVisible(); assert.ok(f === 'dom' || f === 'guide', `${msg}: focus not visible (${f})`); };
 
   // the guide is there with programmes
@@ -98,20 +100,25 @@ test('focus navigation, guide window, preview and full screen in a real browser'
     await page.click('.ruler-btns .rb:first-child'); s = await tv(); assert.equal(s.winStart, Math.floor(now / 1800) * 1800);
   });
 
-  await t.test('2. Left: channel name > groups > top bar; Down comes back the same way, focus restored', async () => {
+  await t.test('2. channel name > group tabs > sub-menu row > top bar; Down comes back the same way, focus restored', async () => {
     let s = await tv(); const row = s.row;
     await key('ArrowLeft'); s = await tv(); assert.equal(s.zone, 'groups'); await assertFocus('groups');
     const sel = await page.evaluate(() => document.querySelector('.gitem.kf').classList.contains('sel'));
-    assert.ok(sel, 'entering the groups column focuses the selected group');
-    await key('ArrowLeft'); let a = await active(); assert.equal(a.screen, 'live', 'Left from groups goes to the top bar (Live TV)'); await assertFocus('top bar');
+    assert.ok(sel, 'entering the group tabs focuses the selected group');
+    await key('ArrowUp'); s = await tv(); assert.equal(s.zone, 'sub', 'Up from the tabs: the sub-menu row (Channels · Guide · Recordings · My list)');
+    assert.equal(await page.evaluate(() => document.querySelectorAll('.tv-sub .pill.kf').length), 1, 'one sub-menu item marked');
+    await key('ArrowUp'); let a = await active(); assert.equal(a.screen, 'live', 'Up from the sub-menu row goes to the top bar (Live TV)'); await assertFocus('top bar');
     await key('ArrowLeft'); a = await active(); assert.equal(a.screen, 'series', 'Left in the top bar moves along it');
     await key('ArrowRight'); a = await active(); assert.equal(a.screen, 'live', 'and Right back (the screen is not changed by moving)');
     assert.equal(await page.evaluate(() => location.hash), '#live');
-    await key('ArrowDown'); s = await tv(); assert.equal(s.zone, 'groups', 'Down from the top bar returns to the groups column');
-    await key('ArrowRight'); s = await tv(); assert.equal(s.zone, 'label'); assert.equal(s.row, row, 'back on the same channel row');
+    await key('ArrowDown'); s = await tv(); assert.equal(s.zone, 'groups', 'Down from the top bar returns to the group tabs');
+    await key('ArrowDown'); s = await tv(); assert.equal(s.zone, 'label'); assert.equal(s.row, row, 'Down from the tabs: the same channel row');
     await key('ArrowRight'); s = await tv(); assert.equal(s.zone, 'grid');
     // Up / Down at the ends do not trap or jump
-    await key('ArrowUp', 12); s = await tv(); assert.equal(s.row, 0); await assertFocus('top row');
+    await toRow0(); s = await tv(); assert.equal(s.row, 0); await assertFocus('top row');
+    await key('ArrowUp'); s = await tv(); assert.equal(s.zone, 'groups', 'Up from the first row: the group tabs');
+    await key('ArrowDown'); s = await tv(); assert.equal(s.row, 0, 'and back down to the first row');
+    await key('ArrowRight');
     await key('ArrowDown', 3); s = await tv(); assert.equal(s.row, 3);
   });
 
@@ -172,7 +179,7 @@ test('focus navigation, guide window, preview and full screen in a real browser'
   });
 
   await t.test('5. menus are the topmost layer; catch-up is reached from the channel menu', async () => {
-    await key('ArrowUp', 12);                       // Alpha News (catch-up)
+    await toRow0();                                 // Alpha News (catch-up)
     const before = await tv();
     await key('m');
     assert.ok(await page.$('.modal-back'), 'menu open'); await assertFocus('menu');
@@ -276,7 +283,13 @@ test('focus navigation, guide window, preview and full screen in a real browser'
       await p2.waitForFunction(() => document.querySelectorAll('.g-blk[data-s]').length > 8, null, { timeout: 30000 });
       const st = () => p2.evaluate(() => document.querySelector('.tv2').tvState());
       const press = async (k, n = 1) => { for (let i = 0; i < n; i++) { await p2.keyboard.press(k); await p2.clock.runFor(80); } };
-      await press('ArrowRight'); await press('ArrowRight', 10);
+      // the guide comes back where this browser left it (maybe on the group tabs): into the guide first
+      // (on the tabs, Down goes to the channel name; one Right fewer then, as Right on the old groups list did that step)
+      let down = 0;
+      for (; down < 3 && !['label', 'grid'].includes((await st()).zone); down++) await press('ArrowDown');
+      if (!down) await press('ArrowRight');
+      await press('ArrowRight', 10);
+      await p2.clock.runFor(200); await sleep(1500);   // the guide pages the moves asked for arrive (real network time)
       const before = await st(), t0 = await p2.evaluate(() => Math.floor(Date.now() / 1000));
       assert.equal(before.zone, 'grid');
       assert.ok(before.winStart > Math.floor(t0 / 1800) * 1800, 'the window was moved ahead of now (not just following the clock)');

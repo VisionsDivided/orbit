@@ -209,6 +209,9 @@ document.addEventListener('error', (e) => { const t = e.target; if (t && t.tagNa
   const sess = await ensureSignedIn();          // this device's session (sign-in page otherwise)
   if (!sess) return;
   await orbitLoad();                            // Orbit: accounts mode and who is watching
+  // signed in to an account but no profile on this session (a fresh sign-in, or its profile is gone):
+  // "Who's watching?" first; picking one reloads the page with that profile
+  if (orbitMode() && orbitMe() && !orbitMe().profile) { showProfilePicker(orbitMe(), { force: true }); return; }
   addNavChip();
   configureCatalog({
     headers: () => { const t = apiMod.parentalToken(); return t ? { 'X-Parental': t } : {}; },

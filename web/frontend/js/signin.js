@@ -5,7 +5,7 @@
 // viewer password (watch only). The session is an HttpOnly cookie; nothing is kept in the page.
 import { api } from './api.js';
 import { h } from './util.js';
-import { orbitLoad, showAccountSignIn } from './orbit.js';
+import { orbitLoad, showAccountSignIn, showProfilePicker } from './orbit.js';
 import { forgetAccountHere } from './signout.js';
 
 let shown = false;
@@ -15,7 +15,14 @@ export async function showSignIn() {
   if (shown) return;
   shown = true;
   // Orbit: a server with accounts asks for a username and password instead of the shared password
-  const { status } = await orbitLoad();
+  const { status, me } = await orbitLoad();
+  if (status && status.accounts && me) {
+    // still signed in to an account (a profile route refused this session): no sign-in page. Without a
+    // profile, "Who's watching?" picks one; with one, nothing to do here.
+    shown = false;
+    if (!me.profile) showProfilePicker(me, { force: true });
+    return;
+  }
   // (signed out here or from another device: what this browser cached for the last account goes first)
   if (status && status.accounts) { await forgetAccountHere(); showAccountSignIn(); return; }
   const pw = h('input', { type: 'password', class: 'focusable signin-input', autocomplete: 'current-password', 'aria-label': 'Password', maxlength: '200' });
@@ -77,7 +84,7 @@ export async function ensureSignedIn() {
 
 // a 401 later on: sign in (password required), or the session was dropped: open the page again (once)
 window.addEventListener('tvbro-signin', (e) => {
-  if (e.detail === 'login') { showSignIn(); return; }
+  if (e.detail === 'login' || e.detail === 'profile') { showSignIn(); return; }
   let last = 0; try { last = +sessionStorage.getItem('tvbro.reload') || 0; } catch {}
   if (Date.now() - last > 15000) { try { sessionStorage.setItem('tvbro.reload', String(Date.now())); } catch {} location.reload(); }
 });

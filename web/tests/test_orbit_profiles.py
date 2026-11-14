@@ -5,6 +5,7 @@ and backups belong to one profile; the household's data so far goes to the owner
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -204,6 +205,29 @@ class Server(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.data, "profiles", kids["id"])))
         self.assertEqual(self.as_(alex_tv, "GET", "/v1/me")[2]["profile"]["id"], main_id)
         self.assertEqual(self.mylist(alex_tv), ["p0|ch1"])
+
+    def test_session_without_a_valid_profile_is_told_so(self):
+        """A session whose profile is no longer there (stale data): /v1/me says profile null, the profile routes answer
+        409 with auth "profile" (the page then shows "Who's watching?"), never a 500; selecting a profile fixes it."""
+        tok = os.path.join(self.data, "orbit-setup-token")
+        if os.path.exists(tok):
+            with open(tok, encoding="utf-8") as f:
+                self.sign_in("/v1/setup", {"token": f.read(), "username": "alex", "password": "correct horse 1"})
+        who = self.sign_in("/v1/auth/login", {"username": "alex", "password": "correct horse 1", "device": "stale"})
+        con = sqlite3.connect(os.path.join(self.data, "orbit.db"))
+        con.execute("UPDATE account_sessions SET profile_id='gone' WHERE device='stale'")
+        con.commit()
+        con.close()
+        time.sleep(5.5)                             # past the server's short per-session cache
+        me = self.as_(who, "GET", "/v1/me")[2]
+        self.assertIsNone(me["profile"])
+        code, _, j = self.as_(who, "GET", "/api/state")
+        self.assertEqual((code, j.get("auth")), (409, "profile"), j)
+        code, _, j = self.as_(who, "POST", "/api/state/mylist", {"key": "p0|x", "value": {"key": "p0|x", "kind": "live"}})
+        self.assertEqual((code, j.get("auth")), (409, "profile"), j)
+        self.assertEqual(self.as_(who, "POST", "/v1/profiles/select", {"id": me["profiles"][0]["id"]})[0], 200)
+        self.assertEqual(self.as_(who, "GET", "/v1/me")[2]["profile"]["id"], me["profiles"][0]["id"])
+        self.assertEqual(self.as_(who, "GET", "/api/state")[0], 200)
 
 
 if __name__ == "__main__":
