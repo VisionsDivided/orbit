@@ -28,6 +28,8 @@ LOG = logging.getLogger("orbit.accounts")
 
 USERNAME = re.compile(r"^[A-Za-z0-9._-]{3,32}$")
 MAX_PROFILES = 8
+MAX_SESSIONS_PER_ACCOUNT = 20          # one account can never push the household's other sessions out
+GATE_CACHE_SECS = 5                    # the per-request account check is cached briefly (cleared on every change)
 SEEN_EVERY = 300                       # write last_seen at most every 5 minutes per session
 # account role -> the server session role that sets what the existing /api routes allow
 SESSION_ROLE = {"owner": "admin", "admin": "admin", "member": "viewer"}
@@ -63,7 +65,9 @@ class Accounts:
         self.clock = clock
         self.db = Database(os.path.join(data_dir, "orbit.db"))
         self.token_path = os.path.join(data_dir, "orbit-setup-token")
-        self.throttle = Throttle(clock)
+        self.throttle = Throttle(clock)          # wrong passwords per client address
+        self.user_throttle = Throttle(clock)     # and per username (a success elsewhere never resets it)
+        self._gate_cache: dict = {}
         # set by the app (orbit/profilestate.py): the owner's first profile at setup, a deleted profile
         self.on_setup: Callable[[str], None] = lambda pid: None
         self.on_profile_deleted: Callable[[str], None] = lambda pid: None
@@ -111,31 +115,40 @@ class Accounts:
             self._remove_token()
             # from now on every device must sign in; tvBro's shared password is replaced by an unknown one
             self.auth.set_required(True, secrets.token_urlsafe(32))
+            with self.auth._lock:                # tvBro's own admin / viewer sessions end too, not only open ones
+                self.auth.sessions.clear()
+                self.auth._save_sessions()
         LOG.warning("Orbit owner account created; signed-out sessions from before have ended")
         return self._issue(acc, device)
 
     # ---- sign in / out ----
     def login(self, username, password, client: str, device: str = "") -> str:
+        key = username.strip().lower() if isinstance(username, str) else ""
         try:
             self.throttle.check(client)
+            if key:
+                self.user_throttle.check("u:" + key)
         except Wait as e:
             raise ApiError(429, "too many wrong passwords", e.retry_after)
-        key = username.strip().lower() if isinstance(username, str) else ""
         row = self.db.one("SELECT id, username, display_name, role, pw_hash, disabled, created FROM accounts "
                           "WHERE username_key=?", (key,)) if key else None
         pw = password if isinstance(password, str) and len(password) <= MAX_LEN else ""
         ok = verify_password(pw, row[4] if row else self._dummy) and row is not None and not row[5]
         if not ok:
             self.throttle.fail(client)
+            if key:
+                self.user_throttle.fail("u:" + key)
             raise ApiError(403, "wrong username or password")
         self.throttle.ok(client)
+        self.user_throttle.ok("u:" + key)
         self._prune()
         return self._issue(self._account(row), device)
 
     def _issue(self, acc: dict, device: str, profile_id: Optional[str] = None, kind: str = "web") -> str:
         """A new account session (profile_id: one of the account's profiles, else its first;
         kind: 'web' for a browser sign-in, 'tv' for a device linked with a pairing code)."""
-        sid = self.auth.issue_session(SESSION_ROLE[acc["role"]])
+        # a linked TV only watches and syncs: never the server's admin role, whoever linked it
+        sid = self.auth.issue_session("viewer" if kind == "tv" else SESSION_ROLE[acc["role"]])
         h = self.auth._h(sid)
         first = (profile_id,) if profile_id else \
             self.db.one("SELECT id FROM profiles WHERE account_id=? ORDER BY created, id LIMIT 1", (acc["id"],))
@@ -144,18 +157,30 @@ class Accounts:
         self.db.run("INSERT INTO account_sessions(sess_hash, id, account_id, profile_id, device, created, last_seen, kind) "
                     "VALUES (?,?,?,?,?,?,?,?)", (h, _new_id(), acc["id"], first[0] if first else None, dev, now, now,
                                                  "tv" if kind == "tv" else "web"))
+        old = self.db.q("SELECT sess_hash FROM account_sessions WHERE account_id=? ORDER BY last_seen DESC, created DESC "
+                        "LIMIT -1 OFFSET ?", (acc["id"], MAX_SESSIONS_PER_ACCOUNT))
+        for (oh,) in old:                       # this account's oldest beyond the cap, never anyone else's
+            self._end(oh)
         return sid
 
+    def _end(self, h: str):
+        self.db.run("DELETE FROM account_sessions WHERE sess_hash=?", (h,))
+        self.auth.logout(h)
+        self._gate_cache.clear()
+
     def logout(self, sess: dict):
-        self.db.run("DELETE FROM account_sessions WHERE sess_hash=?", (sess["h"],))
-        self.auth.logout(sess["h"])
+        self._end(sess["h"])
 
     def _prune(self):
         """Forget links to sessions the server no longer has (expired or evicted)."""
         live = set(self.auth.sessions)
-        for (h,) in self.db.q("SELECT sess_hash FROM account_sessions"):
-            if h not in live:
-                self.db.run("DELETE FROM account_sessions WHERE sess_hash=?", (h,))
+        gone = [(h,) for (h,) in self.db.q("SELECT sess_hash FROM account_sessions") if h not in live]
+        if gone:
+            with self.db.lock:
+                self.db.db.execute("BEGIN")
+                self.db.db.executemany("DELETE FROM account_sessions WHERE sess_hash=?", gone)
+                self.db.db.execute("COMMIT")
+            self._gate_cache.clear()
 
     # ---- the gate every request passes ----
     def gate(self, sess: Optional[dict]) -> Optional[dict]:
@@ -163,6 +188,18 @@ class Accounts:
         ``profile_id`` and ``account_role`` added, or None when it belongs to no (enabled) account."""
         if not self._enabled or not sess:
             return sess
+        now = self.clock()
+        hit = self._gate_cache.get(sess["h"])
+        if hit and hit[0] > now:
+            return None if hit[1] is None else {**sess, **hit[1]}
+        out = self._gate_db(sess)
+        if len(self._gate_cache) > 2000:
+            self._gate_cache.clear()
+        self._gate_cache[sess["h"]] = (now + GATE_CACHE_SECS, None if out is None else
+                                       {k: out[k] for k in ("account_id", "profile_id", "account_role", "session_kind")})
+        return out
+
+    def _gate_db(self, sess: dict) -> Optional[dict]:
         row = self.db.one("SELECT s.account_id, s.profile_id, s.last_seen, a.role, a.disabled, s.kind FROM account_sessions s "
                           "JOIN accounts a ON a.id = s.account_id WHERE s.sess_hash=?", (sess["h"],))
         if row is None:
@@ -227,6 +264,7 @@ class Accounts:
         self._own_profile(sess["account_id"], pid)
         self.db.run("UPDATE account_sessions SET profile_id=? WHERE sess_hash=? AND account_id=?",
                     (pid, sess["h"], sess["account_id"]))
+        self._gate_cache.clear()
         return {**sess, "profile_id": pid}
 
     def delete_profile(self, account_id: str, pid):
@@ -235,6 +273,7 @@ class Accounts:
             if self.db.one("SELECT COUNT(*) FROM profiles WHERE account_id=?", (account_id,))[0] <= 1:
                 raise ApiError(409, "an account keeps at least one profile")
             self.db.run("DELETE FROM profiles WHERE id=? AND account_id=?", (pid, account_id))
+        self._gate_cache.clear()
         self.on_profile_deleted(pid)
 
     # ---- sessions (own account) ----
@@ -249,8 +288,7 @@ class Accounts:
                           (sid_pub if isinstance(sid_pub, str) else "", sess["account_id"]))
         if row is None:
             raise ApiError(404, "no such session")
-        self.db.run("DELETE FROM account_sessions WHERE sess_hash=?", (row[0],))
-        self.auth.logout(row[0])
+        self._end(row[0])
 
     # ---- accounts (owner / admin) ----
     def _manager(self, sess: dict):
@@ -300,6 +338,37 @@ class Accounts:
         self.db.run("UPDATE accounts SET disabled=? WHERE id=?", (1 if on else 0, target["id"]))
         if on:
             for (h,) in self.db.q("SELECT sess_hash FROM account_sessions WHERE account_id=?", (target["id"],)):
-                self.db.run("DELETE FROM account_sessions WHERE sess_hash=?", (h,))
-                self.auth.logout(h)
+                self._end(h)
+        self._gate_cache.clear()
         return {**target, "disabled": on}
+
+    # ---- passwords ----
+    def change_password(self, sess: dict, current, new) -> None:
+        """Your own password (the current one first). Your other sessions end; this one stays."""
+        try:
+            self.user_throttle.check("pw:" + sess["account_id"])
+        except Wait as e:
+            raise ApiError(429, "too many wrong passwords", e.retry_after)
+        row = self.db.one("SELECT pw_hash FROM accounts WHERE id=?", (sess["account_id"],))
+        cur = current if isinstance(current, str) and len(current) <= MAX_LEN else ""
+        if row is None or not verify_password(cur, row[0]):
+            self.user_throttle.fail("pw:" + sess["account_id"])
+            raise ApiError(403, "the current password is wrong")
+        self.db.run("UPDATE accounts SET pw_hash=? WHERE id=?", (hash_password(_password(new)), sess["account_id"]))
+        for (h,) in self.db.q("SELECT sess_hash FROM account_sessions WHERE account_id=? AND sess_hash<>?",
+                              (sess["account_id"], sess["h"])):
+            self._end(h)
+
+    def reset_password(self, sess: dict, account_id, new) -> dict:
+        """Owner / admin: a new password for someone who forgot theirs (same rules as disabling: never the
+        owner's or your own, admins only for members). All of that account's sessions end."""
+        self._manager(sess)
+        target = self.account(account_id if isinstance(account_id, str) else "")
+        if target["role"] == "owner" or target["id"] == sess["account_id"]:
+            raise ApiError(403, "change your own password with your current one")
+        if target["role"] == "admin" and sess.get("account_role") != "owner":
+            raise ApiError(403, "only the owner can reset an admin's password")
+        self.db.run("UPDATE accounts SET pw_hash=? WHERE id=?", (hash_password(_password(new)), target["id"]))
+        for (h,) in self.db.q("SELECT sess_hash FROM account_sessions WHERE account_id=?", (target["id"],)):
+            self._end(h)
+        return target
