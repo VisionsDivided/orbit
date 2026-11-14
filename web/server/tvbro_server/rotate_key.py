@@ -9,7 +9,8 @@
 
 What is sealed with the key: every ``*.enc`` file in the data folder: the provider logins
 (provider.enc, provider-pN.enc), the stored channel lists and VOD catalogues (channels*.enc,
-vod*.enc: their stream URLs carry the login) and the network-share login (share.enc).
+vod*.enc: their stream URLs carry the login), the network-share login (share.enc) and Orbit's Plex /
+Jellyfin tokens (media.enc; orbit.db holds none).
 state.db holds no sealed values; it is backed up with the rest all the same.
 
 Steps, each one safe to crash in (run the command again: it finishes the same rotation, it never

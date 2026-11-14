@@ -60,6 +60,7 @@ from orbit.accounts import Accounts as OrbitAccounts      # Orbit: accounts and 
 from orbit import api as V1
 from orbit.profilestate import ProfileStores
 from orbit import discover as ODISC, seerr as OSEERR    # Orbit: Seerr discover and requests (Phase 6)
+from orbit.media import MediaServers, TokenVault                # Orbit: Plex / Jellyfin links per account
 
 try:                                    # deterministic authenticated encryption for /seg URLs
     from cryptography.hazmat.primitives.ciphers.aead import AESSIV
@@ -1010,14 +1011,17 @@ class App:
         self.profiles = ProfileStores(DATA_DIR, self.state, self.series, self._series_eps, self.orbit.enabled)
         self.orbit.on_setup = self.profiles.adopt_household
         self.orbit.on_profile_deleted = self.profiles.drop
+        # Orbit: Plex / Jellyfin; tokens sealed with the server key in media.enc (rotate_key re-encrypts it)
+        msec = SecretStore(DATA_DIR, "media.enc")
+        self.media = MediaServers(self.orbit.db, TokenVault(msec.enc_path, msec.seal_bytes, msec.open_bytes))
         self.v1 = V1.Api(self.orbit, playlists=self._device_playlists, stores=self.profiles.for_session,
-                         streams=lambda: self.streams.status())
+                         streams=lambda: self.streams.status(), media=self.media)
         # Orbit: Seerr discover and requests (orbit/discover.py), mounted into the /v1 route table
         self.discover = ODISC.Discover(self.orbit, OSEERR.SeerrConfig(DATA_DIR))
         self.v1.routes.update(self.discover.routes())
         NET.set_allow_private(lambda: bool(self.settings.get("allowLanSources")))
-        # Orbit: the LAN media servers the admin configured, exact host and port; compose further sources with |
-        NET.set_private_hosts(lambda: self.discover.private_hosts())
+        # Orbit: the LAN servers the household configured (Plex / Jellyfin links, Seerr), exact host and port only
+        NET.set_private_hosts(lambda: self.media.private_hosts() | self.discover.private_hosts())
         self.parental = Parental(os.path.join(DATA_DIR, "parental.json"), self.sign_key)
         self._siv = None
         self.no_timeshift_hls: dict[str, float] = {}     # provider host -> when its timeshift .m3u8 failed
@@ -1733,6 +1737,15 @@ class Handler(BaseHTTPRequestHandler):
                        {k: v[0] for k, v in self.q.items() if v})
         rep = APP.v1.handle(call)
         hdr = dict(rep.headers)
+        if rep.raw is not None:                      # media artwork: an image/* type checked by the connector
+            self.send_response(rep.code)
+            for k, v in hdr.items():
+                self.send_header(k, v)
+            self.send_header("Content-Type", rep.ctype)
+            self.send_header("Content-Length", str(len(rep.raw)))
+            self.end_headers()
+            self.wfile.write(rep.raw)
+            return
         if rep.session is not None:
             hdr["Set-Cookie"] = self._cookie(rep.session, AUTH.SESSION_TTL if rep.session else 0)
         return self._json(rep.obj, rep.code, headers=hdr)

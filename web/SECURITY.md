@@ -11,6 +11,7 @@ tvBro Web is a LAN site: never expose it to the internet.
 | provider logins | `/var/lib/tvbro/provider.enc`, `provider-pN.enc` | your IPTV account |
 | stored channel lists / catalogues | `/var/lib/tvbro/channels*.enc`, `vod*.enc` | stream URLs carry the login |
 | network-share login | `/var/lib/tvbro/share.enc` | the recordings share |
+| Orbit: Plex / Jellyfin tokens | `/var/lib/tvbro/media.enc` | each account's linked media-server user |
 | signing key | `/var/lib/tvbro/sign.key` | CSRF tokens, signed media / image links, parental unlocks |
 | sessions, passwords | `/var/lib/tvbro/sessions.json`, `auth.json` (PBKDF2 hashes) | sign-in |
 | backups of old keys | `/root/tvbro-key-backup/` (0700) | can decrypt older copies of the files |

@@ -4,7 +4,8 @@ Status: Phase 1, step 3. This is the contract; the Python server implements it i
 It is written so another implementation (for example Rust) could replace the server without changing clients.
 
 ## Conventions
-- JSON over HTTP, same origin as the web app. Every response is `application/json` with `Cache-Control: no-store`.
+- JSON over HTTP, same origin as the web app. Every response is `application/json` with `Cache-Control: no-store`
+  (one exception: `GET /v1/media/image` answers with the image).
 - Errors: `{"error": "<short message>"}` with 400 (bad input), 401 (not signed in), 403 (not allowed / CSRF),
   404 (no such thing *for you*: other accounts' ids answer 404, never 403, so ids cannot be probed),
   409 (conflict), 429 (throttled, with `Retry-After`).
@@ -83,6 +84,54 @@ existing `/api/state` routes of its profile, every minute and shortly after a ch
 
 `seriesId` is the server's VOD id (`7` for the first playlist, `p1~7` for others); `key` is the show's My list key
 (`s|p0|7`). Episode ids are the provider's.
+
+## Media servers (Phase 3)
+
+Each account links **its own** Plex or Jellyfin user (`orbit.db` migration 003, `media_connections`), so what a person
+may see and their watch state stay theirs on the media server. One account may link several servers. Every route
+looks a connection up by id *and* the signed-in account: another account's connection answers 404.
+
+Objects:
+- `Connection`: `{"id", "kind": "plex"|"jellyfin", "baseUrl", "serverName", "serverId", "userId", "userName", "created", "lastOk"}`. Never a token.
+- `Library`: `{"id", "title", "kind": "movie"|"series"|"other", "conn", "source", "serverName"}`
+- `Item`: `{"id", "conn", "source": "plex"|"jellyfin", "kind": "movie"|"series"|"season"|"episode", "title", "year", "overview",
+  "poster", "backdrop", "runtime", "rating", "guids": {"tmdb", "imdb", "tvdb"}, "progress": {"secs", "dur", "watched"},
+  "seriesId", "season", "episode"}`. Times in seconds; missing values are `null`. `poster` / `backdrop` are
+  `/v1/media/image?...` URLs on this server (or `null`). Ids are the media server's, opaque; they are only meaningful
+  together with `conn`.
+
+| Method | Path | Body / query → Answer |
+|---|---|---|
+| GET | `/v1/media/connections` | `?check=1` also asks each server (adds `"ok"`, and `"error"` when it fails) → `{"connections": [Connection]}` |
+| POST | `/v1/media/connect/start` | `{"kind": "jellyfin", "baseUrl"}` → `{"id", "kind", "method": "quickconnect", "code", "server": {"name", "version"}, "hint", "expires", "interval"}`: the user enters `code` in Jellyfin (profile ▸ Quick Connect). 409 when Quick Connect is off (use the password call). `{"kind": "plex"}` → `{"id", "kind", "method": "pin", "code", "linkUrl": "https://plex.tv/link", "hint", "expires", "interval"}`: the user opens plex.tv/link and enters the 4-character `code`. At most 5 waiting sign-ins per account (429); they live 10 minutes in memory. |
+| POST | `/v1/media/connect/poll` | `{"id"}` → `{"status": "pending", "expires"}` or `{"status": "linked", "connections": [Connection]}`. Poll every `interval` seconds. 404 when expired or not yours. Plex links every Plex server of that user this server can reach (one connection each). Linking the same server and user again updates the existing connection. |
+| POST | `/v1/media/connect/password` | `{"kind": "jellyfin", "baseUrl", "username", "password"}` → `{"connections": [Connection]}`. The password goes to Jellyfin once and is never stored. Wrong password: 403; throttled per account (429). |
+| POST | `/v1/media/connections/delete` | `{"id"}` → `{"ok": true}`. Jellyfin is asked to end the token (best effort); the stored token is removed. |
+| GET | `/v1/media/libraries` | `?conn=` (optional: without it, all your connections) → `{"libraries": [Library], "errors": [{"conn", "error"}]}` |
+| GET | `/v1/media/items` | `?conn=&library=&cursor=&kind=movie\|series&limit=` (limit 1–200, default 50) → `{"items": [Item], "next": cursor\|null, "total"}`. `cursor` is opaque; pass `next` back. |
+| GET | `/v1/media/item` | `?conn=&id=` → `Item` |
+| GET | `/v1/media/children` | `?conn=&id=` → `{"items": [Item]}`: the seasons of a series, the episodes of a season |
+| GET | `/v1/media/image` | `?conn=&path=` → the image itself (`image/jpeg`, `png`, `webp` or `gif` only; at most 5 MB; `Cache-Control: private, max-age=86400`). The server fetches it with the token. `path` must be an artwork path of that server (as found in `poster` / `backdrop`), else 400. This is the one `/v1` answer that is not JSON. |
+| POST | `/v1/media/playback` | `{"conn", "id"}` → `{"url", "headers": {}, "direct": bool, "container", "resumeSecs", "conn", "source"}` for a film or episode (400 for a series / season). |
+| POST | `/v1/media/progress` | `{"conn", "id", "secs", "dur", "state": "playing"\|"paused"\|"stopped"}` → `{"ok": true}`. Jellyfin: `Sessions/Playing/Progress` or `/Stopped`; Plex: `/:/timeline`. Send it every ~10 seconds while playing and once on stop. |
+| POST | `/v1/media/watched` | `{"conn", "id", "watched": bool}` → `{"ok": true}` |
+
+Errors from the media server: 409 with `"... link it again"` when its token no longer works (sign in again with
+`connect/start`), 404 when the item is not on the server, 502 when it cannot be reached or answers oddly. Messages
+never contain addresses with tokens.
+
+**Tokens.** They are stored sealed with the server's encryption key in `media.enc` (not in `orbit.db`), so
+`rotate_key` re-encrypts them with the other sealed files. They are never logged, never in list answers and never
+in artwork URLs. The **only** place a token leaves the server is `playback.url`: a direct-play URL for the media
+server that contains **the signed-in person's own** token (Jellyfin `api_key=`, Plex `X-Plex-Token=`), so the device
+plays straight from Plex / Jellyfin. Clients must treat that URL as a secret (keep it out of logs, do not share or
+cache it) and fetch a fresh one for each playback.
+
+**Local network.** The server reaches each linked server's exact `host:port` even when "local network sources" is
+off (`net.set_private_hosts`); loopback and link-local addresses stay refused. Only an owner or admin can link a
+server at a new local address; a member can link their own user on a server the household already linked (or
+any public address). Jellyfin uses one `DeviceId` per link (Jellyfin ends older tokens of a device that signs in
+again); Plex gets the same per-link `X-Plex-Client-Identifier` and stores each server's own access token.
 
 ## What belongs to a profile (step 4)
 In Orbit mode these existing `/api` routes read and write the **signed-in session's profile** instead of the

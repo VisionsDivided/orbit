@@ -1,0 +1,282 @@
+# Copyright 2026 The Orbit authors
+# SPDX-License-Identifier: Apache-2.0
+"""The connector contract every media-server kind implements, and the shared plumbing.
+
+A connector instance speaks for one linked user on one server (base URL + that user's token). Sign-in is a
+pair of class methods (start, poll) plus an optional one-step password sign-in; they return ``Linked``.
+
+Rules for implementations:
+- Every request goes through ``Http`` (tvbro_server.net.open_url: SSRF checks, the per-host LAN allowlist,
+  no credential headers across redirects). No vendor SDKs.
+- Tokens travel in request headers, never in the URL of an API call (so they cannot end up in a log or an
+  error message). The only URL that carries a token is the direct-play answer of ``playback``.
+- Error messages never contain URLs, tokens or upstream bodies.
+
+Items are normalized to one shape (``item``); artwork is returned as a server-relative path that the
+/v1 image route fetches with the token (``image``), so a token never reaches a page for a picture."""
+from __future__ import annotations
+
+import json
+import re
+import socket
+import urllib.error
+import urllib.parse
+from dataclasses import dataclass, field
+from typing import Optional
+
+from tvbro_server import net as NET
+
+PRODUCT = "Orbit"
+VERSION = "1.0"
+DEVICE_NAME = "Orbit home server"
+ITEM_KINDS = ("movie", "series", "season", "episode")
+LIST_KINDS = ("movie", "series")
+STATES = ("playing", "paused", "stopped")
+PAGE = 50
+MAX_PAGE = 200
+JSON_LIMIT = 8 * 1024 * 1024
+IMAGE_LIMIT = 5 * 1024 * 1024
+IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")     # never SVG (script) or HTML
+_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+class ConnectorError(Exception):
+    """``code`` is the /v1 status to answer: 400 bad input, 404 not on the server, 409 the link needs a new
+    sign-in (``relink``) or the server refuses the action, 502 the server could not be reached / answered oddly."""
+
+    def __init__(self, code: int, msg: str, relink: bool = False):
+        super().__init__(msg)
+        self.code, self.msg, self.relink = code, msg, relink
+
+
+@dataclass
+class Linked:
+    """A finished sign-in: what is stored for one connection (the token goes to the vault, not the table)."""
+    base_url: str
+    server_name: str
+    server_id: str
+    user_id: str
+    user_name: str
+    token: str = field(repr=False)
+
+
+def safe_id(v, what: str = "id") -> str:
+    """Item / library ids are opaque but must be harmless in a URL path: letters, digits, '-' and '_'."""
+    s = str(v if v is not None else "").strip()
+    if not _ID.match(s):
+        raise ConnectorError(400, f"{what}: not a valid id")
+    return s
+
+
+def safe_path(path, prefixes: tuple) -> str:
+    """A server-relative artwork path the image route may fetch: one of the connector's prefixes, no host,
+    no '..', no control characters, no credentials in the query."""
+    p = path if isinstance(path, str) else ""
+    low = p.lower()
+    if (not p or len(p) > 600 or not p.startswith(prefixes) or "//" in p or ".." in p or "\\" in p or "@" in p
+            or "#" in p or any(ord(c) < 33 or ord(c) == 127 for c in p)
+            or any(k in low for k in ("token", "api_key", "apikey"))):
+        raise ConnectorError(400, "path: not an artwork path of this server")
+    return p
+
+
+def normalize_base_url(url) -> str:
+    """scheme://host[:port][/path] without a trailing slash; no login, query or fragment."""
+    s = url.strip() if isinstance(url, str) else ""
+    if s and "://" not in s:
+        s = "http://" + s
+    try:
+        u = urllib.parse.urlsplit(s)
+        port = u.port
+    except ValueError:
+        raise ConnectorError(400, "baseUrl: not a valid address")
+    if (u.scheme.lower() not in ("http", "https") or not u.hostname or u.username or u.password or u.query
+            or u.fragment or len(s) > 300):
+        raise ConnectorError(400, "baseUrl: http(s)://host:port, without a login or query")
+    host = u.hostname.lower()
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = host + (f":{port}" if port else "")
+    out = urllib.parse.urlunsplit((u.scheme.lower(), netloc, u.path.rstrip("/"), "", ""))
+    try:
+        NET.check_url(out)
+    except NET.Blocked as e:
+        raise ConnectorError(400, f"baseUrl: {e.why}")
+    return out
+
+
+def host_port(base_url: str) -> Optional[tuple]:
+    """(host, port) of a base URL as net.set_private_hosts expects it, or None."""
+    try:
+        u = urllib.parse.urlsplit(base_url)
+        return ((u.hostname or "").lower(), u.port or (443 if u.scheme.lower() == "https" else 80)) if u.hostname else None
+    except ValueError:
+        return None
+
+
+def ticks(v) -> float:
+    try:
+        return max(0.0, float(v or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def item(id: str, kind: str, title: str, **kw) -> dict:
+    """The one item shape of the /v1 media API. ``poster`` / ``backdrop`` are server-relative artwork paths
+    here; orbit/media.py turns them into /v1/media/image URLs. Times are seconds."""
+    prog = kw.get("progress") or {}
+    return {
+        "id": id, "kind": kind, "title": title or "",
+        "year": kw.get("year"), "overview": kw.get("overview") or "",
+        "poster": kw.get("poster"), "backdrop": kw.get("backdrop"),
+        "runtime": int(kw.get("runtime") or 0) or None, "rating": kw.get("rating"),
+        "guids": {"tmdb": kw.get("tmdb"), "imdb": kw.get("imdb"), "tvdb": kw.get("tvdb")},
+        "progress": {"secs": int(prog.get("secs") or 0), "dur": int(prog.get("dur") or 0),
+                     "watched": bool(prog.get("watched"))},
+        "seriesId": kw.get("seriesId"), "season": kw.get("season"), "episode": kw.get("episode"),
+    }
+
+
+class Http:
+    """JSON over net.open_url with error mapping; ``label`` names the server kind in messages."""
+
+    def __init__(self, label: str, timeout: float = 15, opener=None):
+        self.label, self.timeout = label, timeout
+        self.opener = opener or NET.open_url
+
+    def raw(self, method: str, url: str, headers: Optional[dict] = None, body=None, limit: int = JSON_LIMIT,
+            timeout: Optional[float] = None) -> tuple:
+        """(status, content type, bytes). ``body``: a dict / list is sent as JSON."""
+        hdr = dict(headers or {})
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode()
+            hdr.setdefault("Content-Type", "application/json")
+        elif method in ("POST", "PUT"):
+            data = b""
+        try:
+            with self.opener(url, timeout=timeout or self.timeout, headers=hdr, data=data, method=method) as r:
+                return r.status, r.headers.get("Content-Type") or "", NET.read_capped(r, limit)
+        except urllib.error.HTTPError as e:
+            e.close()
+            if e.code in (401, 403):
+                raise ConnectorError(409, f"{self.label}: the sign-in is no longer valid; link it again", relink=True)
+            if e.code == 404:
+                raise ConnectorError(404, f"{self.label}: not found on the server")
+            raise ConnectorError(502, f"{self.label}: the server answered {e.code}")
+        except ValueError:                    # read_capped: too large
+            raise ConnectorError(502, f"{self.label}: the answer is too large")
+        except (urllib.error.URLError, socket.timeout, OSError) as e:
+            if NET.is_blocked(e):
+                raise ConnectorError(502, f"{self.label}: that address is not allowed (local network, loopback or "
+                                          "link-local); the owner can link the server first or allow local sources")
+            raise ConnectorError(502, f"{self.label}: the server did not answer")
+
+    def json(self, method: str, url: str, headers: Optional[dict] = None, body=None, **kw):
+        _, _, data = self.raw(method, url, {"Accept": "application/json", **(headers or {})}, body, **kw)
+        if not data.strip():
+            return None
+        try:
+            return json.loads(data)
+        except ValueError:
+            raise ConnectorError(502, f"{self.label}: unexpected answer from the server")
+
+
+class Connector:
+    """One linked user on one server. Subclasses set ``kind``, ``label`` and ``IMAGE_PREFIXES``."""
+    kind = ""
+    label = ""
+    IMAGE_PREFIXES: tuple = ()
+
+    def __init__(self, base_url: str, token: str, user_id: str, device_id: str, http: Optional[Http] = None):
+        self.base = base_url.rstrip("/")
+        self.token = token
+        self.user_id = user_id
+        self.device_id = device_id
+        self.http = http or Http(self.label)
+
+    def __repr__(self):                       # never the token
+        return f"<{type(self).__name__} {self.base}>"
+
+    # ---- sign-in (class level: there is no token yet) ----
+    @classmethod
+    def sign_in_start(cls, http: Http, base_url: Optional[str], device_id: str) -> tuple:
+        """(answer for the client, private state kept in memory for polling)."""
+        raise NotImplementedError
+
+    @classmethod
+    def sign_in_poll(cls, http: Http, state: dict, device_id: str) -> Optional[list]:
+        """None while waiting; else [Linked] (Plex can link several servers with one sign-in)."""
+        raise NotImplementedError
+
+    @classmethod
+    def sign_in_password(cls, http: Http, base_url: str, username: str, password: str, device_id: str) -> Linked:
+        raise ConnectorError(400, f"{cls.label} links with a code, not a password")
+
+    def sign_out(self) -> None:
+        """Best effort: end this link's token on the server (when the server has such a call)."""
+
+    # ---- reading ----
+    def health(self) -> dict:
+        """{"ok": True, "name", "version"} or raises ConnectorError."""
+        raise NotImplementedError
+
+    def list_libraries(self) -> list:
+        """[{"id", "title", "kind": "movie"|"series"|"other"}]"""
+        raise NotImplementedError
+
+    def list_items(self, library: str, cursor: Optional[str], kind: Optional[str], limit: int = PAGE) -> dict:
+        """{"items": [item], "next": cursor or None, "total"}"""
+        raise NotImplementedError
+
+    def get_item(self, item_id: str) -> dict:
+        raise NotImplementedError
+
+    def get_seasons(self, series_id: str) -> list:
+        raise NotImplementedError
+
+    def get_episodes(self, season_id: str) -> list:
+        raise NotImplementedError
+
+    def children(self, item_id: str) -> list:
+        """Seasons of a series, episodes of a season."""
+        it = self.get_item(item_id)
+        if it["kind"] == "series":
+            return self.get_seasons(item_id)
+        if it["kind"] == "season":
+            return self.get_episodes(item_id)
+        return []
+
+    # ---- playing ----
+    def playback(self, item_id: str) -> dict:
+        """{"url", "headers": {}, "direct": bool, "container", "resumeSecs"}. The URL carries this user's token."""
+        raise NotImplementedError
+
+    def report_progress(self, item_id: str, secs: float, dur: float, state: str) -> None:
+        raise NotImplementedError
+
+    def mark_watched(self, item_id: str, watched: bool) -> None:
+        raise NotImplementedError
+
+    def image(self, path: str) -> tuple:
+        """(bytes, content type) of an artwork path, fetched with the token; images only, capped."""
+        p = safe_path(path, self.IMAGE_PREFIXES)
+        _, ctype, data = self.http.raw("GET", self.base + p, self.auth_headers(), limit=IMAGE_LIMIT)
+        ct = ctype.split(";", 1)[0].strip().lower()
+        if ct not in IMAGE_TYPES:
+            raise ConnectorError(502, f"{self.label}: that is not an image")
+        return data, ct
+
+    def auth_headers(self) -> dict:
+        raise NotImplementedError
+
+    @staticmethod
+    def page(cursor: Optional[str], limit) -> tuple:
+        try:
+            start = int(cursor or 0)
+            n = int(limit or PAGE)
+        except (TypeError, ValueError):
+            raise ConnectorError(400, "cursor / limit: numbers")
+        if start < 0 or start > 10_000_000 or not 1 <= n <= MAX_PAGE:
+            raise ConnectorError(400, f"cursor / limit: out of range (limit 1 to {MAX_PAGE})")
+        return start, n

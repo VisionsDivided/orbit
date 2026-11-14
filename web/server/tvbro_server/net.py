@@ -198,7 +198,25 @@ class _RedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         newurl = lower_host(newurl)
         check_url(newurl)                    # the address is checked again when it connects
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and _origin(newurl) != _origin(req.full_url):
+            # a media-server token or login header must not follow a redirect to another host
+            for k in list(new.headers):
+                if k.lower() in SECRET_HEADERS:
+                    del new.headers[k]
+        return new
+
+
+SECRET_HEADERS = {"authorization", "x-emby-authorization", "x-emby-token", "x-mediabrowser-token", "x-plex-token",
+                  "cookie", "x-api-key"}
+
+
+def _origin(url: str) -> tuple:
+    try:
+        u = urllib.parse.urlsplit(url)
+        return (u.scheme.lower(), (u.hostname or "").lower(), u.port or (443 if u.scheme.lower() == "https" else 80))
+    except ValueError:
+        return ("", "", 0)
 
 
 def _build():
@@ -228,12 +246,14 @@ def lower_host(url: str) -> str:
     return urllib.parse.urlunsplit((p.scheme, user + hostport.lower(), p.path, p.query, p.fragment))
 
 
-def open_url(url: str, timeout: float = 30, headers: Optional[dict] = None):
-    """urlopen for provider / playlist / image URLs, with the rules above. Raises Blocked
-    (or a URLError wrapping it), urllib.error.HTTPError, or other URLErrors."""
+def open_url(url: str, timeout: float = 30, headers: Optional[dict] = None, data: Optional[bytes] = None,
+             method: Optional[str] = None):
+    """urlopen for provider / playlist / image / media-server URLs, with the rules above. Raises Blocked
+    (or a URLError wrapping it), urllib.error.HTTPError, or other URLErrors. ``data`` / ``method`` for the
+    media-server APIs (POST / DELETE); credential headers are dropped on a redirect to another host."""
     url = lower_host(url)
     check_url(url)
-    req = urllib.request.Request(url, headers={"User-Agent": UA, **(headers or {})})
+    req = urllib.request.Request(url, data=data, method=method, headers={"User-Agent": UA, **(headers or {})})
     return _OPENER.open(req, timeout=timeout)
 
 
