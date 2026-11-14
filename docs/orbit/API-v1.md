@@ -46,6 +46,18 @@ It is written so another implementation (for example Rust) could replace the ser
 | POST | `/v1/accounts` | owner, admin | `{"username", "password", "displayName"?, "role"?: "member"\|"admin"}` → `Account`. Only the owner may create admins. Each new account gets one profile named after it. |
 | POST | `/v1/accounts/disable` | owner, admin | `{"id", "disabled": bool}` → `Account`. Ends all its sessions. Never the owner, never yourself; admins cannot disable admins. |
 
+## What belongs to a profile (step 4)
+In Orbit mode these existing `/api` routes read and write the **signed-in session's profile** instead of the
+household: `GET /api/state`, `POST /api/state/<scope>` (My list, which also holds favourite channels; resume
+points; reminders; search history; preferences), `GET /api/series/continue`, `GET /api/series/state`,
+`POST /api/series/*` (show progress, watched marks, caption/audio choice, hidden shows) and the profile part of
+`GET /api/backup` / `POST /api/restore`. Each profile's data is a separate SQLite file
+(`profiles/<profile id>/state.db`). Still shared by the household: playlists and their sync, channel layout and
+custom groups, the guide, recordings and recording rules, parental PIN and locks, and server settings.
+
+At setup, the household's data so far (its `state.db`) is copied into the owner's first profile; the household
+file is left as it was. Deleting a profile deletes its data; sessions on it move to the account's first profile.
+
 ## Rules
 - Usernames: 3–32 characters, letters, digits, `.`, `_`, `-`; compared case-insensitively.
 - Passwords: 8–200 characters, stored only as PBKDF2-SHA256 (600 000 iterations), as in tvBro.

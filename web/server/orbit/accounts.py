@@ -64,6 +64,9 @@ class Accounts:
         self.db = Database(os.path.join(data_dir, "orbit.db"))
         self.token_path = os.path.join(data_dir, "orbit-setup-token")
         self.throttle = Throttle(clock)
+        # set by the app (orbit/profilestate.py): the owner's first profile at setup, a deleted profile
+        self.on_setup: Callable[[str], None] = lambda pid: None
+        self.on_profile_deleted: Callable[[str], None] = lambda pid: None
         self._dummy = hash_password(secrets.token_hex(16))     # unknown usernames cost the same time
         self._enabled = self.db.one("SELECT 1 FROM accounts LIMIT 1") is not None
         if self._enabled:
@@ -103,6 +106,7 @@ class Accounts:
             if not isinstance(token, str) or not want or not hmac.compare_digest(token.strip(), want):
                 raise ApiError(403, "wrong setup token")
             acc = self._create(username, password, display_name, "owner")
+            self.on_setup(self.profiles(acc["id"])[0]["id"])   # the household's data so far goes to the owner
             self._enabled = True
             self._remove_token()
             # from now on every device must sign in; tvBro's shared password is replaced by an unknown one
@@ -163,9 +167,14 @@ class Accounts:
             self.logout(sess)
             return None
         now = int(self.clock())
+        pid = row[1]
+        if pid is None:                        # its profile was deleted: use the account's first one
+            first = self.db.one("SELECT id FROM profiles WHERE account_id=? ORDER BY created, id LIMIT 1", (row[0],))
+            pid = first[0] if first else None
+            self.db.run("UPDATE account_sessions SET profile_id=? WHERE sess_hash=?", (pid, sess["h"]))
         if now - row[2] > SEEN_EVERY:
             self.db.run("UPDATE account_sessions SET last_seen=? WHERE sess_hash=?", (now, sess["h"]))
-        return {**sess, "account_id": row[0], "profile_id": row[1], "account_role": row[3]}
+        return {**sess, "account_id": row[0], "profile_id": pid, "account_role": row[3]}
 
     # ---- me ----
     def _account(self, row) -> dict:
@@ -222,6 +231,7 @@ class Accounts:
             if self.db.one("SELECT COUNT(*) FROM profiles WHERE account_id=?", (account_id,))[0] <= 1:
                 raise ApiError(409, "an account keeps at least one profile")
             self.db.run("DELETE FROM profiles WHERE id=? AND account_id=?", (pid, account_id))
+        self.on_profile_deleted(pid)
 
     # ---- sessions (own account) ----
     def sessions(self, sess: dict) -> list[dict]:

@@ -169,8 +169,8 @@ class Endpoints(unittest.TestCase):
     def setUpClass(cls):
         from tvbro_server import app as A
         cls.d = tempfile.mkdtemp()
-        store = S.SeriesStore(StateStore(os.path.join(cls.d, "state.db")),
-                              lambda sid: ("Show", None, [dict(e) for e in EPS]))
+        state = StateStore(os.path.join(cls.d, "state.db"))
+        store = S.SeriesStore(state, lambda sid: ("Show", None, [dict(e) for e in EPS]))
         from tvbro_server import auth as AU
         AU.ITERATIONS = 1000                          # fast hashes in tests
         auth = AU.Auth(cls.d, b"test-key")
@@ -179,7 +179,8 @@ class Endpoints(unittest.TestCase):
                        "X-CSRF-Token": auth.csrf(AU.Auth._h(sid))}
         # Orbit: no accounts here (tvBro mode), so the account gate passes sessions through unchanged
         orbit = types.SimpleNamespace(gate=lambda s: s, enabled=lambda: False)
-        A.APP = types.SimpleNamespace(series=store, auth=auth, orbit=orbit)
+        profiles = types.SimpleNamespace(for_session=lambda s: (state, store))
+        A.APP = types.SimpleNamespace(series=store, auth=auth, orbit=orbit, profiles=profiles)
         cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), A.Handler)
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         cls.base = "http://127.0.0.1:%d" % cls.srv.server_address[1]

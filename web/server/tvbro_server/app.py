@@ -58,6 +58,7 @@ from . import auth as AUTH
 from . import backup as BK
 from orbit.accounts import Accounts as OrbitAccounts      # Orbit: accounts and profiles (docs/orbit/API-v1.md)
 from orbit import api as V1
+from orbit.profilestate import ProfileStores
 
 try:                                    # deterministic authenticated encryption for /seg URLs
     from cryptography.hazmat.primitives.ciphers.aead import AESSIV
@@ -1005,6 +1006,10 @@ class App:
         self.auth = AUTH.Auth(DATA_DIR, self.sign_key)
         self.orbit = OrbitAccounts(DATA_DIR, self.auth)        # Orbit: accounts gate every session
         self.v1 = V1.Api(self.orbit)
+        # Orbit: My list, favourites, resume, show progress per profile (household state.db in tvBro mode)
+        self.profiles = ProfileStores(DATA_DIR, self.state, self.series, self._series_eps, self.orbit.enabled)
+        self.orbit.on_setup = self.profiles.adopt_household
+        self.orbit.on_profile_deleted = self.profiles.drop
         NET.set_allow_private(lambda: bool(self.settings.get("allowLanSources")))
         self.parental = Parental(os.path.join(DATA_DIR, "parental.json"), self.sign_key)
         self._siv = None
@@ -1148,6 +1153,16 @@ def series_info_json(vid: str, sources=None) -> dict:
 # --------------------------------------------------------------------------- handler
 
 
+class _ProfileView:
+    """Orbit: the app as backup.py sees it, with one profile's StateStore as ``state``."""
+
+    def __init__(self, app, state):
+        self._app, self.state = app, state
+
+    def __getattr__(self, name):
+        return getattr(self._app, name)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "tvBro"
     protocol_version = "HTTP/1.1"
@@ -1265,6 +1280,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def _authed(self) -> bool:
         return bool(self.sess)
+
+    def _stores(self):
+        """(StateStore, SeriesStore) for this request: the signed-in profile's in Orbit mode,
+        the household's in tvBro mode (orbit/profilestate.py)."""
+        return APP.profiles.for_session(self.sess)
+
+    def _app_view(self):
+        """APP for backup.py, with this request's profile state in place of the household's."""
+        return _ProfileView(APP, self._stores()[0])
 
     def _admin_ok(self) -> bool:
         """Provider, settings, storage, restore, deletes: the admin role (auth.py)."""
@@ -1595,11 +1619,12 @@ class Handler(BaseHTTPRequestHandler):
             scope = path.rsplit("/", 1)[1]
             d = self._body()
             op = d.get("op", "put")
+            st = self._stores()[0]
             if op == "clear":
-                APP.state.clear(scope)
+                st.clear(scope)
             elif op == "del":
-                APP.state.delete(scope, str(d.get("key", "")))
-            elif not APP.state.put(scope, str(d.get("key", "")), d.get("value")):
+                st.delete(scope, str(d.get("key", "")))
+            elif not st.put(scope, str(d.get("key", "")), d.get("value")):
                 return self._err(400, "bad state")
             return self._json({"ok": True})
         if path.startswith("/api/parental/"):
@@ -1718,7 +1743,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/api/recordings/dirs", "/api/recordings/share/steps") and not self._is_admin():
             return self._err(403, "admin only")
         if path == "/api/state":
-            return self._json(APP.state.all())
+            return self._json(self._stores()[0].all())
         if path == "/api/parental":
             return self._json({**APP.parental.public(), "unlocked": self._unlocked()})
         if path == "/api/backup":
@@ -1728,10 +1753,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/play":
             return self.r_play()
         if path == "/api/series/continue":
-            return self._json({"items": APP.series.continue_rows()})
+            return self._json({"items": self._stores()[1].continue_rows()})
         if path == "/api/series/state":
             sid = self.q.get("id", [""])[0][:100]
-            return self._json(APP.series.summary(sid)) if sid else self._err(400, "id required")
+            return self._json(self._stores()[1].summary(sid)) if sid else self._err(400, "id required")
 
         if path == "/api/sync/status":
             return self._json(self._sync_status())
@@ -2096,7 +2121,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def r_backup(self):
         """The household's data as one JSON file (no logins, no PINs): see backup.py."""
-        body = json.dumps(BK.export(APP), separators=(",", ":"), ensure_ascii=False).encode()
+        body = json.dumps(BK.export(self._app_view()), separators=(",", ":"), ensure_ascii=False).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Disposition", f'attachment; filename="tvbro-backup-{time.strftime("%Y-%m-%d")}.json"')
@@ -2126,7 +2151,7 @@ class Handler(BaseHTTPRequestHandler):
             summary["state"] = {s: len(rows) for s, rows in clean["state"].items()}
         if self.q.get("check", [""])[0] == "1":
             return self._json({"ok": True, "check": True, "createdAt": doc.get("createdAt"), "contains": summary})
-        restored = BK.restore(APP, clean)
+        restored = BK.restore(self._app_view(), clean)
         _INFO_CACHE.clear()
         if "epgMap" in clean:
             APP.sources.sync("epg")                  # guide channels picked by hand are fetched again
@@ -2170,7 +2195,7 @@ class Handler(BaseHTTPRequestHandler):
         sid = str(d.get("seriesId") or "")[:100]
         if not sid:
             return self._err(400, "seriesId required")
-        st = APP.series
+        st = self._stores()[1]
         if action == "progress":
             ep = str(d.get("epId") or "")[:100]
             if not ep:
