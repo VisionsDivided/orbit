@@ -1,8 +1,9 @@
 # Orbit desktop on macOS
 
-Status (2026-11-14): **in progress** on branch `orbit/macos`. Everything below was written and unit-tested on a
-Windows PC; nothing has run on a Mac yet. The first MacBook session should go through "Steps on the MacBook" and the
-test checklist, then the video spike.
+Status (2026-11-14): **in progress**. The port is on branch `orbit/macos` (merged); the picture (option B1, software
+rendering) is on `orbit/macos-video`. Everything below was written and tested on a Windows PC; nothing has run on a
+Mac yet. The first MacBook session should go through "Steps on the MacBook", the test checklist and "Testing the
+video on the MacBook".
 
 ## What is done (and how it was checked)
 
@@ -12,7 +13,7 @@ test checklist, then the video spike.
 | libmpv loading | Mach-O headers (thin 32/64-bit, both byte orders; universal 32- and 64-bit fat records; Java class files are not mistaken for fat files). Search order: the file chosen in the app, `Orbit.app/Contents/Frameworks`, `Contents/MacOS/lib`, `Contents/MacOS`, `/opt/homebrew/lib` (Homebrew, Apple Silicon), `/usr/local/lib` (Homebrew, Intel), `/opt/local/lib` (MacPorts), each `libmpv.2.dylib` then `libmpv.dylib`, then the dyld search for `mpv`. A library for the wrong processor (an arm64 Homebrew lib under an Intel/Rosetta Java) is refused with a clear message. The missing-library screen says `brew install mpv` | `MachOTest` (synthetic headers, search order, fallbacks) |
 | Secrets | The AES key of the encrypted secrets goes into the login Keychain (generic password, service `tvBro`, account `secrets-key`) through `/usr/bin/security`; fallback: `key.bin` (0600) as on Linux | `MacKeychainTest` with a fake `security` tool |
 | Folders | `~/Library/Application Support/tvBro` (settings, secrets), `~/Library/Caches/tvBro`, `~/Library/Logs/tvBro/tvbro.log` (1 MB + one old file), recordings `~/Movies/tvBro`; 0700 / 0600 like Linux | `AppDirsTest` |
-| Video | Sound only for now: macOS does not embed the video by default (see "Video" below). `TVBRO_MAC_VIDEO=wid` tries mpv's `wid` for the spike. Hardware decoding choices: auto-safe (VideoToolbox), videotoolbox, no | `MpvVideoTest` |
+| Video | **Option B1** (branch `orbit/macos-video`): mpv renders frames in software (`vo=libmpv`, render API type "sw") into reused memory and Compose draws them in the video box (see "Video" below). `TVBRO_MAC_VIDEO=wid` tries mpv's `wid`, `none` gives sound only. Hardware decoding choices: auto-safe (VideoToolbox), videotoolbox, no; the sw path uses the copy-back variant (`auto-copy-safe`, `videotoolbox-copy`) | `MpvVideoTest`, `SwMathTest`, `SwRendererTest` (fake libmpv + Compose drawing), `SwRealMpvTest` against the real Windows libmpv-2.dll |
 | Drives | Recording drives listed from `/Volumes` (start-up disk left out) | compiles only |
 | Packaging | `packageDmg`: `Orbit.app` in a DMG, bundle id `io.github.visionsdivided.orbit.desktop`, icon `desktop/packaging/orbit.icns` (made with Pillow from `branding/orbit-app-icon.webp`), version 1.0.0 (jpackage refuses 0.x on macOS). Unsigned | Gradle task list only; Windows packaging unchanged |
 | CI | `.github/workflows/desktop-macos.yml`: tests on macos-latest (arm64) and macos-15-intel (Intel) with a Homebrew libmpv, unsigned DMG, "no libmpv in the app" check | runs on every push to github.com/VisionsDivided/orbit; the arm64 DMG builds |
@@ -45,14 +46,15 @@ itself is called Orbit.
    brew install --cask temurin@17    # JDK 17 (or any JDK 17; check: /usr/libexec/java_home -v 17)
    export JAVA_HOME="$(/usr/libexec/java_home -v 17)"
    ```
-2. Code: `git checkout orbit/macos`.
+2. Code: `git checkout orbit/macos-video` (or orbit/main once it is merged).
 3. Tests: `./gradlew :desktop:test` (all should pass; `MpvLoaderTest.realLibmpv` runs against the real library with
    `TVBRO_TEST_LIBMPV=$(brew --prefix)/lib/libmpv.2.dylib ./gradlew :desktop:test`; the real Keychain test runs with
    `TVBRO_TEST_KEYCHAIN=1` and removes its test item afterwards; it skips itself when a real tvBro key exists).
 4. Headless libmpv check: `./gradlew :desktop:run --args="--selftest https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"`
    (a public test stream from `desktop/testdata/test.m3u`; prints the resolution, codecs and `hwdec` it played; see
    desktop/README.md for the other test options, e.g. `--render <png>` for an off-screen picture of the TV screen).
-5. Run the app: `./gradlew :desktop:run`. Expect the UI, sound, and **no picture** (by design until the video spike).
+5. Run the app: `./gradlew :desktop:run`. Expect the UI, sound **and picture** (software video, B1; see "Testing the
+   video on the MacBook" below).
 6. Package: `./gradlew :desktop:packageDmg` writes `desktop/build/compose/binaries/main/dmg/Orbit-1.0.0.dmg`. Open it
    and drag Orbit to Applications.
 7. Gatekeeper (the app is not signed): the first open says Apple cannot check it.
@@ -77,17 +79,86 @@ itself is called Orbit.
       is 0700 and its files 0600 (`ls -la`)
 - [ ] Keychain locked (`security lock-keychain`), start the app: playlists not readable, message shown, no new key
       made (unlock and restart: they are back)
-- [ ] Sound plays for live, film, episode; no crash on channel change, full screen, back to preview
+- [ ] Sound and picture for live, film, episode; no crash on channel change, full screen, back to preview
 - [ ] Keys: arrows, Enter, Esc, Space; F11 / F (full screen) — on a MacBook F11 needs the fn key and may be taken by
       "Show Desktop", F works
 - [ ] A recording to `~/Movies/tvBro` and to a USB stick (listed from `/Volumes`)
 - [ ] External player: `/Applications/VLC.app/Contents/MacOS/VLC` (the plain `vlc` command is usually not on PATH)
 - [ ] Intel Mac too, if one is around (or the macos-15-intel CI job)
 
-## Video (the biggest risk) — spike plan
+## Video (the biggest risk)
 
-Today the video is drawn by mpv into the native window of an AWT `Canvas` (`wid`): the HWND on Windows, the X11
-window on Linux. That does not carry over to macOS:
+### Status: B1 implemented (software rendering), not yet run on a Mac
+
+macOS uses option B1 below by default (`MpvVideo.mode(Os.MAC)` = `VideoMode.SW`); Windows and Linux keep `wid`
+unchanged. Code: `desktop/.../MpvRender.kt` (render API binding, buffers, render thread), `Mpv.kt` (`vo=libmpv`, the
+render context made after `mpv_initialize` and freed before `mpv_terminate_destroy`), `Player.kt` (`SwVideoSurface`
+in `VideoHost` instead of the `SwingPanel`).
+
+How it works:
+- mpv's update callback only wakes the `mpv-sw-render` thread (it must not call mpv). That thread calls
+  `mpv_render_context_update` and, when a frame is due (or the box changed size, also while paused), renders it with
+  `MPV_RENDER_PARAM_SW_SIZE / SW_FORMAT "rgb0" / SW_STRIDE / SW_POINTER`. mpv paces the frames itself (the render call
+  waits for the frame's display time).
+- Render size (`SwMath.target`): the video box's aspect, in pixels (Retina: physical pixels), no larger than the box,
+  than needed to show the video at its own size, or than **1920 x 1080** (`TVBRO_SW_MAX=3840x2160` raises the cap).
+  mpv letterboxes the video in the frame, so the aspect setting (`video-aspect-override`, Fill = panscan) and the ASS
+  OSD (the player bar, info, notices: still drawn by mpv, unchanged) look exactly as before.
+- Three buffers, allocated once per player at the cap size (about 8 MB each at 1080p; rows padded to 64 bytes) and
+  reused for every frame and every box size; one is on screen, one waits, one is rendered into. Compose takes the frame
+  to draw atomically, so a buffer is never written while drawn. If Compose is behind, the waiting frame is replaced
+  (dropped). The frame is wrapped as a Skia image without a copy (`Data.makeWithoutCopy` + `Image.makeRaster`,
+  `RGB_888X`, the 4th byte ignored) and drawn scaled to the box with linear filtering.
+- Hardware decoding: the copy-back variant of the setting (`auto-safe` -> `auto-copy-safe`: VideoToolbox decodes, the
+  frame is copied back for the software renderer).
+- Lifecycle: the player starts when the video box appears and stops when it goes, as with the Canvas. Stop order: the
+  event thread, the render thread, the update callback set to null, `mpv_render_context_free`, then
+  `mpv_terminate_destroy`; the buffers are freed 1.5 s later (the last frame may still be on screen).
+- Clicks on the video (double click = full screen, right click = quick settings, a click in the menu) work as before
+  through Compose pointer events. The menus that are separate windows today stay as they are; with B1 they could later
+  become plain Compose drawn over the video.
+- If `mpv_render_context_create` fails (a very old libmpv), it is logged and the player plays sound only.
+
+Verified on Windows (no Mac here), with `TVBRO_MAC_VIDEO=sw` paths and the real `libmpv-2.dll`:
+- `SwRealMpvTest`: `testdata/sw-pattern.mp4` (320 x 240, left half red, right half blue) played through `vo=libmpv`:
+  frames arrive at 320 x 240 for a 640 x 480 box with the right colours, a 1280 x 480 box gives a 640 x 240 frame with
+  black bars left and right, `video-aspect-override=16:9` widens the picture, frames keep coming, `hwdec` becomes
+  `d3d11va-copy`, and a second player after `destroy` works (no crash on stop / restart).
+- `SwRendererTest` (fake libmpv): param layout as mpv reads it, stop order, no render after stop, one buffer set for
+  hundreds of frames, and the Compose drawing (a 160 x 120 frame scaled into a 320 x 240 box, colours exact, opaque).
+- `SwMathTest`: stride, render size, buffer layout, the buffer ring, hwdec mapping.
+- Not verified here: the app itself on screen with sw (Windows keeps `wid` by default), and everything that only a Mac
+  shows (below).
+
+### Testing the video on the MacBook
+
+1. `TVBRO_TEST_LIBMPV=$(brew --prefix)/lib/libmpv.2.dylib ./gradlew :desktop:test --tests '*SwRealMpvTest*'` — the
+   same headless frame check as on Windows (expect `hwdec=videotoolbox-copy` or similar in the output; the report is
+   `desktop/build/reports/tests/test/index.html`).
+2. `./gradlew :desktop:run`, play a live channel, a film and an episode. Look for:
+   - Picture in the preview and in full screen, correct aspect, sharp on Retina, smooth in a pan (no stutter or tearing).
+   - Shrink / grow animation between preview and full screen; window resize while playing.
+   - Player bar, info, quick settings, "Up next" and notices drawn on the video; subtitles.
+   - Channel change, pause (resize while paused redraws), seek, audio delay, the Aspect setting (16:9, 4:3, Fill).
+   - Closing the app and stopping while playing: no crash.
+3. Measure: Activity Monitor, CPU of Orbit (java) for 720p / 1080p live and a 4K film; target under ~40 % of one core for
+   1080p50 on Apple Silicon. Frames rendered and dropped are written to `~/Library/Logs/tvBro/tvbro.log` when a player
+   stops ("sw video: N frames rendered, M dropped"); mpv's own drops: Info in the player, or
+   `TVBRO_MPV_LOG=/tmp/mpv.log` (look for `frame-drop`, `hwdec`; delete the log afterwards).
+4. 4K: by default rendered at 1920 x 1080 at most and scaled up by Compose. Try `TVBRO_SW_MAX=3840x2160 ./gradlew
+   :desktop:run` on a 4K film to see whether full-size frames keep up (CPU, drops).
+
+Fallbacks, if something is wrong:
+- Stutter or high CPU: lower the cap (`TVBRO_SW_MAX=1280x720`); try Settings > Hardware decoding `videotoolbox` or `no`
+  (software decoding can be cheaper than copy-back on some streams). If B1 is too slow overall: B3 (Metal layer).
+- Black picture with sound: check the log for "sw video unavailable"; run with `TVBRO_MAC_VIDEO=none` (sound only,
+  the old behaviour) to keep using the app.
+- `TVBRO_MAC_VIDEO=wid` still tries option A (expect a crash or black).
+
+### Background: why not `wid`
+
+On Windows and Linux the video is drawn by mpv into the native window of an AWT `Canvas` (`wid`): the HWND on Windows,
+the X11 window on Linux. That does not carry over to macOS:
 
 - Since Java 7, AWT on macOS draws with Core Animation layers; a heavyweight `Canvas` has no `NSView` of its own.
   JAWT on macOS offers a `CALayer` to attach a sublayer to (`JAWT_SurfaceLayers`), not a view.
@@ -121,7 +192,7 @@ window lags behind moves and resizes, has trouble with Spaces / full screen and 
 above it, the preview animation cannot be smooth, and syncing it needs mpv's IPC, which the hardening switches off.
 Not recommended.
 
-### Recommendation: B1, after a 10-minute look at A
+### Original recommendation (done: B1, see Status above)
 
 Concrete steps:
 
@@ -166,7 +237,7 @@ Homebrew `libmpv.2.dylib` (library validation): it needs the entitlements
 
 | Risk | Impact | Note / mitigation |
 |---|---|---|
-| Video embedding (`wid`) does not work on macOS | No picture | Default is sound only; spike plan above, B1 recommended |
+| Video embedding (`wid`) does not work on macOS | No picture | B1 (software rendering) is the macOS default; `TVBRO_MAC_VIDEO=none` falls back to sound only |
 | Render API CPU cost (B1) too high for 4K | Dropped frames | Cap the render size to the box; B3 (Metal layer) as the later zero-copy path |
 | `security -i` behaves differently than expected (quoting, exit codes, prompts) | Secrets fall back to `key.bin` | Read-back check after storing; the real-Keychain test on the Mac shows it |
 | Exit codes of `security` other than 44 for "not found" on some macOS version | Secrets unreadable until fixed | Error is shown, no key is replaced; check `realKeychain` and the locked-keychain item |
