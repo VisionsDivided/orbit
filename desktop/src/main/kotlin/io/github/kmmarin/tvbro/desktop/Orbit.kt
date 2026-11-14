@@ -371,6 +371,27 @@ class OrbitDesktop(private val app: AppState, private val scope: CoroutineScope,
         }
     }
 
+    // ---------- Discover (Seerr through the home server, API-v1.md "Discover and requests") ----------
+    /** A signed-in GET (null when not signed in); a 401 signs out. Errors other than 401 are thrown. */
+    suspend fun get(path: String): JsonObject? {
+        val l = link ?: return null
+        return try { withContext(Dispatchers.IO) { api.get(l, path) } } catch (e: OrbitError) {
+            if (e.code == 401) { forget(signedOutByServer = true); return null }
+            throw e
+        }
+    }
+
+    /** Asks Seerr for a film or show as this account (POST /v1/requests); the answer's message for the viewer. */
+    suspend fun request(type: String, tmdb: Long): String {
+        val l = link ?: return "Sign in to Orbit first"
+        return try {
+            val j = withContext(Dispatchers.IO) { api.post(l, "/v1/requests", JsonObject(mapOf("type" to JsonPrimitive(type), "tmdb" to JsonPrimitive(tmdb)))) }
+            if ((j["created"] as? JsonPrimitive)?.content == "true") "Requested" else "Already available or requested"
+        } catch (e: OrbitError) {
+            if (e.code == 401) { forget(signedOutByServer = true); "Signed out" } else e.message ?: "Request refused"
+        } catch (e: Exception) { OrbitDesk.describe(e) }
+    }
+
     // ---------- the provider's stream limit, shared with TVs, browsers and recordings ----------
     var streamAsk by mutableStateOf<StreamAsk?>(null); private set
     /** This app holds a slot (one however often it zaps). */

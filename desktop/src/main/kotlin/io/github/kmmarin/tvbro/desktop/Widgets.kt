@@ -49,7 +49,7 @@ private var swallowEnter = false
 private const val NEW_PRESS_GAP_MS = 1100L
 
 /**
- * A focusable, clickable item with a clear TV-style focus look (filled + accent border). Enter (on release) or a
+ * A focusable, clickable item with a clear TV-style focus look (filled + white ring). Enter (on release) or a
  * left click activates; holding Enter, a right click, the Menu key or Shift+F10 opens [onMenu].
  */
 @Composable
@@ -100,7 +100,7 @@ fun Modifier.tvItem(onFocus: () -> Unit = {}, onMenu: (() -> Unit)? = null, requ
         }
         .clip(RoundedCornerShape(6.dp))
         .background(if (focused) Theme.surface2 else Color.Transparent)
-        .border(if (focused) 3.dp else 0.dp, if (focused) Theme.accent else Color.Transparent, RoundedCornerShape(6.dp))
+        .border(if (focused) 3.dp else 0.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(6.dp)) // direction 5: a white focus ring
 }
 
 @Composable

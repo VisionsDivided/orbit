@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
 import kotlinx.coroutines.launch
 import io.github.kmmarin.tvbro.data.TvNav
 import androidx.compose.ui.geometry.CornerRadius
@@ -28,15 +29,16 @@ import io.github.kmmarin.tvbro.data.Diag
 import java.awt.KeyEventDispatcher
 import java.awt.KeyboardFocusManager
 
+/** App colours: Orbit direction 5 (DESIGN-SPEC-5 §1; O5 in OrbitUi.kt has the rest). */
 object Theme {
-    val bg = Color(0xFF0E1116)
-    val surface = Color(0xFF161B22)
-    val surface2 = Color(0xFF1F2630)
-    val accent = Color(0xFF33B5FF)
-    val text = Color(0xFFE8EDF2)
-    val dim = Color(0xFF9AA6B2)
-    val live = Color(0xFFFF5A5F)
-    val ok = Color(0xFF5AD17A)
+    val bg = Color(0xFF05060C)
+    val surface = Color(0xFF0E101C)
+    val surface2 = Color(0xFF1A1D2E)
+    val accent = Color(0xFF2FD3FF)
+    val text = Color(0xFFF4F6FF)
+    val dim = Color(0xA3E4E9FF)
+    val live = Color(0xFFFF3B5C)
+    val ok = Color(0xFF7FF0BB)
 }
 
 /** Original tvBro mark: a rounded screen with a play wedge. */
@@ -134,9 +136,14 @@ fun VideoSetup(app: AppState) {
     )
 }
 
-/** Left with nothing further left inside a screen: the side menu (never a dead end). */
+/** Nothing further that way inside a screen: the top bar (never a dead end). */
 private fun inScreenEdge(app: AppState, scope: kotlinx.coroutines.CoroutineScope): Boolean { scope.launch { app.railFr.settle() }; return true }
 
+/**
+ * The main window in Orbit direction 5 (Cinema.kt): a colour-matched backdrop, the top bar (Home, Movies, Shows,
+ * Live TV, Discover; search, clock, profile) and the section below it. Keyboard: Up / Esc reach the top bar, Left and
+ * Right move along it, Down goes back into the section; the mouse works everywhere.
+ */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun Home(app: AppState) {
@@ -145,57 +152,61 @@ fun Home(app: AppState) {
     // Leaving a section for another: a preview that is not on screen stops.
     LaunchedEffect(app.tab, app.detail) { if (!app.full && app.playing != null && (app.tab != Tab.TV || app.detail != null)) app.stopPlayback() }
     val scope = rememberCoroutineScope()
-    Row(Modifier.fillMaxSize().background(Theme.bg).onFocusChanged { app.homeHasFocus = it.hasFocus }.onKeyEvent { e ->
+    val hero = remember { HeroState() }
+    var discoverArt by remember { mutableStateOf<String?>(null) }
+    val d = app.detail
+    val art: String? = when {
+        d != null -> app.detailCache[d.key]?.backdrop ?: d.poster
+        app.tab == Tab.HOME || app.tab == Tab.MOVIES || app.tab == Tab.SHOWS -> hero.item?.let { app.detailCache[it.key]?.backdrop ?: it.poster }
+        app.tab == Tab.DISCOVER -> discoverArt
+        else -> null
+    }
+    Box(Modifier.fillMaxSize().background(Theme.bg).onFocusChanged { app.homeHasFocus = it.hasFocus }.onKeyEvent { e ->
         if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
         when {
             // Back closes the topmost layer; menus and questions are their own windows and close themselves first,
-            // full screen takes its keys from AWT. Here: a page (details, a settings page), else the side menu.
+            // full screen takes its keys from AWT. Here: a page (details, a settings page), else the top bar.
             e.key == Key.Escape || (e.key == Key.Backspace && !typing) -> when (TvNav.top(false, false, false, app.detail != null || (app.tab == Tab.SETTINGS && app.settingsPage != 0))) {
                 TvNav.Layer.PAGE -> { if (app.detail != null) app.detail = null else app.settingsPage = 0; true }
                 else -> if (inRail) false else { typing = false; scope.launch { app.railFr.settle() }; true }
             }
             typing -> false
-            e.key == Key.DirectionUp -> fm.moveFocus(FocusDirection.Up)
-            e.key == Key.DirectionDown -> fm.moveFocus(FocusDirection.Down)
-            e.key == Key.DirectionLeft -> if (inRail) true else fm.moveFocus(FocusDirection.Left) || inScreenEdge(app, scope)
-            e.key == Key.DirectionRight -> {
+            e.key == Key.DirectionUp -> if (inRail) true else fm.moveFocus(FocusDirection.Up) || inScreenEdge(app, scope)
+            e.key == Key.DirectionDown -> {
                 val t = app.railReturn
-                if (inRail && t != null && app.detail == null && app.tab == Tab.TV) t() else fm.moveFocus(FocusDirection.Right)
+                if (inRail && t != null && app.detail == null && app.tab == Tab.TV) t() else fm.moveFocus(FocusDirection.Down)
             }
+            e.key == Key.DirectionLeft -> if (inRail) { fm.moveFocus(FocusDirection.Left); true } else fm.moveFocus(FocusDirection.Left) || inScreenEdge(app, scope)
+            e.key == Key.DirectionRight -> if (inRail) { fm.moveFocus(FocusDirection.Right); true } else fm.moveFocus(FocusDirection.Right)
             e.key == Key.F11 -> { app.fullscreen = !app.fullscreen; true }
             e.key == Key.Y || e.key == Key.F || e.key == Key.Bookmark -> app.favAction?.let { it(); true } ?: false
             else -> false
         }
     }) {
-        // entering the side menu from any screen lands on the current section
-        Column(Modifier.width(150.dp).fillMaxHeight().background(Theme.surface).padding(8.dp).onFocusChanged { inRail = it.hasFocus }
-            .focusProperties { enter = { app.railFr } }.focusGroup(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(6.dp, 10.dp)) {
-                Image(AppIcon, null, Modifier.size(28.dp)); Spacer(Modifier.width(8.dp)); T("tvBro", 20, bold = true)
+        val cinematic = d != null || app.tab in listOf(Tab.HOME, Tab.MOVIES, Tab.SHOWS, Tab.DISCOVER)
+        Backdrop(if (cinematic) art else null, strongBottom = !cinematic)
+        Column(Modifier.fillMaxSize()) {
+            Box(Modifier.onFocusChanged { inRail = it.hasFocus }) { TopBar(app) }
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                // each screen is a focus group that restores its last focused item when focus comes back from the top bar
+                if (d != null) Box(Modifier.fillMaxSize().padding(horizontal = 56.dp, vertical = 8.dp)) { DetailScreen(app, d) }
+                else key(app.settings.timeFmt, app.tab) { Box(Modifier.fillMaxSize().focusRestorer().focusGroup()) { when (app.tab) {
+                    Tab.HOME -> HomeScreen(app, hero)
+                    Tab.MOVIES -> VodSection(app, app.movies, false, hero)
+                    Tab.SHOWS -> VodSection(app, app.series, true, hero)
+                    Tab.DISCOVER -> DiscoverScreen(app) { discoverArt = it }
+                    Tab.TV -> Box(Modifier.padding(start = 40.dp, end = 40.dp, bottom = 8.dp)) { TvScreen(app) }
+                    Tab.MYLIST -> Box(Modifier.padding(horizontal = 56.dp, vertical = 8.dp)) { MyListScreen(app) }
+                    Tab.RECORDINGS -> Box(Modifier.padding(horizontal = 56.dp, vertical = 8.dp)) { RecordingsScreen(app) }
+                    Tab.SEARCH -> Box(Modifier.padding(horizontal = 56.dp, vertical = 8.dp)) { SearchScreen(app) }
+                    Tab.SETTINGS -> Box(Modifier.padding(horizontal = 56.dp, vertical = 8.dp)) { SettingsScreen(app) }
+                } } }
             }
-            for (t in Tab.entries) {
-                val sel = app.tab == t && app.detail == null
-                Box(Modifier.fillMaxWidth().tvItem(requester = if (app.tab == t) app.railFr else null) { app.detail = null; app.tab = t; if (t == Tab.SETTINGS) app.settingsPage = 0 }.padding(10.dp, 8.dp)) {
-                    T(t.label + if (t == Tab.RECORDINGS && app.recorder.items.any { it.status == "recording" }) "  ●" else "", 16, if (sel) Theme.accent else Theme.text, bold = sel)
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            if (app.toastMsg.isNotEmpty()) T(app.toastMsg, 12, Theme.accent, maxLines = 5)
-            if (app.busy) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Theme.accent)
-            T(app.status, 11, Theme.dim, maxLines = 4)
         }
-        Box(Modifier.weight(1f).fillMaxHeight().padding(12.dp)) {
-            val d = app.detail
-            // each screen is a focus group that restores its last focused item when focus comes back from the side menu
-            if (d != null) DetailScreen(app, d) else key(app.settings.timeFmt, app.tab) { Box(Modifier.fillMaxSize().focusRestorer().focusGroup()) { when (app.tab) {
-                Tab.TV -> TvScreen(app)
-                Tab.MOVIES -> VodBrowse(app, app.movies, false)
-                Tab.SHOWS -> VodBrowse(app, app.series, true)
-                Tab.MYLIST -> MyListScreen(app)
-                Tab.RECORDINGS -> RecordingsScreen(app)
-                Tab.SEARCH -> SearchScreen(app)
-                Tab.SETTINGS -> SettingsScreen(app)
-            } } }
+        // notices: a pill at the bottom left (the colour-key legend's place, DESIGN-SPEC-5 §9)
+        if (app.toastMsg.isNotEmpty() || (app.busy && app.sources.isNotEmpty())) Box(Modifier.align(Alignment.BottomStart).padding(start = 56.dp, bottom = 18.dp)
+            .background(Color(0xC705060C), RoundedCornerShape(50)).border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(50)).padding(18.dp, 8.dp)) {
+            T(app.toastMsg.ifEmpty { app.status }, 13, if (app.toastMsg.isNotEmpty()) Theme.text else Theme.dim, maxLines = 3)
         }
     }
 }

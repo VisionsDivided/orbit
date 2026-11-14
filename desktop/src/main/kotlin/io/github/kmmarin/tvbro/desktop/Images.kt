@@ -26,10 +26,12 @@ object Images {
     private val gate = Semaphore(4)
     private val dir = Perms.dir(File(Paths.cache, "img"))
 
-    fun cached(url: String) = synchronized(mem) { mem[url] }
+    fun cached(url: String, maxW: Int = 400) = synchronized(mem) { mem[key(url, maxW)] }
+    private fun key(url: String, maxW: Int) = if (maxW == 400) url else "$url@$maxW"
 
-    suspend fun load(url: String): ImageBitmap? {
-        cached(url)?.let { return it }
+    /** [maxW]: wider images are scaled down to this (posters 400; cinematic backdrops larger). */
+    suspend fun load(url: String, maxW: Int = 400): ImageBitmap? {
+        cached(url, maxW)?.let { return it }
         if (synchronized(failed) { url in failed }) return null
         return withContext(Dispatchers.IO) {
             gate.withPermit {
@@ -41,13 +43,13 @@ object Images {
                         }
                     } ?: return@withPermit null.also { synchronized(failed) { failed += url } }
                     var img = org.jetbrains.skia.Image.makeFromEncoded(bytes)
-                    if (img.width > 400) { // downscale big posters to keep memory flat
-                        val h = img.height * 400 / img.width
-                        val s = org.jetbrains.skia.Surface.makeRasterN32Premul(400, h)
-                        s.canvas.drawImageRect(img, org.jetbrains.skia.Rect.makeWH(400f, h.toFloat()))
+                    if (img.width > maxW) { // downscale big posters to keep memory flat
+                        val h = img.height * maxW / img.width
+                        val s = org.jetbrains.skia.Surface.makeRasterN32Premul(maxW, h)
+                        s.canvas.drawImageRect(img, org.jetbrains.skia.Rect.makeWH(maxW.toFloat(), h.toFloat()))
                         img = s.makeImageSnapshot()
                     }
-                    img.toComposeImageBitmap().also { synchronized(mem) { mem[url] = it } }
+                    img.toComposeImageBitmap().also { synchronized(mem) { mem[key(url, maxW)] = it } }
                 } catch (e: Exception) { synchronized(failed) { failed += url }; null }
             }
         }

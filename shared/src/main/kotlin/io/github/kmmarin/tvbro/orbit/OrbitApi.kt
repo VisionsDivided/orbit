@@ -147,6 +147,13 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT, private val userAgent
         if (e.code == 401) null else throw e
     }
 
+    /** A signed-in GET of another /v1 route (Discover, catalogue); the answer as JSON. */
+    fun get(link: OrbitLink, path: String): JsonObject = call(link.server, path, null, link)
+
+    /** A signed-in POST of another /v1 route (a Seerr request). */
+    fun post(link: OrbitLink, path: String, body: JsonObject): JsonObject =
+        call(link.server, path, Json.encodeToString(JsonObject.serializer(), body), link)
+
     /** Switches this session to profile [id] (one of the account's own). */
     fun selectProfile(link: OrbitLink, id: String): OrbitMe {
         val j = call(link.server, "/v1/profiles/select", Json.encodeToString(JsonObject.serializer(), JsonObject(mapOf("id" to JsonPrimitive(id)))), link)

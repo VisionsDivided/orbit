@@ -11,7 +11,8 @@ import io.github.kmmarin.tvbro.data.*
 import java.io.File
 import java.util.UUID
 
-enum class Tab(val label: String) { TV("TV"), MOVIES("Movies"), SHOWS("Shows"), MYLIST("My list"), RECORDINGS("Recordings"), SEARCH("Search"), SETTINGS("Settings") }
+/** Sections: the top bar shows Home, Movies, Shows, Live TV and Discover (Cinema.kt NAV); the rest are under search and the avatar. */
+enum class Tab(val label: String) { HOME("Home"), MOVIES("Movies"), SHOWS("Shows"), TV("Live TV"), DISCOVER("Discover"), MYLIST("My list"), RECORDINGS("Recordings"), SEARCH("Search"), SETTINGS("Settings") }
 
 /** What the player plays. [resumeKey] is set for VOD / catch-up so the position is remembered. */
 data class PlayReq(
@@ -43,7 +44,7 @@ class AppState(private val scope: CoroutineScope, testSources: List<Source>? = n
     var series by mutableStateOf(emptyList<VodItem>())
     var status by mutableStateOf("")
     var busy by mutableStateOf(false)
-    var tab by mutableStateOf(Tab.TV)
+    var tab by mutableStateOf(Tab.HOME)
     private var detailState = mutableStateOf<VodItem?>(null)
     /** The film / show page shown; closing it remembers the item so its tile takes the focus again ([lastOpened]). */
     var detail: VodItem?

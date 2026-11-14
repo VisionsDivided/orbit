@@ -166,7 +166,6 @@ fun WhoScreen(app: AppState) {
     if (profiles.isEmpty()) { LaunchedEffect(Unit) { o.picking = false }; return }
     var sel by remember { mutableStateOf(profiles.indexOfFirst { it.id == o.saved.profileId }.coerceAtLeast(0)) }
     val step = min(0.7f, (2 * PI / profiles.size).toFloat())
-    val rot by animateFloatAsState(sel * step, tween(400))
     val fr = remember { FocusRequester() }
     LaunchedEffect(Unit) { fr.settle() }
     val posters = remember(app.movies, app.series) { (app.movies + app.series).mapNotNull { it.poster }.filter { it.startsWith("http") }.take(40) }
@@ -202,7 +201,11 @@ fun WhoScreen(app: AppState) {
         })
         Image2(Modifier.size((460 * k).dp).offset((cx - 230 * k).dp, (cy - 230 * k - 0).dp))
         profiles.forEachIndexed { i, p ->
-            val a = PI / 2 + (i * step - rot)                              // the selected profile sits at 6 o'clock
+            // the selected profile sits at 6 o'clock, the others alternate right and left of it along the ring
+            val n = profiles.size
+            val dist = ((i - sel).mod(n)).let { if (it > n / 2) it - n else it }
+            val off by animateFloatAsState(dist.toFloat(), tween(400))
+            val a = PI / 2 - off * step
             val px = cx + rx * cos(a).toFloat(); val py = cy + ry * sin(a).toFloat()
             val focused = i == sel
             val size = (if (focused) 200 else 150) * k
