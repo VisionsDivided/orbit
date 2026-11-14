@@ -46,8 +46,9 @@ fun GuideScreen(m: AppModel) {
             }
             GuideGrid(m, g, now, { ch, p -> m.guidePlay(ch, p) },
                 Modifier.padding(start = 96.dp, end = 96.dp, top = 410.dp, bottom = 92.dp).fillMaxSize(), startOnNow = true)
-            ColorKeyLegend(Modifier.align(Alignment.BottomStart).padding(start = 96.dp, bottom = 28.dp),
+            if (!g.menu.open) ColorKeyLegend(Modifier.align(Alignment.BottomStart).padding(start = 96.dp, bottom = 28.dp),
                 hints = listOf("OK" to "Watch", "BACK" to "Close"))
+            GuideGroupMenu(m, g, top = 0.dp, legend = true)
         }
     }
 }

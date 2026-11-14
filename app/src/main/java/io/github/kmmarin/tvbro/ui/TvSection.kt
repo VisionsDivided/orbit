@@ -114,6 +114,26 @@ class GuideFocus(val m: AppModel, val scope: kotlinx.coroutines.CoroutineScope, 
     val nowFocus = NowFocus()
     /** The group tab that holds focus (colour keys act on the group), null when focus is in the channels. */
     var groupFocused by mutableStateOf<String?>(null)
+    /** The side menu of all groups ("All groups" tab). */
+    val menu = io.github.kmmarin.tvbro.ui.live.GroupMenuState()
+    /** The "All groups" tab (focus returns there when the menu closes with Back). */
+    val menuTab = SafeFocus()
+
+    /** After a group or channel was picked in the side menu: into its channels, else the selected tab. */
+    fun afterMenu() {
+        scope.launch {
+            delay(60)
+            if (m.filtered.isEmpty()) { toGroups(); return@launch }
+            val t = targetKey()
+            val idx = m.filtered.indexOfFirst { it.key == t }
+            if (idx >= 0) runCatching { listState.scrollToItem((idx - 2).coerceAtLeast(0)) }
+            repeat(15) { if (chFocus.request()) return@launch; delay(40) }
+            toGroups()
+        }
+    }
+
+    /** Back in the side menu: focus back on the "All groups" tab. */
+    fun menuClosed() { scope.launch { repeat(15) { if (menuTab.request()) return@launch; delay(40) } } }
 
     fun targetKey(): String? {
         val list = m.filtered
@@ -137,7 +157,7 @@ class GuideFocus(val m: AppModel, val scope: kotlinx.coroutines.CoroutineScope, 
     /** Left from a channel: its own (selected) group, scrolled into view first when needed. */
     fun toGroups(): Boolean {
         if (!groupSel.request()) scope.launch {
-            val gi = m.groupList.indexOf(m.group)
+            val gi = m.liveTabs.indexOf(m.group)
             if (gi >= 0) runCatching { groupState.scrollToItem((gi - 2).coerceAtLeast(0)) }
             repeat(15) { if (groupSel.request()) return@launch; delay(40) }
         }
@@ -161,8 +181,8 @@ fun rememberGuideFocus(m: AppModel): GuideFocus {
         val s = m.tvScroll[m.group]
         runCatching { listState.scrollToItem(s?.first ?: 0, s?.second ?: 0) }
     }
-    LaunchedEffect(m.group, m.groupList) { // also after a move: the moved group stays in view
-        val gi = m.groupList.indexOf(m.group)
+    LaunchedEffect(m.group, m.liveTabs) { // also after a move: the moved group stays in view
+        val gi = m.liveTabs.indexOf(m.group)
         if (gi >= 0 && groupState.layoutInfo.visibleItemsInfo.none { it.index == gi }) groupState.scrollToItem((gi - 2).coerceAtLeast(0))
         // after a move from the group menu: focus back on the moved (selected) group
         if (m.groupMoved) { m.groupMoved = false; repeat(2) { delay(200); g.groupSel.request() } }
@@ -172,19 +192,33 @@ fun rememberGuideFocus(m: AppModel): GuideFocus {
     return g
 }
 
-/** The group tabs of the guide. */
+/**
+ * The quick-select tabs of the guide (owner feedback 2026-11-14): Favourites, All, Recent, the pinned groups, the
+ * chosen group, then "All groups" which opens the side menu (OK). Focusing any other tab shows its channels.
+ */
 @Composable
 fun GuideGroupTabs(m: AppModel, g: GuideFocus, modifier: Modifier = Modifier) {
     GroupTabs(
-        m.groupList, m.group, { groupTabLabel(m, it) }, g.groupSel, g.groupState,
-        onFocus = { gr -> g.groupFocused = gr; m.favAction = { m.toggleFavGroup(gr) }; if (gr !in m.prefs.locked || gr in m.unlocked) m.group = gr },
-        onClick = { gr -> m.selectGroup(gr) }, onLong = { gr -> m.openGroupMenu(gr) }, onDown = { g.enterChannels() }, modifier = modifier,
+        m.liveTabs, m.group, { groupTabLabel(m, it) }, g.groupSel, g.groupState,
+        onFocus = { gr ->
+            g.groupFocused = gr
+            if (gr != GROUP_MENU) { m.favAction = { m.toggleFavGroup(gr) }; if (gr !in m.prefs.locked || gr in m.unlocked) m.group = gr }
+        },
+        onClick = { gr -> if (gr == GROUP_MENU) g.menu.show() else m.selectGroup(gr) }, onLong = { gr -> m.openGroupMenu(gr) },
+        onDown = { g.enterChannels() }, modifier = modifier, extraFocus = GROUP_MENU to g.menuTab,
     )
+}
+
+/** The side menu over the page while it is open ([top]: below the top bar inside the shell). */
+@Composable
+fun GuideGroupMenu(m: AppModel, g: GuideFocus, top: Dp, legend: Boolean = false) {
+    if (g.menu.open) io.github.kmmarin.tvbro.ui.live.GroupSideMenu(m, g.menu, top, onChosen = { g.afterMenu() }, onClosed = { g.menuClosed() }, legend = legend)
 }
 
 /** The grid of the guide, with what OK does decided by [open]; [startOnNow]: first focus on the programme on now. */
 @Composable
-fun GuideGrid(m: AppModel, g: GuideFocus, now: Long, open: (Channel, Programme?) -> Unit, modifier: Modifier = Modifier, startOnNow: Boolean = false) {
+fun GuideGrid(m: AppModel, g: GuideFocus, now: Long, open: (Channel, Programme?) -> Unit, modifier: Modifier = Modifier, startOnNow: Boolean = false,
+              metrics: io.github.kmmarin.tvbro.ui.live.EpgMetrics = io.github.kmmarin.tvbro.ui.live.EpgMetrics()) {
     val win = remember { EpgWindow(now) }
     val openNow by rememberUpdatedState(open)
     // Follow the clock; a window left in the past (the TV screen can stay open for hours) returns to now.
@@ -201,7 +235,7 @@ fun GuideGrid(m: AppModel, g: GuideFocus, now: Long, open: (Channel, Programme?)
         )
     }
     EpgGrid(
-        m.filtered, { ch -> m.epg.programmes(ch) }, now, win, g.listState, { g.targetKey() }, g.chFocus, g.nowFocus, actions, modifier,
+        m.filtered, { ch -> m.epg.programmes(ch) }, now, win, g.listState, { g.targetKey() }, g.chFocus, g.nowFocus, actions, modifier, metrics,
         emptyText = if (m.loading.isNotEmpty()) m.loading else "No channels in this group.",
     )
     // first focus: the focused (or playing) channel, else the selected group
@@ -226,21 +260,41 @@ fun GuideInfo(m: AppModel, now: Long, modifier: Modifier = Modifier, compact: Bo
     LiveInfo(liveInfoOf(m, ch, m.focusProg, now), modifier, compact)
 }
 
+/** The compact info header of Live TV ▸ Channels, with its Favourite button for the channel shown. */
+@Composable
+fun GuideInfoBar(m: AppModel, now: Long, modifier: Modifier = Modifier) {
+    val ch = m.focusCh ?: m.current ?: m.filtered.firstOrNull()
+    io.github.kmmarin.tvbro.ui.live.LiveInfoBar(liveInfoOf(m, ch, m.focusProg, now), ch?.let { c -> { m.toggleFav(c) } }, modifier)
+}
+
+/** Live TV ▸ Channels in spec pixels under the sub-menu row: compact header, a 400 x 225 preview, 8+ rows of 64. */
+object ChannelsLayout {
+    val InfoTop = 182.dp
+    val PreviewTop = 178.dp
+    val PreviewW = 400.dp
+    val PreviewH = 225.dp
+    val TabsTop = 356.dp
+    val GridTop = 414.dp
+    val metrics = io.github.kmmarin.tvbro.ui.live.EpgMetrics(rowH = 64.dp)
+}
+
 /**
  * Live TV ▸ Channels (direction 5, mockup #s5 "Live TV guide"): the focused programme and the live preview at the
  * top, the channel groups as tabs, then the guide. Inside the shell, under the sub-menu row (spec pixels).
  * OK on a channel or its programme on now previews it; OK on the channel in the preview opens it full screen.
  */
 @Composable
-fun TvSection(m: AppModel, top: Dp = 178.dp) {
+fun TvSection(m: AppModel) {
     val now = rememberNow()
     val g = rememberGuideFocus(m)
     io.github.kmmarin.tvbro.ui.live.LiveColorKeys(m) { g.groupFocused }
+    val l = ChannelsLayout
     Box(Modifier.fillMaxSize()) {
-        GuideInfo(m, now, Modifier.padding(start = 96.dp, top = top + 12.dp).width(1080.dp))
-        LivePreview(m, m.current, Modifier.align(Alignment.TopEnd).padding(end = 96.dp, top = top).size(500.dp, 281.dp))
-        GuideGroupTabs(m, g, Modifier.padding(top = top + 300.dp))
+        GuideInfoBar(m, now, Modifier.padding(start = 96.dp, top = l.InfoTop, end = 96.dp + l.PreviewW + 40.dp))
+        LivePreview(m, m.current, Modifier.align(Alignment.TopEnd).padding(end = 96.dp, top = l.PreviewTop).size(l.PreviewW, l.PreviewH))
+        GuideGroupTabs(m, g, Modifier.padding(top = l.TabsTop, end = 96.dp + l.PreviewW + 24.dp))
         GuideGrid(m, g, now, { ch, p -> if (p == null || p.stop > System.currentTimeMillis() / 1000) m.previewOrPlay(ch) else m.guidePlay(ch, p) },
-            Modifier.padding(start = 96.dp, end = 96.dp, top = top + 360.dp, bottom = 92.dp).fillMaxSize())
+            Modifier.padding(start = 96.dp, end = 96.dp, top = l.GridTop, bottom = 92.dp).fillMaxSize(), metrics = l.metrics)
+        GuideGroupMenu(m, g, top = io.github.kmmarin.tvbro.ui.orbit5.O5Space.TopBar)
     }
 }

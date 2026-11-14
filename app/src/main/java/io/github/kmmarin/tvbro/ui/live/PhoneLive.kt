@@ -130,12 +130,14 @@ fun PhoneLiveSection(m: AppModel) {
             val now = rememberNow()
             val playing = m.current
             val guideCh = (m.focusCh ?: playing)?.let { c -> m.filtered.firstOrNull { it.key == c.key } } ?: m.filtered.firstOrNull()
+            val menu = androidx.compose.runtime.remember { GroupMenuState() }
+            Box(Modifier.fillMaxSize()) {
             PhoneLiveView(
                 tabs = tabs, selected = sel, onTab = onTab,
                 preview = { mod -> LivePreview(m, playing, mod) },
                 nowPlaying = playing?.let { c -> m.epg.nowNext(c, now).first?.title?.let { it to c.name } ?: ((c.name) to "") },
-                groups = m.groupList, group = m.group, groupLabel = { groupTabLabel(m, it) },
-                onGroup = { m.selectGroup(it) }, onGroupLong = { m.openGroupMenu(it) },
+                groups = m.liveTabs, group = m.group, groupLabel = { groupTabLabel(m, it) },
+                onGroup = { if (it == io.github.kmmarin.tvbro.GROUP_MENU) menu.show() else m.selectGroup(it) }, onGroupLong = { m.openGroupMenu(it) },
                 guide = PhoneLive.guide, channels = m.filtered, programmes = { c -> m.epg.programmes(c) }, now = now,
                 marks = { c -> rowMarks(m, c) },
                 onChannel = { c -> m.focusCh = c; m.previewOrPlay(c) }, onChannelLong = { c -> m.openChannelMenu(c) },
@@ -152,6 +154,11 @@ fun PhoneLiveSection(m: AppModel) {
                 onProgrammeLong = { c, e -> m.progMenu = c to e.p },
                 emptyText = if (m.loading.isNotEmpty()) m.loading else "No channels in this group.",
             )
+            // "All groups": the side menu as a full-screen sheet between the header and the bottom bar
+            if (menu.open) Box(Modifier.fillMaxSize().padding(top = insets.top, bottom = insets.bottom)) {
+                GroupSideMenu(m, menu, 0.dp, onChosen = {}, onClosed = {}, phone = true)
+            }
+            }
         }
     }
 }
