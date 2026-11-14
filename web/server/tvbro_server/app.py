@@ -1489,6 +1489,14 @@ class Handler(BaseHTTPRequestHandler):
             self.route_get(u.path)
         except BrokenPipeError:
             pass
+        except PermissionError as e:
+            # Orbit: a profile route for a session without a (valid) profile: say so (the page then asks "Who's
+            # watching?") instead of a 500
+            if str(e) == "no profile selected":
+                self._json({"error": "no profile selected", "auth": "profile"}, 409)
+            else:
+                LOG.exception("GET %s failed", OFACADE.redact(u.path))
+                self._err(500, type(e).__name__)
         except Exception as e:                      # noqa: BLE001
             LOG.exception("GET %s failed", OFACADE.redact(u.path))
             try:
@@ -1542,6 +1550,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not self._is_admin():
                     return self._err(403, "admin only")
             self.route_post(u.path)
+        except PermissionError as e:
+            if str(e) == "no profile selected":
+                self._json({"error": "no profile selected", "auth": "profile"}, 409)
+            else:
+                LOG.exception("POST %s failed", u.path)
+                self._err(500, type(e).__name__)
         except Exception as e:                      # noqa: BLE001
             LOG.exception("POST %s failed", u.path)
             self._err(500, type(e).__name__)
