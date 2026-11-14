@@ -233,6 +233,13 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT) {
         }
     }
 
+    /** A signed-in GET of [path] (catalog, profiles: CatalogApi.kt, OrbitProfiles.kt). Errors as [OrbitError]. */
+    internal fun getJson(link: OrbitLink, path: String): JsonObject = call(link.server, path, null, link)
+
+    /** A signed-in POST of [body] to [path]. */
+    internal fun postJson(link: OrbitLink, path: String, body: JsonObject): JsonObject =
+        call(link.server, path, Json.encodeToString(JsonObject.serializer(), body), link)
+
     /** This TV's profile state on the server: My list and resume points (see docs/orbit/API-v1.md, step 4). */
     fun state(link: OrbitLink): JsonObject = call(link.server, "/api/state", null, link)
 
