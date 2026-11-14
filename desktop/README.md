@@ -1,6 +1,7 @@
 # tvBro desktop
 
-tvBro for Windows (x64) and Raspberry Pi 4 (Debian 12 bookworm arm64, Wayland/labwc). Kotlin + Compose
+tvBro for Windows (x64) and Raspberry Pi 4 (Debian 12 bookworm arm64, Wayland/labwc); macOS in progress
+(branch `orbit/macos`, see [docs/orbit/MACOS.md](../docs/orbit/MACOS.md)). Kotlin + Compose
 Multiplatform for Desktop (JVM), video by libmpv through JNA. Dark theme only. Apache-2.0, clean-room like the
 Android TV app.
 
@@ -26,19 +27,21 @@ I stream info, Space pause, A / S audio / subtitles, [ ] audio delay, R record, 
 Y favourite, Esc back (live TV shrinks into the TV screen's preview, keeps playing with its sound, and the guide focuses it).
 
 Data: Windows `%APPDATA%\tvBro` (settings, sources, watch state, recordings list) and `%LOCALAPPDATA%\tvBro\cache`;
-Linux `~/.config/tvbro`, `~/.cache/tvbro`. Tests and the self-test can redirect them with `-Dtvbro.config=<dir>`
+Linux `~/.config/tvbro`, `~/.cache/tvbro`; macOS `~/Library/Application Support/tvBro`, `~/Library/Caches/tvBro`,
+log `~/Library/Logs/tvBro/tvbro.log` (all in `AppDirs`, `Store.kt`). Tests and the self-test can redirect them with `-Dtvbro.config=<dir>`
 and `-Dtvbro.cache=<dir>`.
 
 ## Security
 
 - Logins: `sources.bin` and `smb.bin` are encrypted with Windows DPAPI, else the libsecret keyring
-  (`secret-tool`), else AES-GCM with `key.bin` (created once, 0600, never replaced). A locked or unreachable keyring
+  (`secret-tool`) or, on macOS, the login Keychain (`MacKeychain.kt`, via `/usr/bin/security`, key never on a
+  command line), else AES-GCM with `key.bin` (created once, 0600, never replaced). A locked or unreachable keyring
   is an error, not a reason for a new key; a secret that can no longer be decrypted is kept as `<name>.bin.bak`
   before anything overwrites it.
 - Stream addresses (they carry the provider login) are not stored in plain text: the playlist / catalogue / guide
   cache is AES-256-GCM (`*.sgz`, key `cachekey.bin` kept like the logins); `recordings.json`, `watch.json`, backups
   and the search index hold no addresses, which are taken from the decrypted source at play / record time.
-- Linux / Pi: config and cache folders 0700, files 0600 (also tightened for files of older versions).
+- Linux / Pi / macOS: config and cache folders 0700, files 0600 (also tightened for files of older versions).
 - Players: only network addresses (http(s), rtmp(s), rtsp, rtp, udp, srt) from playlists; local files only for
   tvBro's own recordings. The external player gets an argument list with `--` before the address (mpv, VLC).
   libmpv runs without ytdl, scripts, config files or IPC, and FFmpeg may open network protocols only.
@@ -50,6 +53,7 @@ and `-Dtvbro.cache=<dir>`.
 ```
 gradlew :desktop:createDistributable          (Windows app image with bundled JRE)
 gradlew :desktop:piLibs -Ptarget=linux-arm64  (Pi classpath with linux-arm64 Skia)
+./gradlew :desktop:packageDmg                 (macOS host only: unsigned Orbit.app in a DMG)
 ```
 
 Windows zip: `gradlew :desktop:windowsZip` writes `out/tvbro-windows.zip` (app image + `NOTICE`, `LICENSE`,
@@ -62,7 +66,9 @@ Pi tarball: `python desktop/packaging/pack_pi.py desktop/build/pi/lib <OpenJDK17
 
 libmpv (`Mpv.kt`: `MpvLocate`, `MpvLoader`) is looked for in this order: the file the user chose
 (`libmpv-path.txt` in the config folder), `libmpv-2.dll` next to `tvBro.exe`, then the OS search (`PATH`;
-Linux: `libmpv.so.2`). Files are checked before loading (PE / ELF header, processor) and must export
+Linux: `libmpv.so.2`); macOS: `Orbit.app/Contents/Frameworks`, `Contents/MacOS/lib`, Homebrew (`/opt/homebrew/lib`,
+`/usr/local/lib`), MacPorts (`/opt/local/lib`), then dyld. Files are checked before loading (PE / ELF / Mach-O
+header incl. universal binaries, processor) and must export
 `mpv_client_api_version`. Without one, `MissingLib.kt` shows the "Video library missing" screen (steps, Choose
 file…, Check again, INSTALL.md, Continue without video). `--render-missing <png>` renders it off-screen.
 
