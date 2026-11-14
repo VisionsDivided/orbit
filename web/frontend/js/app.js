@@ -19,7 +19,7 @@ import * as apiMod from './api.js';
 import { useStore } from './reminders.js';
 import { uiLoad, uiSave } from './uistate.js';
 import { ensureSignedIn } from './signin.js';
-import { orbitLoad, addNavChip } from './orbit.js';
+import { orbitLoad, addNavChip, approveTvDialog } from './orbit.js';
 
 
 const main = document.getElementById('main');
@@ -127,6 +127,12 @@ screens.editor = (arg) => editorScreen(main, nav, arg ? decodeURIComponent(arg) 
 
 // ---------- Settings ----------
 screens.settings = () => settingsScreen(main, nav, { setSignedIn(v) { signedIn = v; refreshNav(); } });
+// Orbit: #pair:<code> is the link in a TV's QR code: Settings with the "Link a TV" dialog on top
+screens.pair = (code) => {
+  const s = screens.settings();
+  approveTvDialog(decodeURIComponent(code || '')).then(() => { if (location.hash.startsWith('#pair')) location.hash = 'settings'; });
+  return s;
+};
 
 function refreshNav() { document.querySelectorAll('.nav-item').forEach((b) => { if (b.dataset.screen !== 'settings') b.style.opacity = signedIn ? '1' : '.4'; }); }
 
@@ -155,7 +161,7 @@ document.addEventListener('error', (e) => { const t = e.target; if (t && t.tagNa
   if (last) api.channelsByKeys([last.key]).then((r) => { if (!r.items.length) forgetCurrent(last.key); }).catch(() => {});
   // back where this device left off: section, guide position, full screen + channel
   const ui = uiLoad();
-  if (!location.hash) location.hash = signedIn ? (ui.hash && !/^(play|editor)/.test(ui.hash) ? ui.hash : 'live') : 'settings';
+  if (!location.hash) location.hash = signedIn ? (ui.hash && !/^(play|editor|pair)/.test(ui.hash) ? ui.hash : 'live') : 'settings';
   route();
   if (signedIn && ui.full && last && (location.hash.replace(/^#/, '') || 'live') === 'live') {
     playLive(last, { group: last.groupId || ui.playingGroup || null });

@@ -170,6 +170,25 @@ export function addNavChip() {
   settings.before(chip);
 }
 
+// ---------- link a TV ----------
+/** Approve the code a TV shows (code: pre-filled from the TV's QR link, #pair:CODE). */
+export async function approveTvDialog(code) {
+  if (!orbitMode()) await orbitLoad();
+  if (!orbitMode() || !me) { toast('Sign in with an account first'); return; }
+  const v = await formDialog('Link a TV', [
+    { name: 'code', label: 'Code shown on the TV', value: code || '', max: '12' },
+    { name: 'profile', label: 'Profile on that TV', type: 'select', value: me.profile ? me.profile.id : '',
+      options: me.profiles.map((p) => [p.id, p.name + (p.kids ? ' (kids)' : '')]) },
+  ], `The TV signs in to your account (${me.account.displayName}). You can sign it out any time under Your devices.`, 'Link',
+  (x) => (x.code.replace(/[^0-9a-z]/gi, '').length === 8 ? null : 'The code has 8 letters and digits'));
+  if (!v) return false;
+  try {
+    const r = await post('/v1/pair/approve', { code: v.code, profileId: v.profile });
+    toast(`${r.device} is linked`);
+    return true;
+  } catch (e) { toast(e.status === 429 ? 'Too many wrong codes; wait a little' : e.message); return false; }
+}
+
 // ---------- Settings ▸ Accounts ----------
 const fmtSeen = (ts) => ts ? new Date(ts * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
 const post = (path, body) => apiReq(path, { method: 'POST', body: JSON.stringify(body || {}) });
@@ -217,7 +236,8 @@ export function orbitSettingsCard(isAdmin) {
         h('span', {}, (s.device || 'Unnamed device') + (s.current ? ' (this device)' : '')), h('span', { class: 'hint' }, 'last used ' + fmtSeen(s.lastSeen)),
         s.current ? null : btn('Sign out', 'orbit-rev-' + s.id, async () => {
           try { await post('/v1/sessions/revoke', { id: s.id }); toast('That device is signed out'); refresh(); } catch (e) { toast(e.message); }
-        }))))));
+        }))),
+        btn('Link a TV…', 'orbit-pair', async () => { if (await approveTvDialog('')) refresh(); }))));
       if (a.role !== 'member') {
         kids.push(row('Household accounts', h('div', { class: 'orbit-list' }, ...accounts.map((x) => h('div', { class: 'orbit-li' },
           h('span', {}, `${x.displayName} (${x.username})`), h('span', { class: 'hint' }, (ROLE[x.role] || x.role) + (x.disabled ? ', disabled' : '')),

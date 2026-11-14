@@ -46,6 +46,23 @@ It is written so another implementation (for example Rust) could replace the ser
 | POST | `/v1/accounts` | owner, admin | `{"username", "password", "displayName"?, "role"?: "member"\|"admin"}` → `Account`. Only the owner may create admins. Each new account gets one profile named after it. |
 | POST | `/v1/accounts/disable` | owner, admin | `{"id", "disabled": bool}` → `Account`. Ends all its sessions. Never the owner, never yourself; admins cannot disable admins. |
 
+## Linking a TV (step 6)
+
+| Method | Path | Who | Body → Answer |
+|---|---|---|---|
+| POST | `/v1/pair/start` | the TV (public, `X-TvBro: 1`) | `{"device"}` → `{"pairId", "code", "expires", "interval"}`. `code` is `XXXX-XXXX` (letters without vowels, digits 2–9). At most 5 waiting pairings per address, 50 in all (429). 409 while the server has no accounts. |
+| POST | `/v1/pair/poll` | the TV (public, `X-TvBro: 1`) | `{"pairId"}` → `{"status": "pending"}` or, once, `{"status": "approved", "session", "csrf", "me": Me}`. 404 when expired, collected or cancelled. Poll every `interval` seconds. |
+| POST | `/v1/pair/approve` | signed in | `{"code", "profileId"?}` → `{"ok": true, "device"}`. The profile must be your own (else 404); unknown or expired codes answer 404 and are throttled per address (429). |
+
+The TV keeps `session` (encrypted) and sends it as the `tvbro_s` cookie with the `X-CSRF-Token`, like a browser. It
+shows the code and a QR code of `<server>/#pair:<code>`, which opens the web app's "Link a TV" dialog with the code
+filled in. Pairings live 10 minutes in memory; an approved session that is never collected is ended. The device
+appears under "Your devices" and can be signed out there; the TV notices on its next request (401) and offers to
+link again.
+
+The server checks the `Host` header, so the address the TV uses (for example `192.0.2.10:8750`) must be listed in
+`TVBRO_ALLOWED_HOSTS`.
+
 ## What belongs to a profile (step 4)
 In Orbit mode these existing `/api` routes read and write the **signed-in session's profile** instead of the
 household: `GET /api/state`, `POST /api/state/<scope>` (My list, which also holds favourite channels; resume

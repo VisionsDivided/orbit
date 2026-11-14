@@ -11,10 +11,11 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from .accounts import Accounts, ApiError
+from .pairing import Pairings
 
-# paths that work without a session (setup / sign-in send X-TvBro: 1 instead of a CSRF token)
+# paths that work without a session (setup / sign-in / TV pairing send X-TvBro: 1 instead of a CSRF token)
 PUBLIC_GET = {"/v1/status"}
-PUBLIC_POST = {"/v1/setup", "/v1/auth/login"}
+PUBLIC_POST = {"/v1/setup", "/v1/auth/login", "/v1/pair/start", "/v1/pair/poll"}
 
 
 @dataclass
@@ -35,9 +36,10 @@ class Reply:
 
 
 class Api:
-    def __init__(self, accounts: Accounts):
+    def __init__(self, accounts: Accounts, pairings: Optional[Pairings] = None):
         self.acc = accounts
-        A = self.acc
+        self.pair = pairings or Pairings(accounts)
+        A, PR = self.acc, self.pair
         r: dict[tuple[str, str], Callable[[Call], Reply]] = {
             ("GET", "/v1/status"): lambda c: Reply({"accounts": A.enabled(), "setup": not A.enabled()}),
             ("POST", "/v1/setup"): self._setup,
@@ -56,6 +58,10 @@ class Api:
                 c.sess, c.body.get("username"), c.body.get("password"), c.body.get("displayName"), c.body.get("role"))),
             ("POST", "/v1/accounts/disable"): lambda c: Reply(A.set_disabled(c.sess, c.body.get("id"),
                                                                             c.body.get("disabled"))),
+            ("POST", "/v1/pair/start"): lambda c: Reply(PR.start(c.body.get("device"), c.client)),
+            ("POST", "/v1/pair/poll"): lambda c: Reply(PR.poll(c.body.get("pairId"))),
+            ("POST", "/v1/pair/approve"): lambda c: Reply(PR.approve(c.sess, c.body.get("code"), c.body.get("profileId"),
+                                                                    c.client)),
         }
         self.routes = r
 

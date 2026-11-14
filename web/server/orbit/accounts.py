@@ -132,10 +132,12 @@ class Accounts:
         self._prune()
         return self._issue(self._account(row), device)
 
-    def _issue(self, acc: dict, device: str) -> str:
+    def _issue(self, acc: dict, device: str, profile_id: Optional[str] = None) -> str:
+        """A new account session (profile_id: one of the account's profiles, else its first)."""
         sid = self.auth.issue_session(SESSION_ROLE[acc["role"]])
         h = self.auth._h(sid)
-        first = self.db.one("SELECT id FROM profiles WHERE account_id=? ORDER BY created, id LIMIT 1", (acc["id"],))
+        first = (profile_id,) if profile_id else \
+            self.db.one("SELECT id FROM profiles WHERE account_id=? ORDER BY created, id LIMIT 1", (acc["id"],))
         now = int(self.clock())
         dev = device.strip()[:60] if isinstance(device, str) else ""
         self.db.run("INSERT INTO account_sessions(sess_hash, id, account_id, profile_id, device, created, last_seen) "
