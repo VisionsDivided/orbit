@@ -31,6 +31,8 @@ _CGNAT = ipaddress.ip_network("100.64.0.0/10")
 _NAT64 = ipaddress.ip_network("64:ff9b::/96")
 
 _allow_private_setting: Callable[[], bool] = lambda: False
+# Orbit: exact (host, port) pairs the admin configured as media servers (Plex, Jellyfin, Seerr on the LAN)
+_private_hosts: Callable[[], set] = lambda: set()
 
 
 class Blocked(urllib.error.URLError):
@@ -48,6 +50,21 @@ def set_allow_private(fn: Callable[[], bool]):
     """The admin setting "Allow sources on the local network" (read at every fetch)."""
     global _allow_private_setting
     _allow_private_setting = fn
+
+
+def set_private_hosts(fn: Callable[[], set]):
+    """Orbit: the configured LAN media servers, {(host, port)}, read at every fetch. Only these may resolve to
+    private (RFC 1918 / ULA / CGNAT) addresses when "local network sources" is off; loopback and link-local stay
+    refused for them too."""
+    global _private_hosts
+    _private_hosts = fn
+
+
+def _host_listed(host: str, port: int) -> bool:
+    try:
+        return (str(host).lower().strip("[]"), int(port)) in _private_hosts()
+    except Exception:                       # noqa: BLE001
+        return False
 
 
 def allow_private() -> bool:
@@ -122,7 +139,7 @@ def resolve(host: str, port: int) -> list[tuple]:
         raise urllib.error.URLError(e)
     if not infos:
         raise Blocked("host does not resolve")
-    private_ok = allow_private()
+    private_ok = allow_private() or _host_listed(host, port)
     for info in infos:
         if not ip_allowed(info[4][0], private_ok):
             raise Blocked("address not allowed (local network, loopback or link-local)")
