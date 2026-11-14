@@ -301,7 +301,18 @@ fun SettingsScreen(m: AppModel) {
     var sec by m::settingsSec // remembered (also across restarts): Settings reopens on the same page
     val firstSec = remember { sec.coerceIn(0, names.size - 1) }
     val fr = remember { androidx.compose.ui.focus.FocusRequester() }
-    LaunchedEffect(Unit) { kotlinx.coroutines.delay(300); runCatching { fr.requestFocus() } }
+    // The remembered page can be below the bottom of the names list: an item that is not composed yet cannot take focus
+    // (the request failed quietly and the remote kept moving the screen behind the panel). Scroll to it first, then
+    // focus it, trying again briefly while the panel slides in.
+    val namesState = androidx.compose.foundation.lazy.rememberLazyListState()
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(250)
+        runCatching { namesState.scrollToItem((firstSec + 1 - 4).coerceAtLeast(0)) }    // +1: the title is item 0
+        repeat(10) {
+            kotlinx.coroutines.delay(60)
+            if (runCatching { fr.requestFocus() }.isSuccess && FocusMemory.anyFocus) return@LaunchedEffect
+        }
+    }
     Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(0x99000000))) {
         Row(Modifier.align(Alignment.CenterEnd).offset(x = x).width(820.dp).fillMaxHeight().focusTrap().background(androidx.compose.ui.graphics.Color(0xFF141A22))) {
             // Left from a setting goes back to its page's name, not to whichever name is level with it (that would
@@ -313,7 +324,7 @@ fun SettingsScreen(m: AppModel) {
             val pageState = androidx.compose.foundation.lazy.rememberLazyListState()
             val pageScope = rememberCoroutineScope()
             LaunchedEffect(sec) { runCatching { pageState.scrollToItem(0) } }
-            LazyColumn(Modifier.width(230.dp).fillMaxHeight().padding(12.dp).enterAt(selFr)) {
+            LazyColumn(Modifier.width(230.dp).fillMaxHeight().padding(12.dp).enterAt(selFr), state = namesState) {
                 item { Text("Settings", color = Accent, fontSize = 24.sp, modifier = Modifier.padding(10.dp)) }
                 itemsIndexed(names) { i, n ->
                     Text((if (i == sec) "> " else "  ") + n, color = if (i == sec) Accent else TextMain, fontSize = 16.sp, maxLines = 1,
