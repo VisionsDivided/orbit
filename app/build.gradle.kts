@@ -58,7 +58,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".dev" // dev builds install beside a release build
-            resValue("string", "app_name", "Orbit Dev")
+            resValue("string", "app_name", "Orbit") // the owner wants every build called Orbit
         }
         release {
             isMinifyEnabled = true // R8

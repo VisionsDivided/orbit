@@ -12,8 +12,8 @@ release v0.1.0, commit `e5d1897`). For tvBro's own features see its README and r
 ## [Unreleased] - 0.1.0-dev
 
 ### Orbit identity
-- Orbit has its own app ID (`io.github.visionsdivided.orbit`) and name, so it installs beside tvBro. Development
-  builds are called "Orbit Dev" and install beside a release build.
+- Orbit has its own app ID (`io.github.visionsdivided.orbit`) and name, so it installs beside tvBro. Every build is
+  called "Orbit"; development builds keep their own app ID so they can install beside a release build.
 - Orbit logos everywhere: app icons, the Android TV banner, the side menu, the sign-in page, the favicon.
 - tvBro's licence, notices and credits are kept; the README says Orbit is built on tvBro.
 
