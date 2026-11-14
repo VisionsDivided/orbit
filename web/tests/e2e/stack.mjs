@@ -129,7 +129,8 @@ export async function startStack() {
   const prov = await mockProvider(path.join(tmp, 'media'));
   const PB = `http://127.0.0.1:${prov.address().port}`;
   const port = await freePort();
-  const server = spawn('python', ['run.py'], { cwd: path.join(WEB, 'server'), stdio: ['ignore', 'ignore', 'pipe'],
+  const server = spawn(process.env.TVBRO_PYTHON || 'python', ['run.py'],   // TVBRO_PYTHON=py on Windows
+    { cwd: path.join(WEB, 'server'), stdio: ['ignore', 'ignore', 'pipe'],
     // the mock provider is on loopback, which the server refuses unless told (tests only)
     env: { ...process.env, TVBRO_PORT: String(port), TVBRO_DATA: path.join(tmp, 'data'), TVBRO_STATIC: path.join(WEB, 'frontend'), PYTHONDONTWRITEBYTECODE: '1', TVBRO_ALLOW_LOOPBACK_SOURCES: '1' } });
   let serr = '';

@@ -20,6 +20,8 @@ const TABS = [['rec', 'Recommended'], ['browse', 'Browse'], ['coll', 'Collection
 const PAGE = 60;
 const ARG = { '': 'rec', recommended: 'rec', browse: 'browse', collections: 'coll' };
 const ARG_OF = { rec: '', browse: 'browse', coll: 'collections' };
+/** The title opened last per kind: back from its page (Escape / Back), that card gets the focus again. */
+const lastOpen = {};
 
 function memOf(kind) {
   const all = uiLoad().sect || {};
@@ -103,6 +105,7 @@ export function sectionScreen(main, kind, nav, arg = '') {
       if (first) { feat.feature(first, true); setDots(first); }
       else rows.append(emptyState(`No ${noun} yet`, `Your ${noun} from IPTV, Plex and Jellyfin show up here once a source is set up.`,
         btn5('Open Settings', 'gear', () => { location.hash = 'settings'; }, { primary: true })));
+      restoreFocus(rows);
     }
     (async () => {
       let d = null;
@@ -185,6 +188,7 @@ export function sectionScreen(main, kind, nav, arg = '') {
         if (first) { grid.replaceChildren(); total = gotTotal; setCount(total); }
         total = gotTotal;
         for (const it of items) grid.append(cardWithMenu(it, onFocus));
+        if (lastOpen[kind] && !restoreFocus(grid) && lastOpen[kind] && offset + items.length < gotTotal && offset < 3000) setTimeout(() => loadMore(), 0);
         offset += items.length;
         if (!items.length && first) {
           grid.append(m.source === 'local' && fallback
@@ -279,9 +283,20 @@ export function sectionScreen(main, kind, nav, arg = '') {
     menu(it.title || '', items);
   }
   function cardWithMenu(it, onFocus, o = {}) {
-    const c = posterCard(it, { onFocus, ...o });
+    const c = posterCard(it, { onFocus, onOpen: (x) => { lastOpen[kind] = x.key; location.hash = itemHref(x); }, ...o });
     onItemMenu(c, () => itemMenu(it));
     return c;
+  }
+  /** Back from a title's page: focus its card (not when the top bar brought us here: the focus stays there). */
+  function restoreFocus(root) {
+    const k = lastOpen[kind]; if (!k || !alive) return false;
+    const ae = document.activeElement;
+    if (ae && ae.closest && ae.closest('#topbar, #tabbar')) { delete lastOpen[kind]; return false; }
+    const el = root.querySelector('.card5[data-key="' + CSS.escape(k) + '"]');
+    if (!el) return false;
+    delete lastOpen[kind];
+    el.focus({ preventScroll: true }); el.scrollIntoView({ block: 'center', inline: 'nearest' });
+    return true;
   }
   const keysFor = (it) => [
     { color: 'red', label: 'My list', action: () => { const x = it || (ctl && ctl.keys && ctl.keys()); if (x) toggleList(x); } },
