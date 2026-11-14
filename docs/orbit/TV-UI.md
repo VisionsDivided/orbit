@@ -152,8 +152,13 @@ opens its menu (play from start, marks, downloads). Everything tvBro's page did 
 episode lists and marks, downloads, external player, category lock.
 
 **Plex / Jellyfin titles** open the title page with details, seasons and episodes from `/v1/media/item` and
-`/v1/media/children`, My list and Mark watched (`/v1/media/watched`), and a disabled **Play (coming soon)**: playback
-through those servers is not built on the TV yet.
+`/v1/media/children`, My list and Mark watched (`/v1/media/watched`), and **Play / Resume** (plus **Play from start**
+when it stopped part-way), like IPTV titles. They play in the TV's VOD player through the home server
+(`POST /v1/media/play`: the original file when the server can, else HLS; once, an original file that does not play is
+asked again as HLS). Embedded audio and subtitle tracks and the server's WebVTT subtitles are under Up; progress goes
+to the media server every 10 s and on pause / stop (`/v1/media/progress`); at the end the next episode plays after the
+Up next countdown. Home's Plex / Jellyfin cards open and play too. Errors say what to do (link the server again,
+the server is not answering, the title cannot be played). No IPTV stream slot is used.
 
 ## Performance (BRAVIA)
 

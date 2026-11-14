@@ -9,6 +9,11 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.media3.common.MimeTypes
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -148,11 +153,18 @@ private class TrackRow(val label: String, val action: () -> Unit)
 fun VodPlayerScreen(m: AppModel) {
     val vp = m.vodPlay ?: run { m.screen = Screen.LIST; return }
     val ctx = LocalContext.current
+    // Orbit: a Plex / Jellyfin title through the home server's relay (the same for this screen: it is keyed by vp.key;
+    // the HLS fallback replaces the play answer under the same key)
+    val media = vp.media
+    val isMedia = media != null
+    val mediaNow by rememberUpdatedState(media)
     val exo = remember {
         val ms = m.bufferSec * 1000
+        // the relay wants the session cookie (only ever sent to the home server, never through a redirect)
+        val http = OkHttpDataSource.Factory(if (isMedia) io.github.kmmarin.tvbro.orbit.MediaPlayback.client(m.orbit.link) else Net.client)
         ExoPlayer.Builder(ctx, delayFactory(ctx, m.delayProc))
             // http(s) through OkHttp, file:// (downloads, local recordings) and smb:// (recordings on a network share)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(io.github.kmmarin.tvbro.data.SmbShare.Factory(androidx.media3.datasource.DefaultDataSource.Factory(ctx, OkHttpDataSource.Factory(Net.client))) { m.store.smb() }))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(io.github.kmmarin.tvbro.data.SmbShare.Factory(androidx.media3.datasource.DefaultDataSource.Factory(ctx, http)) { m.store.smb() }))
             .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(ms, ms * 2, 1500, 3000)
                 .setTargetBufferBytes(48 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(false).build())
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
@@ -199,27 +211,60 @@ fun VodPlayerScreen(m: AppModel) {
     // "Up next" card: seconds left in the countdown (null = hidden); cancelled stays for this episode
     var upNext by remember { mutableStateOf<Int?>(null) }
     var upNextCancelled by remember { mutableStateOf(false) }
-    val nextEp = remember(vp.key) { if (isEpisode) m.nextEpisode() else null }
+    val nextEp = remember(vp.key) { if (isEpisode && !isMedia) m.nextEpisode() else null }
+    // Plex / Jellyfin: the play answer names the next episode
+    val mediaNext = media?.p?.next
+    val nextLabel: String? = mediaNext?.let { it.title.ifBlank { "Next episode" } }
+        ?: nextEp?.let { "${io.github.kmmarin.tvbro.data.Watch.code(it)} - ${io.github.kmmarin.tvbro.data.VodFmt.cleanTitle(m.playingSeries()?.name ?: "", it.title)}" }
+    // progress for the media server: every 10 s while playing, at once on pause, "stopped" when the screen goes
+    val clock = remember(media?.p?.session) { io.github.kmmarin.tvbro.orbit.MediaProgressClock() }
+    val clockNow by rememberUpdatedState(clock)
+    val fellBack = remember { booleanArrayOf(false) }
 
     fun back() { m.screen = if (vp.key.startsWith("r|")) Screen.RECORDINGS else if (m.detail != null) Screen.DETAIL else Screen.LIST }
     val vodScope = rememberCoroutineScope()
-    fun markDone() { if (!done[0]) { done[0] = true; m.episodeDone(vp.key) } }
+    // media titles: the media server keeps watched marks and resume points (from the progress reports), not the TV
+    fun markDone() { if (!done[0]) { done[0] = true; if (!isMedia) m.episodeDone(vp.key) } }
     fun leave() {
         val d = exo.duration
-        if (d > 0) m.store.setDur(vp.key, d)
-        if (io.github.kmmarin.tvbro.data.Watch.countsAsWatched(exo.currentPosition, d)) markDone() else if (!done[0]) m.savePos(vp.key, exo.currentPosition, d.coerceAtLeast(0))
+        if (!isMedia) {
+            if (d > 0) m.store.setDur(vp.key, d)
+            if (io.github.kmmarin.tvbro.data.Watch.countsAsWatched(exo.currentPosition, d)) markDone() else if (!done[0]) m.savePos(vp.key, exo.currentPosition, d.coerceAtLeast(0))
+        }
         back()
     }
-    fun canAutoplay() = isEpisode && nextEp != null && m.autoplayNext && !upNextCancelled
+    fun canAutoplay() = isEpisode && (nextEp != null || mediaNext != null) && m.autoplayNext && !upNextCancelled
+    fun playNextAny() {
+        val mp = mediaNow
+        if (mp == null) { m.playNext(); return }
+        val n = mp.p.next ?: return
+        io.github.kmmarin.tvbro.orbit.MediaPlayback.play(m, mp.conn, n.id, mp.source, episode = true, onFail = { status = it })
+    }
+    /** The original file did not play: once, the same title as HLS from where it stopped. */
+    fun fallBack(): Boolean {
+        val mp = mediaNow ?: return false
+        if (mp.p.isHls || mp.hlsOnly || fellBack[0]) return false
+        fellBack[0] = true
+        status = "Trying another format..."
+        val at = if (resumed[0] && exo.currentPosition > 0) exo.currentPosition / 1000 else mp.startSecs
+        io.github.kmmarin.tvbro.orbit.MediaPlayback.play(m, mp.conn, mp.id, mp.source, mp.episode, hlsOnly = true, atSecs = at, onFail = { status = it })
+        return true
+    }
     DisposableEffect(exo) {
         val l = object : Player.Listener {
-            override fun onPlayerError(error: androidx.media3.common.PlaybackException) { status = "Playback error: ${error.errorCodeName}" }
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                val mp = mediaNow
+                status = if (mp == null) "Playback error: ${error.errorCodeName}"
+                    else if (fallBack()) "Trying another format..." else io.github.kmmarin.tvbro.orbit.MediaPlayback.playerError(error.errorCodeName, mp.source)
+            }
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY && !resumed[0]) {
                     resumed[0] = true
-                    val p = m.store.pos(vp.key)
+                    // media titles start at their resume point already (the play request chose it)
+                    val p = if (isMedia) 0L else m.store.pos(vp.key)
                     if (p > 5000 && !m.isWatched(vp.key)) exo.seekTo(p)
                 }
+                if (state == Player.STATE_READY && isMedia && status == "Trying another format...") status = ""
                 if (state == Player.STATE_ENDED) {
                     markDone()
                     if (canAutoplay()) { if (upNext == null) upNext = io.github.kmmarin.tvbro.data.Watch.UP_NEXT_COUNTDOWN_S }
@@ -228,7 +273,7 @@ fun VodPlayerScreen(m: AppModel) {
             }
             override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
                 // Per-series audio language and captions, applied once per episode as the tracks become known.
-                if (!isEpisode) return
+                if (!isEpisode || isMedia) return
                 val row = m.playingSeries()?.let { m.watch.seriesRow(it.key) } ?: return
                 val groups = tracks.groups
                 if (!tracksApplied[0] && groups.any { it.type == C.TRACK_TYPE_AUDIO }) {
@@ -257,8 +302,10 @@ fun VodPlayerScreen(m: AppModel) {
         io.github.kmmarin.tvbro.data.Busy.playing = true
         exo.addListener(l)
         exo.setVideoChangeFrameRateStrategy(if (m.matchFps) C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_ONLY_IF_SEAMLESS else C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
-        val fromProvider = vp.url.startsWith("http")
+        // media titles take no IPTV stream slot (and load below, per play session)
+        val fromProvider = !isMedia && vp.url.startsWith("http")
         val claim = vodScope.launch {
+            if (isMedia) return@launch
             // Orbit: join the household's stream count (asks to stop the oldest viewer when every stream is in use)
             if (fromProvider && !m.orbit.claimStream("vod", vp.title, ask = true)) { back(); return@launch }
             exo.setMediaItem(MediaItem.fromUri(vp.url)); exo.prepare(); exo.playWhenReady = true
@@ -266,15 +313,37 @@ fun VodPlayerScreen(m: AppModel) {
         onDispose {
             claim.cancel(); if (fromProvider) m.orbit.releaseStream("vod")
             // switching episode from the bar, or leaving by any route: keep the position
-            if (!done[0] && resumed[0] && exo.currentPosition > 0) m.savePos(vp.key, exo.currentPosition, exo.duration.coerceAtLeast(0))
+            if (!isMedia && !done[0] && resumed[0] && exo.currentPosition > 0) m.savePos(vp.key, exo.currentPosition, exo.duration.coerceAtLeast(0))
             io.github.kmmarin.tvbro.data.Busy.playing = false; exo.removeListener(l); exo.release()
+        }
+    }
+    // Plex / Jellyfin: the play answer's address (and its WebVTT subtitles) from the resume point; a new session (the
+    // HLS fallback) loads again. Its end ("stopped") is reported when the session or the screen goes.
+    DisposableEffect(media?.p?.session) {
+        val mp = media
+        if (mp != null) {
+            resumed[0] = false
+            exo.setMediaItem(mediaItem(mp), mp.startSecs * 1000); exo.prepare(); exo.playWhenReady = true
+        }
+        val c = clock
+        onDispose {
+            if (mp != null) {
+                c.stop()?.let { io.github.kmmarin.tvbro.orbit.MediaPlayback.report(m, mp, exo.currentPosition, it) }
+                io.github.kmmarin.tvbro.orbit.MediaPlayback.rev++
+            }
         }
     }
     LaunchedEffect(Unit) {
         while (true) {
-            delay(1000); posMs = exo.currentPosition; durMs = exo.duration.coerceAtLeast(0)
+            delay(1000); posMs = exo.currentPosition
+            // an HLS transcode may not know its length yet: the play answer's
+            durMs = exo.duration.takeIf { it > 0 } ?: ((mediaNow?.p?.durationSecs ?: 0L) * 1000)
             if (!done[0] && io.github.kmmarin.tvbro.data.Watch.countsAsWatched(posMs, durMs)) markDone()
-            if (exo.isPlaying && !done[0] && (posMs / 1000) % 5 == 0L) m.savePos(vp.key, posMs, durMs)
+            if (!isMedia && exo.isPlaying && !done[0] && (posMs / 1000) % 5 == 0L) m.savePos(vp.key, posMs, durMs)
+            mediaNow?.let { mp ->
+                val playing = resumed[0] && exo.playWhenReady && exo.playbackState != Player.STATE_ENDED && exo.playbackState != Player.STATE_IDLE
+                clockNow.tick(System.currentTimeMillis(), playing)?.let { io.github.kmmarin.tvbro.orbit.MediaPlayback.report(m, mp, posMs, it) }
+            }
             if (upNext == null && canAutoplay() && exo.isPlaying && io.github.kmmarin.tvbro.data.Watch.upNextDue(posMs, durMs)) upNext = io.github.kmmarin.tvbro.data.Watch.UP_NEXT_COUNTDOWN_S
         }
     }
@@ -282,7 +351,7 @@ fun VodPlayerScreen(m: AppModel) {
     // Up-next countdown: plays the next episode at zero.
     LaunchedEffect(upNext) {
         val n = upNext ?: return@LaunchedEffect
-        if (n <= 0) { upNext = null; m.playNext(); return@LaunchedEffect }
+        if (n <= 0) { upNext = null; playNextAny(); return@LaunchedEffect }
         delay(1000); if (upNext == n) upNext = n - 1
     }
 
@@ -320,8 +389,12 @@ fun VodPlayerScreen(m: AppModel) {
         menu = rows
     }
 
+    // a phone (no remote): a tap shows the bar with touch controls
+    val phone = io.github.kmmarin.tvbro.ui.shell.rememberIsPhone()
     Box(
-        Modifier.fillMaxSize().background(Color.Black).focusRequester(fr).countFocus().focusable().onPreviewKeyEvent { e ->
+        Modifier.fillMaxSize().background(Color.Black)
+            .then(if (phone) Modifier.pointerInput(Unit) { detectTapGestures(onTap = { if (menu == null) { if (overlay) overlay = false else tick++ } }) } else Modifier)
+            .focusRequester(fr).countFocus().focusable().onPreviewKeyEvent { e ->
             if (menu != null || bar || upNext != null || e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
             when (e.key) {
                 Key.DirectionLeft -> { exo.seekTo((exo.currentPosition - 10_000).coerceAtLeast(0)); tick++; true }
@@ -343,18 +416,28 @@ fun VodPlayerScreen(m: AppModel) {
                     Box(Modifier.fillMaxWidth(if (durMs > 0) (posMs.toFloat() / durMs).coerceIn(0f, 1f) else 0f).height(6.dp).background(Accent))
                 }
                 if (tech.isNotEmpty()) Text(tech, color = Accent, fontSize = 14.sp)
-                Text("${posMs / 60000}:%02d / ${durMs / 60000}:%02d    Left/Right seek, OK pause, Up audio and subtitles".format(posMs / 1000 % 60, durMs / 1000 % 60), color = TextDim, fontSize = 14.sp)
+                if (phone) {
+                    Text("${io.github.kmmarin.tvbro.data.Watch.clock(posMs)} / ${io.github.kmmarin.tvbro.data.Watch.clock(durMs)}", color = TextDim, fontSize = 14.sp)
+                    // touch controls (each keeps the bar up a little longer)
+                    Row(Modifier.padding(top = 8.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TvButton("−10 s") { exo.seekTo((exo.currentPosition - 10_000).coerceAtLeast(0)); tick++ }
+                        TvButton(if (exo.playWhenReady) "Pause" else "Play") { exo.playWhenReady = !exo.playWhenReady; tick++ }
+                        TvButton("+10 s") { exo.seekTo(exo.currentPosition + 10_000); tick++ }
+                        TvButton("Audio & subtitles") { openMenu() }
+                        if (nextLabel != null) TvButton("Next episode") { playNextAny() }
+                        TvButton("Close") { leave() }
+                    }
+                } else Text("${posMs / 60000}:%02d / ${durMs / 60000}:%02d    Left/Right seek, OK pause, Up audio and subtitles".format(posMs / 1000 % 60, durMs / 1000 % 60), color = TextDim, fontSize = 14.sp)
             }
         }
         val un = upNext
-        if (un != null && nextEp != null) {
-            val series = m.playingSeries()
+        if (un != null && nextLabel != null) {
             Column(Modifier.align(Alignment.BottomEnd).padding(32.dp).width(420.dp).background(Color(0xEE0E1116)).padding(16.dp)) {
                 Text("Up next in $un s", color = Accent, fontSize = 15.sp)
-                Text("${io.github.kmmarin.tvbro.data.Watch.code(nextEp)} - ${io.github.kmmarin.tvbro.data.VodFmt.cleanTitle(series?.name ?: "", nextEp.title)}", color = TextMain, fontSize = 19.sp,
+                Text(nextLabel, color = TextMain, fontSize = 19.sp,
                     maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(vertical = 6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    TvButton("Play now", Modifier.focusRequester(ufr)) { upNext = null; m.playNext() }
+                    TvButton("Play now", Modifier.focusRequester(ufr)) { upNext = null; playNextAny() }
                     TvButton("Cancel") { cancelUpNext() }
                 }
             }
@@ -370,3 +453,11 @@ fun VodPlayerScreen(m: AppModel) {
         }
     }
 }
+
+/** A Plex / Jellyfin play answer as the player's item: HLS said so (the address may not end in .m3u8), WebVTT side-loaded. */
+private fun mediaItem(mp: io.github.kmmarin.tvbro.orbit.MediaPlay): MediaItem = MediaItem.Builder().setUri(mp.p.url)
+    .setMimeType(if (mp.p.isHls) MimeTypes.APPLICATION_M3U8 else null)
+    .setSubtitleConfigurations(mp.p.subtitles.map { s ->
+        MediaItem.SubtitleConfiguration.Builder(Uri.parse(s.url)).setMimeType(MimeTypes.TEXT_VTT).setLanguage(s.lang).setLabel(s.label).setId("orbit-sub-" + s.id).build()
+    })
+    .build()
