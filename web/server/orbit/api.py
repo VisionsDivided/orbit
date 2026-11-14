@@ -13,6 +13,7 @@ from typing import Callable, Optional
 from .accounts import Accounts, ApiError
 from .pairing import Pairings
 from . import progress as PROG
+from .media import MediaServers, Raw
 
 # paths that work without a session (setup / sign-in / TV pairing send X-TvBro: 1 instead of a CSRF token)
 PUBLIC_GET = {"/v1/status"}
@@ -26,6 +27,7 @@ class Call:
     sess: Optional[dict]                 # the gated session (account_id, profile_id, ...) or None
     body: dict = field(default_factory=dict)
     client: str = ""                     # client address, for sign-in throttling
+    query: dict = field(default_factory=dict)   # GET parameters, first value of each
 
 
 @dataclass
@@ -34,13 +36,15 @@ class Reply:
     code: int = 200
     session: Optional[str] = None        # a new session id to set as the cookie; "" clears it
     headers: dict = field(default_factory=dict)
+    raw: Optional[bytes] = None          # a non-JSON body (media artwork) sent with ``ctype`` instead of ``obj``
+    ctype: str = ""
 
 
 class Api:
     def __init__(self, accounts: Accounts, pairings: Optional[Pairings] = None,
                  playlists: Optional[Callable[[], list]] = None,
                  stores: Optional[Callable[[dict], tuple]] = None,
-                 streams: Optional[Callable[[], dict]] = None):
+                 streams: Optional[Callable[[], dict]] = None, media: Optional[MediaServers] = None):
         self.acc = accounts
         self.streams = streams or (lambda: {"max": 1, "count": 0, "active": []})   # tvBro's StreamRegistry.status()
         self.stores = stores                              # (StateStore, SeriesStore) of a session's profile
@@ -74,6 +78,10 @@ class Api:
             ("POST", "/v1/pair/approve"): lambda c: Reply(PR.approve(c.sess, c.body.get("code"), c.body.get("profileId"),
                                                                     c.client)),
         }
+        if media is not None:                             # Plex / Jellyfin (orbit/media.py)
+            for key, fn in media.routes().items():
+                r[key] = lambda c, fn=fn: self._media(fn(c.sess, c.body, c.query))
+        self.media = media
         self.routes = r
 
     def handle(self, call: Call) -> Reply:
@@ -128,6 +136,12 @@ class Api:
         if c.sess.get("session_kind") != "tv":
             return Reply({"error": "only a linked TV can fetch the playlists"}, 403)
         return Reply({"playlists": self.playlists()})
+
+    @staticmethod
+    def _media(out) -> Reply:
+        if isinstance(out, Raw):
+            return Reply({}, raw=out.body, ctype=out.ctype, headers=out.headers)
+        return Reply(out)
 
     def _revoke(self, c: Call) -> Reply:
         self.acc.revoke(c.sess, c.body.get("id"))

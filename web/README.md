@@ -124,7 +124,7 @@ device shows the same lists; browsers keep only an in-memory view.
   invalid or does not open the stored logins. It backs up the old key, `state.db` and every sealed file to
   `/root/tvbro-key-backup/rotate-<time>/` (0700, files 0600), writes a new 256-bit Fernet key to
   `tvbro.key.new` (0600), re-encrypts **every** sealed file (`provider*.enc`, `channels*.enc`, `vod*.enc`,
-  `share.enc`; `state.db` holds none) into staged copies and swaps them in only once all are ready, checks
+  `share.enc`, Orbit's `media.enc`; `state.db` holds none) into staged copies and swaps them in only once all are ready, checks
   every file opens with the new key, replaces `/etc/credstore/tvbro.key` atomically and only then moves the
   old key into the backup (`tvbro.key.retired`, never deleted). While it runs, `keyrot.json` in the data
   folder stops the server from starting on half-rotated data; after a crash run it again: it finishes the
