@@ -172,7 +172,8 @@ export function tvScreen(main, nav) {
     computeTabs(); gi = Math.max(0, tabIndexOf(mem.group));
     renderGroups();
   }
-  const selectGroupSoon = debounce((id) => selectGroup(id), 300);
+  // (only if that tab still has the focus: passing a tab on the way to "All groups" does not open its group)
+  const selectGroupSoon = debounce((id) => { if (zone === 'groups' && !menuOpen && tabs[gi] && tabs[gi].id === id) selectGroup(id); }, 300);
 
   // ---------- the "All groups" side menu ----------
   // Rows: the search field (mi = -1), then folders / groups (a folder opens in place) and, while searching, the
