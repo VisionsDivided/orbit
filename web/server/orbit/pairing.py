@@ -13,6 +13,7 @@ Pairings live in memory for 10 minutes. A session approved but never collected i
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 import threading
 import time
@@ -21,6 +22,8 @@ from typing import Callable
 from tvbro_server.auth import Throttle, Wait
 
 from .accounts import Accounts, ApiError
+
+LOG = logging.getLogger("orbit.pairing")
 
 ALPHABET = "BCDFGHJKLMNPQRSTVWXZ23456789"   # no vowels (no words), no 0/O or 1/I look-alikes
 CODE_LEN = 8                                # 28^8 ≈ 3.8e11 codes
@@ -67,9 +70,11 @@ class Pairings:
             # every pairing in memory counts (an approved one is collected by its TV within seconds)
             waiting = list(self._p.values())
             if sum(1 for p in waiting if p["client"] == client) >= MAX_PER_CLIENT:
+                LOG.warning("pairing refused: %s already has %d codes waiting", client, MAX_PER_CLIENT)
                 raise ApiError(429, f"this device already has {MAX_PER_CLIENT} pairing codes waiting; use one of "
                                     "them or try again in a few minutes", self._retry(client))
             if len(waiting) >= MAX_PENDING:
+                LOG.warning("pairing refused for %s: %d codes waiting in all", client, MAX_PENDING)
                 raise ApiError(429, f"too many TVs are waiting to be linked ({MAX_PENDING}); try again in a few "
                                     "minutes", self._retry(None))
             codes = {p["code"] for p in self._p.values()}
@@ -144,5 +149,6 @@ class Pairings:
             self.throttle.ok(client)
             acc = self.acc.account(sess["account_id"])
             hit["sid"] = self.acc._issue(acc, hit["device"], pid, kind="tv")
-            device = hit["device"]
+            device, tv_at = hit["device"], hit["client"]
+        LOG.info("TV at %s linked to account %s (approved from %s)", tv_at, sess["account_id"], client)
         return {"ok": True, "device": device}

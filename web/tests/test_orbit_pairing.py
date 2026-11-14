@@ -246,6 +246,20 @@ class Server(unittest.TestCase):
         self.assertEqual(self.req("POST", "/v1/sessions/revoke", {"id": dev["id"]}, auth(alex))[0], 200)
         self.assertEqual(self.req("GET", "/v1/me", headers=auth(tvs))[0], 401)
 
+        # behind nginx (this test talks from 127.0.0.1, trusted by default): the pairing address is the right-most
+        # untrusted X-Forwarded-For entry, never what the client wrote in front of it
+        xff = lambda chain: {"X-TvBro": "1", "X-Forwarded-For": chain}   # noqa: E731
+        _, _, p2 = self.req("POST", "/v1/pair/start", {"device": "Den TV"}, xff("203.0.113.66, 192.0.2.77"))
+        _, _, seen = self.req("POST", "/v1/pair/peek", {"code": p2["code"]}, auth(alex))
+        self.assertEqual((seen["device"], seen["address"]), ("Den TV", "192.0.2.77"))
+        # each forwarded client has its own pairing budget; a fake left-hand entry does not give a new one
+        for _ in range(PA.MAX_PER_CLIENT - 1):
+            self.assertEqual(self.req("POST", "/v1/pair/start", {"device": "TV"}, xff("198.51.100.%d, 192.0.2.77" % _))[0], 200)
+        code, hdr, j = self.req("POST", "/v1/pair/start", {"device": "TV"}, xff("198.51.100.99, 192.0.2.77"))
+        self.assertEqual(code, 429, j)
+        self.assertIn("Retry-After", hdr)
+        self.assertEqual(self.req("POST", "/v1/pair/start", {"device": "TV"}, xff("192.0.2.78"))[0], 200)
+
 
 if __name__ == "__main__":
     unittest.main()

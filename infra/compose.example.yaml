@@ -18,6 +18,9 @@ services:
     environment:
       # every name / address devices use to reach the server (Host header check against DNS rebinding)
       TVBRO_ALLOWED_HOSTS: "192.0.2.10"
+      # only with a TLS reverse proxy in front (DEPLOY.md): loopback (the container's own nginx) plus the proxy's
+      # address as nginx sees it. Leave it out otherwise.
+      # ORBIT_TRUSTED_PROXIES: "127.0.0.1/32,::1/128,192.0.2.2/32"
     volumes:
       - /srv/orbit/data:/data
     secrets:

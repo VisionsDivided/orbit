@@ -55,6 +55,7 @@ from . import alternates as ALT
 from .parental import Parental, Locked as PinWait
 from .secfile import write_secret
 from . import auth as AUTH
+from . import proxies as PROXY
 from . import backup as BK
 from orbit.accounts import Accounts as OrbitAccounts      # Orbit: accounts and profiles (docs/orbit/API-v1.md)
 from orbit import api as V1
@@ -1221,11 +1222,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- who is asking (auth.py) --
     def _client_ip(self) -> str:
+        """The client's address: X-Forwarded-For is believed only from ORBIT_TRUSTED_PROXIES (proxies.py)."""
         ip = self.client_address[0] if self.client_address else ""
-        real = self.headers.get("X-Real-IP", "")
-        if real and ip in ("127.0.0.1", "::1"):         # nginx in front
-            return real.strip()[:64]
-        return ip
+        return PROXY.client_ip(ip, self.headers.get_all("X-Forwarded-For") or (), self.headers.get("X-Real-IP", ""))
 
     def _host_ok(self) -> bool:
         host = (self.headers.get("Host") or "").strip().lower()
@@ -1245,7 +1244,9 @@ class Handler(BaseHTTPRequestHandler):
         return None
 
     def _https(self) -> bool:
-        return self.headers.get("X-Forwarded-Proto", "").lower() == "https"
+        """The page was https at a reverse proxy (believed only from a trusted proxy, like X-Forwarded-For)."""
+        peer = PROXY._ip(self.client_address[0] if self.client_address else "")
+        return PROXY.trusted(peer, PROXY.from_env()) and             self.headers.get("X-Forwarded-Proto", "").strip().lower() == "https"
 
     def _cookie(self, sid: str, max_age: int) -> str:
         return (f"{AUTH.COOKIE}={sid}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict"
