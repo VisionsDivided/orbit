@@ -385,8 +385,8 @@ body[data-screen="settings"] .ck { display: none; }
 .modal { background: var(--dialog); border: 1px solid rgba(255,255,255,.12); border-radius: 20px; box-shadow: 0 30px 80px rgba(0,0,0,.6); -webkit-backdrop-filter: none; backdrop-filter: none; }
 .menu-item.btn.secondary { background: rgba(255,255,255,.08); }
 #toast { background: var(--dialog); border: 1px solid rgba(255,255,255,.12); bottom: 11rem; font-weight: 600; }
-.search-box, .form input, .form select { background: rgba(10,12,22,.6); border: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,.14); }
-.search-box:focus, .form input:focus { box-shadow: 0 0 0 3px #fff; }
+.form input, .form select { background: rgba(10,12,22,.6); border: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,.14); }
+.form input:focus { box-shadow: 0 0 0 3px #fff; }
 .signin-back { background: radial-gradient(72% 82% at 100% 0%, rgba(107,69,230,.6), transparent 70%), radial-gradient(55% 65% at 0% 100%, rgba(47,211,255,.18), transparent 72%), #06061a; }
 .signin-card { background: var(--dialog); border-color: rgba(255,255,255,.12); border-radius: 20px; }
 
@@ -739,8 +739,8 @@ body[data-screen="settings"] .ck { display: none; }
 }
 
 /* ---------------------------------------------------------------- Search (like the TV's SearchSection) */
-/* Own class names only (srch5-*, plus the shared cards and rows): the guide's .prog and the old .stile /
-   .sdetail / .search-box rules in style.css are not used here. */
+/* Own class names only (srch5-*, plus the shared cards and rows), so no other screen's rule (the guide's
+   .prog drew the old programme results on top of each other) reaches these cards. */
 .srch5-top { display: flex; align-items: center; gap: 2.4rem; padding: 15rem var(--side) 0; }
 .srch5-mic { all: unset; box-sizing: border-box; flex: none; width: 8.4rem; height: 8.4rem; border-radius: 50%; display: grid; place-items: center;
   background: rgba(255,255,255,.12); color: #fff; cursor: pointer; transition: transform .2s ease, background .2s ease; }
