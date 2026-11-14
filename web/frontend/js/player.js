@@ -41,7 +41,10 @@ let sleepAt = 0, sleepTimer = null;
  *         resumeKey?, resumeMeta?, onClose?, zap?(dir), zapNumber?(n), episodeNav?(dir, auto),
  *         // shows (the server keeps the progress per series):
  *         startAt? (seconds), progress?(secs, dur, ended), upNext?() -> {label, go()} | null,
- *         subsPref? (language / label / 'off'), onSubsChange?(v), audioPref?, onAudioChange?(lang) }
+ *         subsPref? (language / label / 'off'), onSubsChange?(v), audioPref?, onAudioChange?(lang),
+ *         // Plex / Jellyfin through the home server (POST /v1/media/play): no provider stream slot;
+ *         // startAt null = resume where the media server says; Next episode comes from the answer
+ *         media?: {conn, id} }
  */
 export function openPlayer(opts) {
   if (cur) cur.teardown();
@@ -63,7 +66,9 @@ export function openPlayer(opts) {
   const notice = h('div', { class: 'pl-notice', hidden: true, role: 'status', 'aria-live': 'polite' });   // reconnects: small, never a dialog
   layer.append(stage, top, clock, info, qs, digitsEl, status, notice);
 
-  const s = cur = { opts, video, eng: null, teardown, close, audio: null };
+  const s = cur = { opts, video, eng: null, teardown, close, audio: null, mp: null };
+  // media-server titles and local recordings use no IPTV stream slot
+  const noSlot = () => !!(opts.local || opts.media);
 
   // ---------- engine ----------
   // claim this tab's stream slot first (the server may stop the oldest other tab), then play
@@ -86,7 +91,7 @@ export function openPlayer(opts) {
   }
   async function startEngine(extra = {}) {
     // (a reconnect keeps the slot it has: it never takes one back from another window)
-    if (!opts.local && !extra.reconnect) {
+    if (!noSlot() && !extra.reconnect) {
       const got = await beginStream(what);
       if (got === false) return;                    // every stream is held by a recording
       if (got === 'cancel') { if (cur === s) close(); return; }   // every stream in use and the person kept them
@@ -94,7 +99,8 @@ export function openPlayer(opts) {
     if (cur !== s) return;
     let r;
     try {
-      r = opts.vod ? await api.vodPlay(opts.vod.kind, opts.vod.id, opts.vod.ext, { ss: resumed ? 0 : resumeSecs(), series: opts.vod.series, ...extra })
+      r = opts.media ? await startMedia(extra)
+        : opts.vod ? await api.vodPlay(opts.vod.kind, opts.vod.id, opts.vod.ext, { ss: resumed ? 0 : resumeSecs(), series: opts.vod.series, ...extra })
         : { url: extra.key ? await (opts.urlFor || api.streamUrl)(extra.key) : await opts.url };
     } catch (e) {
       // locked (parental PIN): ask, then start again; cancelled = back out of the player
@@ -106,7 +112,7 @@ export function openPlayer(opts) {
       if (extra.reconnect && rec) { recover(); return; }
       flash('Could not start: ' + e.message, 5000); return;
     }
-    if (cur !== s) return;
+    if (cur !== s || !r) return;
     if (r.file) fileUrl = r.file;
     if (r.fmt === 'external') { showExternal(fileUrl, r.why || 'This browser cannot play this file.'); return; }
     const url = r.url;
@@ -138,6 +144,54 @@ export function openPlayer(opts) {
     };
     if (rmx) { s.startKnown = learnStart(rmx); setupRemuxSubs(); if (rmx.notes && rmx.notes.length) flash(rmx.notes.join(' · '), 4000); }
     video.play().catch(() => { video.muted = true; video.play().catch(() => {}); flash('Muted by the browser: tap to unmute'); });
+  }
+  // ---------- Plex / Jellyfin through the home server ----------
+  /** Starts a play session (a new one for another audio track); the last one is stopped. */
+  async function startMedia(extra) {
+    const m = await api.mediaPlay({ conn: opts.media.conn, id: opts.media.id, ...(extra.audio != null ? { audio: extra.audio } : {}) });
+    if (cur !== s) { api.mediaProgress(m.session, 0, 'stopped').catch(() => {}); return null; }
+    endMedia();
+    s.mp = m; s.mpPlaying = false;
+    if (m.durationSecs) opts.duration = m.durationSecs;
+    if (opts.startAt == null) opts.startAt = m.resumeSecs && (!m.durationSecs || m.resumeSecs < m.durationSecs - 30) ? m.resumeSecs : 0;
+    if (m.title) { opts.title = m.title; titleEl.textContent = m.title; }
+    opts.subtitle = m.subtitle || ''; subEl.textContent = opts.subtitle;
+    if (!opts.upNext) opts.upNext = () => (s.mp && s.mp.next ? { label: s.mp.next.subtitle || s.mp.next.title, go: () => playNextMedia(s.mp.next) } : null);
+    setupMediaSubs(m);
+    return { url: m.url };
+  }
+  function reportMedia(state, at, keepalive) {
+    if (!s.mp) return;
+    api.mediaProgress(s.mp.session, at != null ? at : pos(), state, keepalive).catch(() => {});
+  }
+  /** The media server stops its transcode and keeps the position. */
+  function endMedia(keepalive) {
+    if (!s.mp) return;
+    reportMedia('stopped', pendingSeek != null ? pendingSeek : off + (video.currentTime || 0), keepalive);
+    s.mp = null;
+  }
+  const onPageHide = () => endMedia(true);
+  window.addEventListener('pagehide', onPageHide);
+  function playNextMedia(n) {
+    const o = { media: { conn: opts.media.conn, id: n.id }, title: opts.title, subtitle: n.subtitle || n.title, mode: 'vod', onClose: opts.onClose };
+    if (!s.replace(o)) openPlayer(o);
+  }
+  /** The session's text subtitles: one WebVTT file each, fetched once (times are the title's own). */
+  function setupMediaSubs(m) {
+    for (const [k, tr] of subTracks) if (k.startsWith('m:')) { clearCues(tr); tr._src = null; }
+    for (const sd of m.subtitles || []) {
+      const k = 'm:' + (sd.lang || '') + ':' + sd.label;
+      let tr = subTracks.get(k);
+      if (!tr) { tr = video.addTextTrack('subtitles', sd.label || sd.lang || 'Subtitles', sd.lang || ''); tr.mode = 'disabled'; subTracks.set(k, tr); }
+      const src = tr._src = { url: sd.url };
+      fetch(sd.url, { credentials: 'same-origin' }).then((x) => (x.ok ? x.text() : '')).then((text) => {
+        if (tr._src !== src) return;
+        const md = tr.mode; if (md === 'disabled') tr.mode = 'hidden';
+        for (const c of parseVtt(text)) { try { tr.addCue(new VTTCue(c.start, c.end, c.text)); } catch {} }
+        tr.mode = md;
+      }).catch(() => {});
+    }
+    applyCaptionDefaults();
   }
   // ---------- live TV that stalls or errors: reconnect with back-off, then alternate sources ----------
   const rec = opts.live && opts.channel && !opts.catchup ? new LiveRecovery(opts.channel.key) : null;
@@ -289,7 +343,7 @@ export function openPlayer(opts) {
     layer.append(replacedEl); replacedEl.querySelector('button').focus();
   };
   window.addEventListener('tvbro-replaced', onReplaced);
-  video.addEventListener('pause', () => { if (!video.ended && cur === s && !opts.local) { released = true; endStream(); } });
+  video.addEventListener('pause', () => { if (!video.ended && cur === s && !noSlot()) { released = true; endStream(); } });
   video.addEventListener('play', () => { if (released && cur === s) { released = false; beginStream(what).then((got) => { if (got === 'cancel' && cur === s) video.pause(); }); } });
   applyAspect();
   const delay0 = sessionDelay != null ? sessionDelay : (prefs().audioDelayMs || 0);
@@ -307,11 +361,13 @@ export function openPlayer(opts) {
     fixes = 0;
     // a show appears in Continue watching as soon as an episode plays
     if (!s.reported && opts.progress && pendingSeek == null) { s.reported = true; opts.progress(pos(), total(), false); }
+    if (s.mp && !s.mpPlaying && pendingSeek == null) { s.mpPlaying = true; reportMedia('playing'); }
   });
   /** Save the position: a show's progress goes to the server per series, films to resume points. */
   const save = (ended) => {
     if (pendingSeek != null || !(video.currentTime > 0)) return;
-    if (opts.progress) opts.progress(ended === true ? total() : pos(), total(), ended === true);
+    if (s.mp) reportMedia(video.paused || video.ended ? 'paused' : 'playing', ended === true ? total() : pos());
+    else if (opts.progress) opts.progress(ended === true ? total() : pos(), total(), ended === true);
     else if (opts.resumeKey) setResume(opts.resumeKey, pos(), total(), opts.resumeMeta);
   };
   video.addEventListener('pause', () => { if (!video.ended) save(); });
@@ -454,12 +510,22 @@ export function openPlayer(opts) {
     pick('Video quality', rows);
   }
   function audioLabel() {
+    if (s.mp && s.mp.kind === 'hls' && s.mp.audio && s.mp.audio.length) { const t = s.mp.audio.find((x) => x.default) || s.mp.audio[0]; return t.label || t.lang || 'Default'; }
     if (rmx && rmx.audio && rmx.audio.length) { const t = rmx.audio[rmx.audioPos || 0]; return t ? t.label : 'Default'; }
     const hl = s.eng.hls;
     if (hl && hl.audioTracks && hl.audioTracks.length) { const t = hl.audioTracks[hl.audioTrack]; return t ? (t.name || t.lang || 'Track ' + (hl.audioTrack + 1)) : 'Default'; }
     const st = s.eng.stats(); return st.channels ? (st.channels >= 6 ? '5.1' : st.channels === 2 ? 'Stereo' : st.channels + ' ch') : 'Default';
   }
   function pickAudio() {
+    if (s.mp && s.mp.kind === 'hls' && s.mp.audio && s.mp.audio.length > 1) {   // the transcode carries one track: start it again with another
+      pick('Audio track', s.mp.audio.map((t) => [`${t.default ? '• ' : ''}${t.label || t.lang || 'Track ' + t.id}`, () => {
+        saveAudio(t.lang || t.label);
+        if (t.default) return;
+        const at = pos(); opts.startAt = at; resumed = false; pendingSeek = at;
+        restart({ audio: t.id });
+      }]));
+      return;
+    }
     if (rmx && rmx.audio && rmx.audio.length > 1) {
       const chs = (n) => (n >= 6 ? '5.1' : n === 2 ? 'stereo' : n + ' ch');
       pick('Audio track', rmx.audio.map((t, i) => [`${i === rmx.audioPos ? '• ' : ''}${t.label} · ${t.codec.toUpperCase()} ${chs(t.channels)}`,
@@ -669,6 +735,7 @@ export function openPlayer(opts) {
     const go = () => {
       clearUpNext();
       if (opts.progress) opts.progress(total(), total(), true);    // skipping the credits counts as watched
+      reportMedia('playing', total());
       n.go();
     };
     const cancel = () => { clearUpNext(); up.cancelled = true; layer.focus(); };
@@ -691,8 +758,9 @@ export function openPlayer(opts) {
 
   /** Next / previous episode in this player: same <video> element, new source. */
   s.replace = (n) => {
-    if (cur !== s || !isVod || !n || n.mode !== 'vod' || !n.vod || n.local || opts.local || extEl || replacedEl) return false;
+    if (cur !== s || !isVod || !n || n.mode !== 'vod' || !(n.vod || n.media) || n.local || opts.local || extEl || replacedEl) return false;
     save();
+    endMedia();
     clearUpNext(); up = { el: null, timer: null, cancelled: false };
     s.reported = false; s.audioTried = false;
     for (const k of Object.keys(opts)) delete opts[k];
@@ -712,6 +780,8 @@ export function openPlayer(opts) {
 
   function teardown() {
     if (s.save) s.save();
+    endMedia();
+    window.removeEventListener('pagehide', onPageHide);
     clearUpNext(); clearTimeout(qsHideTimer); clearTimeout(recTimer); clearTimeout(note.t); if (stall) stall.stop();
     clearInterval(tickTimer); clearInterval(saveTimer); clearInterval(subTimer); clearTimeout(seekTo.timer); clearTimeout(infoTimer); clearTimeout(hideTimer); clearTimeout(digitTimer);
     try { s.eng.destroy(); } catch {}
@@ -728,7 +798,7 @@ export function openPlayer(opts) {
     teardown();
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     layer.hidden = true; layer.innerHTML = ''; layer.classList.remove('chrome');
-    if (!opts.local) endStream();
+    if (!noSlot()) endStream();
     if (opts.onClose) opts.onClose();
   }
   function dockClose(d) {

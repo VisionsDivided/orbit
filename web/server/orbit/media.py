@@ -31,6 +31,7 @@ from tvbro_server.secfile import write_secret
 from .accounts import ApiError
 from .connectors import KINDS, ConnectorError, Linked
 from .connectors.base import Http, host_port, normalize_base_url
+from .mediaplay import Plays
 
 LOG = logging.getLogger("orbit.media")
 
@@ -132,6 +133,7 @@ class MediaServers:
         self._lock = threading.Lock()
         self._pending: dict[str, dict] = {}   # pending id -> {account, kind, state, public, exp, hosts, device}
         self._hosts: set = set()
+        self.plays = Plays(clock)             # playback through this server (orbit/mediaplay.py)
         self._refresh_hosts()
         self.vault.keep_only({r[0] for r in self.db.q("SELECT id FROM media_connections")})
 
@@ -228,6 +230,7 @@ class MediaServers:
                 cls(r[2], tok, r[5], r[7], self.http(cls.label)).sign_out()
             except ConnectorError:
                 pass                          # best effort: the server may be gone
+        self.plays.end_where(lambda p: p.conn == r[0])
         self.db.run("DELETE FROM media_connections WHERE id=? AND account_id=?", (r[0], sess["account_id"]))
         self.vault.drop([r[0]])
         self._refresh_hosts()
@@ -384,7 +387,20 @@ class MediaServers:
         r, ans = self._use(sess, b.get("conn"), lambda c: c.playback(b.get("id")))
         return {**ans, "conn": r[0], "source": r[1]}
 
+    def play(self, sess: dict, b: dict) -> dict:
+        """Start playing a film / episode through this server (orbit/mediaplay.py)."""
+        r, c = self.connector(sess, b.get("conn"))
+        out = self.plays.start(sess, r, c, b.get("id"), b.get("client"), b.get("caps"), b.get("audio"))
+        self._ok(r)
+        return out
+
+    def end_plays(self, sess_h: str) -> int:
+        """A signed-in session ended (sign-out): its play sessions end too."""
+        return self.plays.end_where(lambda p: p.sess_h == sess_h)
+
     def progress(self, sess: dict, b: dict) -> dict:
+        if "session" in b:                    # a playback started with POST /v1/media/play
+            return self.plays.progress(sess, b.get("session"), b.get("positionSecs"), b.get("state"))
         secs, dur = _num(b.get("secs"), "secs"), _num(b.get("dur") or 0, "dur")
         state = b.get("state")
         if state not in ("playing", "paused", "stopped"):
@@ -430,6 +446,7 @@ class MediaServers:
             ("GET", "/v1/media/children"): lambda s, b, q: self.children(s, q),
             ("GET", "/v1/media/image"): lambda s, b, q: self.image(s, q),
             ("POST", "/v1/media/playback"): lambda s, b, q: self.playback(s, b),
+            ("POST", "/v1/media/play"): lambda s, b, q: self.play(s, b),
             ("POST", "/v1/media/progress"): lambda s, b, q: self.progress(s, b),
             ("POST", "/v1/media/watched"): lambda s, b, q: self.watched(s, b),
         }

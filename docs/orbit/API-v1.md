@@ -298,6 +298,83 @@ server that contains **the signed-in person's own** token (Jellyfin `api_key=`, 
 plays straight from Plex / Jellyfin. Clients must treat that URL as a secret (keep it out of logs, do not share or
 cache it) and fetch a fresh one for each playback.
 
+### Playback
+
+Films and episodes play **through the home server**: Plex / Jellyfin tokens never reach a device, the web page stays
+same-origin (its Content-Security-Policy allows only its own media), and the position goes back to the media server.
+Playing does not use one of the IPTV provider's streams (`/v1/streams` does not count it).
+
+| Method | Path | Body / query → Answer |
+|---|---|---|
+| POST | `/v1/media/play` | `{"conn", "id", "client": "web"\|"tv"\|"desktop", "caps"?, "audio"?}` → `Play` (below). `id` is a film or episode (400 for a series / season). |
+| GET | `/v1/media/stream/<session>/file` | The original file (direct play). `Range` is passed on (206 / 416 as the media server answers); piped in small chunks. |
+| GET | `/v1/media/stream/<session>/master.m3u8` | The transcode's HLS playlist. Every URI in it, and in the playlists it points at, is rewritten to `/v1/media/stream/<session>/u/...` on this server. |
+| GET | `/v1/media/stream/<session>/u/<path>` | A playlist or segment of the transcode, as rewritten above. Only the transcoder's paths on that same media server are relayed (Plex `/video/:/transcode/universal/...`, Jellyfin `/videos/...`); token parameters are dropped. Anything else: 404. |
+| GET | `/v1/media/stream/<session>/sub/<id>.vtt` | A text subtitle track as WebVTT (`text/vtt`; SubRip is converted). |
+| POST | `/v1/media/progress` | `{"session", "positionSecs", "state": "playing"\|"paused"\|"stopped"}` → `{"ok": true}`. Every ~10 s while playing, and on pause and stop. 404 when the session has ended or is another account's. |
+
+`Play`:
+```
+{ "session": "<opaque play id>",
+  "url": "/v1/media/stream/<session>/master.m3u8"     // kind "hls"; ".../file" for kind "file"
+  "kind": "hls" | "file",
+  "container": "mp4" | "mkv" | ... ("ts" for HLS), "mime": "application/vnd.apple.mpegurl" | "video/mp4" | ...,
+  "durationSecs": n | null, "resumeSecs": n | null,
+  "title": "...",                                      // the show's title for an episode
+  "subtitle": "S1 E2 · Name" | null,
+  "audio": [{"id", "label", "lang", "default"}],
+  "subtitles": [{"id", "label", "lang", "url": "/v1/media/stream/<session>/sub/<id>.vtt"}],
+  "next": {"id", "title", "subtitle"} | null,          // the next episode (into the next season)
+  "conn", "source": "plex" | "jellyfin", "id" }
+```
+`next.subtitle`, `conn`, `source` and `id` are additions to the first draft of this contract.
+`kind` is always sent. `durationSecs` may be `null` (unknown): players then use their own. Devices may load `url`
+and subtitle URLs with or without the session cookie; the relay never redirects. A `"stopped"` report may come
+before playback started, or for an old session that an HLS fallback replaced: the server ends that session and
+its transcode.
+
+**Direct play or transcode.**
+- `client: "web"` always gets HLS with H.264 video and AAC stereo audio. Plex: the universal transcoder
+  (`/video/:/transcode/universal/start.m3u8`, `directStream=1`, so H.264 video is copied, not re-encoded), with a
+  `Generic` client profile plus an extra transcode target `mpegts / h264 / aac`. Jellyfin: `PlaybackInfo` with a
+  device profile that allows no direct play and one HLS transcoding profile (`ts`, `h264`, `aac`, 2 channels); its
+  `TranscodingUrl` is used (or `master.m3u8` built from the same parameters on older servers).
+- `client: "tv"` / `"desktop"` get the original file (`kind: "file"`; ExoPlayer and mpv play most containers) unless
+  `caps` rule it out, or Jellyfin says the file may not be played directly; then HLS as for the web.
+  `caps` (optional): `{"directPlay": false}` (always HLS; the TV sends it to retry after a failed direct play;
+  `"direct": false` is read the same way), `"directPlay": true` (the default), `"containers": ["mp4", "mkv", ...]`,
+  `"videoCodecs": ["h264", "hevc", ...]`, `"audioCodecs": ["aac", "ac3", ...]`: a list that is given must contain
+  the file's value, else HLS.
+- `audio` (optional): an `audio[].id` from an earlier answer, for a transcode with another audio track. Start a new
+  play with it and seek to where the viewer was. Plex: the part's selected audio stream is changed on the server
+  (as Plex's own apps do; it is remembered for that title); Jellyfin: `AudioStreamIndex`. Direct play has every
+  track in the file: the player picks.
+- HLS playlists are complete VOD playlists: seek in them (the media server restarts the transcode at that point).
+  Resume by seeking to `resumeSecs`.
+- `subtitles` lists the text tracks a device can fetch: Plex external SRT / WebVTT files, Jellyfin text tracks
+  (it extracts embedded ones). Image subtitles (PGS, VobSub) and Plex's embedded tracks are not listed; with direct
+  play they are in the file for the player.
+
+**Sessions.** A play session belongs to the account and the signed-in session that started it. The session id
+(192 random bits) is the capability for the `/v1/media/stream/...` addresses, so players that send no cookie
+(ExoPlayer, mpv) can use them; there is no token in any of them. A session ends: after 3 hours without requests or
+progress, on `state: "stopped"`, when its connection is unlinked, and when the signed-in session that created it ends
+(sign-out, revoked, expired; checked on every request and while a relay runs). An account keeps at most 8: starting
+another ends the oldest. Ending a transcoding session stops the transcode on the media server (Plex
+`/video/:/transcode/universal/stop`, Jellyfin `DELETE /Videos/ActiveEncodings`).
+
+**Progress.** Plex: `/:/timeline` (with `X-Plex-Session-Identifier`), and `/:/scrobble` once when the position passes
+90 %. Jellyfin: `/Sessions/Playing` on the first report, `/Sessions/Playing/Progress` after it,
+`/Sessions/Playing/Stopped` on stop (with `PlaySessionId`, `MediaSourceId`, `PlayMethod`). Continue watching
+(catalogue) comes from the media server, and is fetched again after a playback stops.
+
+**Errors.** 409 `"... link it again"` when the media server no longer accepts the sign-in, 409 when the title has no
+playable file, 404 when it is not on the server, 502 when the server cannot be reached or answers oddly. The relay
+answers the same codes as JSON `{"error"}`, and 404 for an ended or unknown session.
+
+The older `POST /v1/media/playback` (a direct-play URL **with** the token) and the `{"conn", "id", "secs", "dur",
+"state"}` form of `/v1/media/progress` still work; new clients use `/v1/media/play`.
+
 **Local network.** The server reaches each linked server's exact `host:port` even when "local network sources" is
 off (`net.set_private_hosts`); loopback and link-local addresses stay refused. Only an owner or admin can link a
 server at a new local address; a member can link their own user on a server the household already linked (or

@@ -64,6 +64,7 @@ from orbit import discover as ODISC, seerr as OSEERR    # Orbit: Seerr discover 
 from orbit import sync as OSYNC                          # Orbit: cheap change check and batches for TVs
 from orbit.media import MediaServers, TokenVault                # Orbit: Plex / Jellyfin links per account
 from orbit import facade as OFACADE                      # Orbit: hidden provider logins for linked TVs (/xt/)
+from orbit import mediaplay as OMEDIAPLAY                # Orbit: Plex / Jellyfin playback relay (/v1/media/stream/)
 from orbit import catalog as OCAT                        # Orbit: Home / Movies / Shows catalogue (Phase 5)
 
 try:                                    # deterministic authenticated encryption for /seg URLs
@@ -1043,6 +1044,10 @@ class App:
         self.v1.routes.update(self.catalog.routes())
         self.v1.prefix_routes.update(self.catalog.prefix_routes())
         self.discover.local_finder = self.catalog.tmdb_finder          # Discover: Play instead of Request
+        # Orbit: Plex / Jellyfin playback through this server (orbit/mediaplay.py) lives as long as the signed-in
+        # session that started it; when one stops, Continue watching asks the media server again
+        self.media.plays.alive = self.facade.keys.alive
+        self.media.plays.on_stopped = self.catalog.media_played
         NET.set_allow_private(lambda: bool(self.settings.get("allowLanSources")))
         # Orbit: the LAN servers the household configured (Plex / Jellyfin links, Seerr), exact host and port only
         NET.set_private_hosts(lambda: self.media.private_hosts() | self.discover.private_hosts())
@@ -1847,6 +1852,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(rep.obj, rep.code, headers=hdr)
 
     def route_get(self, path):
+        if path.startswith(OMEDIAPLAY.PREFIX):        # Orbit: Plex / Jellyfin relay; the play session id is checked there
+            return APP.media.plays.serve(self, path, urllib.parse.urlparse(self.path).query)
         if path.startswith("/v1/"):
             return self.route_v1("GET")
         if path.startswith(OFACADE.PREFIX):

@@ -8,11 +8,12 @@ username + password (sent to Jellyfin, never stored). Every request carries
 its own DeviceId, because Jellyfin ends older tokens of a device when that device signs in again."""
 from __future__ import annotations
 
+import secrets
 import urllib.parse
 from typing import Optional
 
 from .base import (DEVICE_NAME, LIST_KINDS, PAGE, PRODUCT, STATES, VERSION, Connector, ConnectorError, Http, Linked,
-                   iso_time, item, normalize_base_url, safe_id, ticks)
+                   direct_ok, iso_time, item, normalize_base_url, safe_id, ticks)
 
 TICKS = 10_000_000                     # Jellyfin times are 100 ns ticks
 FIELDS = ("Overview,ProviderIds,ProductionYear,CommunityRating,RunTimeTicks,UserData,ImageTags,BackdropImageTags,"
@@ -37,6 +38,25 @@ def auth_header(device_id: str, token: Optional[str] = None) -> str:
 def _headers(device_id: str, token: Optional[str] = None) -> dict:
     h = auth_header(device_id, token)
     return {"Authorization": h, "X-Emby-Authorization": h}      # older servers read the second one
+
+
+def device_profile(direct: bool) -> dict:
+    """What Orbit plays: any file directly (TV / desktop, when allowed), else HLS (MPEG-TS, H.264, AAC stereo)."""
+    return {"Name": "Orbit", "MaxStreamingBitrate": 120_000_000,
+            "DirectPlayProfiles": [{"Type": "Video"}] if direct else [],
+            "TranscodingProfiles": [{"Container": "ts", "Type": "Video", "VideoCodec": "h264", "AudioCodec": "aac",
+                                     "Context": "Streaming", "Protocol": "hls", "MaxAudioChannels": "2",
+                                     "MinSegments": "1", "BreakOnNonKeyFrames": True}],
+            "SubtitleProfiles": [{"Format": "vtt", "Method": "External"}, {"Format": "srt", "Method": "External"}],
+            "ContainerProfiles": [], "CodecProfiles": []}
+
+
+def strip_token(url: str) -> str:
+    """A server URL without any api_key / token parameter (the relay sends the token as a header)."""
+    path, _, q = url.partition("?")
+    keep = [(k, v) for k, v in urllib.parse.parse_qsl(q, keep_blank_values=True)
+            if k.lower() not in ("api_key", "apikey", "token", "x-emby-token", "x-mediabrowser-token")]
+    return path + ("?" + urllib.parse.urlencode(keep) if keep else "")
 
 
 def _linked(base: str, info: dict, auth: dict) -> Linked:
@@ -226,6 +246,93 @@ class Jellyfin(Connector):
                 "PlayMethod": "DirectPlay", "CanSeek": True}
         path = "/Sessions/Playing/Stopped" if state == "stopped" else "/Sessions/Playing/Progress"
         self.http.raw("POST", self.base + path, self.auth_headers(), body)
+
+    # ---- playing through the home server ----
+    RELAY_PREFIXES = ("/videos/",)        # compared in lower case (Jellyfin answers "/videos/...")
+
+    def play_info(self, item_id: str, hls: bool, caps, audio=None) -> dict:
+        iid = safe_id(item_id)
+        d = self._get(f"/Users/{self._user()}/Items/{iid}")
+        if not isinstance(d, dict) or not d.get("Id"):
+            raise ConnectorError(404, "Jellyfin: not found on the server")
+        if d.get("Type") not in ("Movie", "Episode"):
+            raise ConnectorError(400, "only films and episodes can be played")
+        a_idx = int(audio) if isinstance(audio, (str, int)) and str(audio).isdigit() else None
+        body = {"UserId": self.user_id, "DeviceProfile": device_profile(not hls), "MaxStreamingBitrate": 120_000_000,
+                "EnableDirectPlay": not hls, "EnableDirectStream": not hls, "EnableTranscoding": True,
+                "AutoOpenLiveStream": False}
+        if a_idx is not None:
+            body["AudioStreamIndex"] = a_idx
+        info = self.http.json("POST", self.base + f"/Items/{iid}/PlaybackInfo?" +
+                              urllib.parse.urlencode({"userId": self.user_id}), self.auth_headers(), body) or {}
+        srcs = [s for s in info.get("MediaSources") or [] if isinstance(s, dict)]
+        if not srcs:
+            raise ConnectorError(409, "Jellyfin: this title has no playable file")
+        src = srcs[0]
+        msid = safe_id(src.get("Id") or iid, "media source")
+        psid = str(info.get("PlaySessionId") or secrets.token_hex(16))[:64]
+        streams = [s for s in src.get("MediaStreams") or [] if isinstance(s, dict) and isinstance(s.get("Index"), int)]
+        vid = next((s for s in streams if s.get("Type") == "Video"), {})
+        auds = [s for s in streams if s.get("Type") == "Audio"]
+        dflt = a_idx if a_idx is not None else src.get("DefaultAudioStreamIndex")
+        audio_out = [{"id": str(s["Index"]), "label": str(s.get("DisplayTitle") or s.get("Language") or f"Track {i + 1}")[:120],
+                      "lang": s.get("Language") or None,
+                      "default": s["Index"] == dflt if dflt is not None else bool(s.get("IsDefault"))}
+                     for i, s in enumerate(auds)]
+        subs = [{"id": str(s["Index"]), "label": str(s.get("DisplayTitle") or s.get("Language") or "Subtitles")[:120],
+                 "lang": s.get("Language") or None,
+                 "path": f"/Videos/{iid}/{msid}/Subtitles/{s['Index']}/0/Stream.vtt", "fmt": "vtt"}
+                for s in streams if s.get("Type") == "Subtitle" and s.get("IsTextSubtitleStream")]
+        container = str(src.get("Container") or "").split(",", 1)[0].lower() or None
+        acodec = next((s.get("Codec") for s in auds if s["Index"] == dflt), None) or (auds[0].get("Codec") if auds else None)
+        direct = (not hls and src.get("SupportsDirectPlay", True) is not False
+                  and direct_ok(caps, container, vid.get("Codec"), acodec))
+        if direct:
+            path, kind = f"/Videos/{iid}/stream?" + urllib.parse.urlencode({"static": "true", "mediaSourceId": msid}), "file"
+        else:
+            turl = str(src.get("TranscodingUrl") or "")
+            if turl.lower().startswith("/videos/") and ".m3u8" in turl.split("?", 1)[0]:
+                path = strip_token(turl)
+            else:                             # an older server, or none offered: ask for it ourselves
+                q = {"MediaSourceId": msid, "PlaySessionId": psid, "DeviceId": self.device_id, "VideoCodec": "h264",
+                     "AudioCodec": "aac", "TranscodingMaxAudioChannels": 2, "SegmentContainer": "ts", "MinSegments": 1,
+                     "BreakOnNonKeyFrames": "True"}
+                if a_idx is not None:
+                    q["AudioStreamIndex"] = a_idx
+                path = f"/Videos/{iid}/master.m3u8?" + urllib.parse.urlencode(q)
+            kind = "hls"
+        ud = d.get("UserData") or {}
+        ep = d.get("Type") == "Episode"
+        return {"kind": kind, "path": path, "container": container if kind == "file" else "ts",
+                "durationSecs": int(ticks(src.get("RunTimeTicks") or d.get("RunTimeTicks")) / TICKS) or None,
+                "resumeSecs": int(ticks(ud.get("PlaybackPositionTicks")) / TICKS) or None,
+                "title": str((d.get("SeriesName") if ep else None) or d.get("Name") or "")[:300],
+                "subtitle": (f"S{d.get('ParentIndexNumber')} E{d.get('IndexNumber')} · {d.get('Name') or ''}".strip(" ·")
+                             if ep else None),
+                "audio": audio_out, "subtitles": subs,
+                "seriesId": d.get("SeriesId") if ep else None,
+                "season": d.get("ParentIndexNumber") if ep else None, "episode": d.get("IndexNumber") if ep else None,
+                "ref": {"item": iid, "msid": msid, "psid": psid, "method": "DirectPlay" if direct else "Transcode",
+                        "audio": a_idx}}
+
+    def play_report(self, ref: dict, item_id: str, secs: float, dur: float, state: str, first: bool) -> None:
+        if state not in STATES:
+            raise ConnectorError(400, "state: playing, paused or stopped")
+        body = {"ItemId": safe_id(item_id), "MediaSourceId": ref.get("msid"), "PlaySessionId": ref.get("psid"),
+                "PositionTicks": int(secs * TICKS), "IsPaused": state == "paused", "PlayMethod": ref.get("method"),
+                "CanSeek": True}
+        if ref.get("audio") is not None:
+            body["AudioStreamIndex"] = ref["audio"]
+        if state == "stopped":
+            path = "/Sessions/Playing/Stopped"
+        else:
+            path = "/Sessions/Playing" if first else "/Sessions/Playing/Progress"
+        self.http.raw("POST", self.base + path, self.auth_headers(), body)
+
+    def play_stop(self, ref: dict) -> None:
+        if ref.get("method") == "Transcode" and ref.get("psid"):
+            self.http.raw("DELETE", self.base + "/Videos/ActiveEncodings?" + urllib.parse.urlencode(
+                {"deviceId": self.device_id, "playSessionId": ref["psid"]}), self.auth_headers(), timeout=5)
 
     def mark_watched(self, item_id: str, watched: bool) -> None:
         self.http.raw("POST" if watched else "DELETE",
