@@ -430,8 +430,10 @@ fun Hero(app: AppState, v: VodItem, eyebrow: String, compact: Boolean = false) {
 }
 
 private fun heroPlay(app: AppState, v: VodItem) {
+    // a Plex / Jellyfin title: its page, and it plays (a film from where it stopped, a show its next episode)
+    app.catalog.info[v.key]?.takeIf { CatalogMap.isMedia(it) }?.let { app.detail = v; app.media.playTitle(v, it); return }
     if (v.kind == "series") { app.detail = v; return }
-    val repo = app.repo(v.sourceId) ?: run { app.detail = v; return }   // a Plex / Jellyfin title: its page says how
+    val repo = app.repo(v.sourceId) ?: run { app.detail = v; return }
     app.openMovie(v, repo, app.detailCache[v.key])
 }
 

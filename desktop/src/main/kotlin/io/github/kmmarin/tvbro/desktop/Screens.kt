@@ -100,6 +100,8 @@ fun VodBrowse(app: AppState, all: List<VodItem>, shows: Boolean) {
  */
 @Composable
 fun DetailScreen(app: AppState, v: VodItem) {
+    // a Plex / Jellyfin title: its own page, played through the home server (MediaDesk.kt)
+    app.catalog.info[v.key]?.takeIf { CatalogMap.isMedia(it) }?.let { return MediaDetailScreen(app, v, it) }
     val repo = remember(v) { app.repo(v.sourceId) }
     var d by remember(v) { mutableStateOf(app.detailCache[v.key]) }
     var err by remember(v) { mutableStateOf<String?>(null) }
@@ -126,7 +128,7 @@ fun DetailScreen(app: AppState, v: VodItem) {
         Spacer(Modifier.height(18.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             when {
-                media -> OButton("▶  Play", primary = true, requester = first) { app.toast("Plex and Jellyfin titles play on the TV and in the Orbit web app for now") }
+                media -> OButton("▶  Play", primary = true, requester = first) { app.media.playTitle(v, info) }
                 v.kind != "series" && repo != null -> {
                     OButton(if (st?.inProgress == true) "▶  Resume ${Watch.clock(st.posMs)}" else "▶  Play", primary = true, requester = first) { app.openMovie(v, repo, d) }
                     if (st?.inProgress == true || st?.watched == true) OButton("↺  From the start") { app.openMovie(v, repo, d, fromStart = true) }
@@ -191,7 +193,7 @@ fun DetailScreen(app: AppState, v: VodItem) {
 
 /** A season tab: bold text, white with a 3 px accent underline when chosen, muted otherwise; a white ring on focus. */
 @Composable
-private fun SeasonTab(label: String, on: Boolean, onMenu: () -> Unit, onClick: () -> Unit) {
+internal fun SeasonTab(label: String, on: Boolean, onMenu: () -> Unit, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     Column(Modifier.onFocusChanged { focused = it.hasFocus }.tvItem(onMenu = onMenu, onClick = onClick).padding(10.dp, 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text2(label, 17, if (on || focused) Color.White else Color(0x80FFFFFF), FontWeight.Bold)
