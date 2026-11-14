@@ -504,6 +504,7 @@ export function tvScreen(main, nav) {
     // the guide takes the focus back where it was
     if (zone === 'nav') { zone = mem.zone && mem.zone !== 'nav' ? mem.zone : 'label'; renderGroupsKf(); renderRows(); renderHeader(); if (k.startsWith('Arrow') || k === 'Enter') return true; }
     if (zone === 'groups') {
+      if (k === 'ArrowUp' && gi === 0) { toNav(); return true; }   // the top bar is above the groups
       if (k === 'ArrowDown' || k === 'ArrowUp') { gi = Math.max(0, Math.min(groups.length - 1, gi + (k === 'ArrowDown' ? 1 : -1))); renderGroups(); if (groups[gi]) selectGroupSoon(groups[gi].id); return true; }
       if (k === 'ArrowRight' || k === 'Enter') { if (groups[gi]) selectGroup(groups[gi].id); toLabel(); return true; }
       if (k === 'ArrowLeft') { toNav(); return true; }
