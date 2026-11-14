@@ -86,7 +86,7 @@ export function recordingsScreen(main, nav) {
   window.addEventListener('tvbro-vod-closed', onClose);
   return {
     onKey(e) {
-      if (e.key.startsWith('Arrow')) { if (!spatialMove(scr, e.key) && e.key === 'ArrowLeft') nav.focusActive(); return true; }
+      if (e.key.startsWith('Arrow')) { if (!spatialMove(scr, e.key) && (e.key === 'ArrowLeft' || e.key === 'ArrowUp')) nav.focusActive(); return true; }
       if (e.key === 'Enter' && document.activeElement && scr.contains(document.activeElement)) { document.activeElement.click(); return true; }
       if (e.key === 'Delete') { del(); return true; }
       if (e.key === 'Escape' || e.key === 'Backspace') { nav.focusActive(); return true; }

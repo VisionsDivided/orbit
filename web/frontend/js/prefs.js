@@ -14,6 +14,7 @@ const DEFAULTS = {
   timeFormat: '12',          // '12' (4:30 PM) | '24' | 'auto' (browser)
   autoplayNext: true,       // shows: play the next episode after a 10 s "Up next" countdown
   lastGroup: '__all',
+  pickerStyle: 'orbit',      // "Who's watching?": 'orbit' (profiles on an orbit) | 'classic' (one row); per profile
 };
 export function prefs() { return Object.assign({}, DEFAULTS, state().prefs || {}); }
 export function setPref(k, v) {
