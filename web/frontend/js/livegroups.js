@@ -39,24 +39,30 @@ export function foldGroups(groups) {
   return [...top, ...folders.values()];
 }
 
-/** Every word of q (case-insensitive) appears in s. */
+/** Sport words providers abbreviate in group names: "hockey" also finds "Sports | NHL Teams". */
+export const SYNONYMS = { hockey: ['nhl'], football: ['nfl'], basketball: ['nba'], baseball: ['mlb'], soccer: ['mls', 'football'] };
+
+/** Every word of q (case-insensitive) appears in s (or one of its SYNONYMS does). */
 export function matches(s, q) {
   const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return true;
   const hay = String(s || '').toLowerCase();
-  return words.every((w) => hay.includes(w));
+  return words.every((w) => hay.includes(w) || (SYNONYMS[w] || []).some((x) => hay.includes(x)));
 }
 
 /**
- * The tree filtered by a search: groups whose full name matches (so "sports nhl" finds "Sports | NHL Teams");
- * a folder whose name matches keeps all its groups. Folders left are returned open (open: true).
+ * The tree filtered by a search: groups whose full name matches (so "sports nhl" finds "Sports | NHL Teams"), or
+ * whose name is in alsoNames (the groups of the channels the search found); a folder whose name matches keeps all
+ * its groups. Folders left are returned open (open: true).
  */
-export function filterTree(tree, q) {
+export function filterTree(tree, q, alsoNames) {
   if (!String(q || '').trim()) return tree;
+  const extra = new Set(alsoNames || []);
+  const hit = (g) => matches(g.name, q) || extra.has(g.name);
   const out = [];
   for (const n of tree) {
-    if (n.type === 'group') { if (matches(n.group.name, q)) out.push(n); continue; }
-    const gs = matches(n.name, q) ? n.groups : n.groups.filter((x) => matches(x.group.name, q));
+    if (n.type === 'group') { if (hit(n.group)) out.push(n); continue; }
+    const gs = matches(n.name, q) ? n.groups : n.groups.filter((x) => hit(x.group));
     if (gs.length) out.push({ ...n, groups: gs, open: true });
   }
   return out;

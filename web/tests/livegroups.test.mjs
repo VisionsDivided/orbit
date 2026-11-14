@@ -53,6 +53,10 @@ test('filterTree: "hockey" style search over full names, folders open', () => {
   assert.deepEqual(L.filterTree(t, 'KIDS').map((n) => n.label), ['Kids']);
   assert.equal(L.filterTree(t, '  '), t);
   assert.deepEqual(L.filterTree(t, 'nothing-like-this'), []);
+  // "hockey" finds the NHL group (a synonym), and groups of channels the search found
+  assert.deepEqual(L.filterTree(t, 'hockey').flatMap((n) => n.groups.map((x) => x.group.name)), ['Sports | NHL Teams']);
+  assert.deepEqual(L.filterTree(t, 'harbor', ['UK | News']).map((n) => n.name), ['UK']);
+  assert.ok(L.matches('Sports | NFL Replays', 'football'));
 });
 
 test('pins pref: clean list, most recent first, at most 8', () => {
