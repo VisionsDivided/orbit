@@ -41,6 +41,8 @@ data class Tile(
     val vod: VodItem? = null,
     val channel: Channel? = null,
     val seriesRow: SeriesRow? = null,
+    /** A catalog title in a PIN-locked category: opening it asks for the PIN. */
+    val locked: Boolean = false,
 )
 
 /** A row on Home; [landscape] rows use 16:9 cards (Continue watching, live channels). */
@@ -54,6 +56,8 @@ data class HomeRow(val id: String, val title: String, val tiles: List<Tile>, val
  */
 class HomeFeed(private val m: AppModel, private val api: CatalogApi = CatalogApi()) {
     var rows by mutableStateOf<List<HomeRow>>(emptyList()); private set
+    /** The catalog's hero titles (empty with local data: Home then features the first cards). */
+    var hero by mutableStateOf<List<Tile>>(emptyList()); private set
     var fromServer by mutableStateOf(false); private set
     var loaded by mutableStateOf(false); private set
     private var lastLoad = 0L
@@ -76,10 +80,15 @@ class HomeFeed(private val m: AppModel, private val api: CatalogApi = CatalogApi
             } else null
             val r = if (server != null) {
                 fromServer = true
-                server.map { row -> HomeRow(row.id, row.title, row.items.map { tileOf(it) }.filter { allowed(it) }, landscape = row.id.startsWith("continue")) }
-                    .filter { it.tiles.isNotEmpty() } + listOfNotNull(liveRow())
+                hero = server.hero.map { tileOf(it) }
+                // the live row goes after Continue watching and My list, as with local data
+                val list = server.rows.map { row -> HomeRow(row.id, row.title, row.items.map { tileOf(it) }, landscape = row.id == "continue") }
+                    .filter { it.tiles.isNotEmpty() }.toMutableList()
+                liveRow()?.let { list.add(list.indexOfFirst { it.id != "continue" && it.id != "mylist" }.let { i -> if (i < 0) list.size else i }, it) }
+                list
             } else {
                 fromServer = false
+                hero = emptyList()
                 localRows()
             }
             rows = r; loaded = true
@@ -89,8 +98,10 @@ class HomeFeed(private val m: AppModel, private val api: CatalogApi = CatalogApi
     // ---- catalog items ----
     private fun tileOf(c: CatalogItem): Tile {
         val vod = if (c.source == "iptv") vodOf(c) else null
-        val meta = listOfNotNull(c.year, c.genres.firstOrNull()).joinToString(" · ").ifEmpty { null }
-        return Tile(c.key, c.title, meta, c.poster, c.backdrop, c.colors, c.source, c.progress, c.year, c.rating, c.genres, c.isShow, vod)
+        val next = c.next?.let { n -> listOfNotNull((if (n.season > 0) "S${n.season} " else "") + "E${n.num}", n.title?.takeIf { it.isNotBlank() }).joinToString(" · ") }
+        val left = if (!c.isShow && c.progressSecs != null && c.progressDur != null && c.progressDur > c.progressSecs) "${(c.progressDur - c.progressSecs) / 60} min left" else null
+        val meta = next ?: left ?: listOfNotNull(c.year, c.genres.firstOrNull()).joinToString(" · ").ifEmpty { null }
+        return Tile(c.key, c.title, meta, c.poster, c.backdrop, c.colors, c.source, c.progress, c.year, c.rating, c.genres, c.isShow, vod, locked = c.locked)
     }
 
     // ---- local data ----

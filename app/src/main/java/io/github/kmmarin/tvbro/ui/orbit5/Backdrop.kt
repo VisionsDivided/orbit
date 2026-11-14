@@ -67,6 +67,15 @@ fun CinematicBackdrop(spec: BackdropSpec?, modifier: Modifier = Modifier, dim: B
     }
 }
 
+/** A resolved backdrop without loading or cross-fade (previews, tests): mesh, artwork and vignette. */
+@Composable
+fun BackdropStill(image: ImageBitmap?, colors: MeshColors, modifier: Modifier = Modifier, dim: Boolean = false) {
+    Box(modifier.background(O5.Bg)) {
+        BackdropLayer(image, colors)
+        Box(Modifier.fillMaxSize().vignette(dim))
+    }
+}
+
 @Composable
 private fun BackdropLayer(image: ImageBitmap?, colors: MeshColors) {
     Box(Modifier.fillMaxSize().mesh(colors)) {

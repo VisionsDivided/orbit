@@ -83,7 +83,9 @@ fun HomeSection(m: AppModel) {
     LaunchedEffect(m.orbit.link?.profile) { feed.refresh(force = true) }
     LaunchedEffect(Unit) { feed.refresh() }
     val rows = feed.rows
-    val featured = remember(rows) { rows.flatMap { it.tiles }.filter { it.channel == null }.distinctBy { it.key }.take(5) }
+    // the catalog's hero titles, else the first titles of the rows
+    val heroList = feed.hero
+    val featured = remember(rows, heroList) { heroList.ifEmpty { rows.flatMap { it.tiles }.filter { it.channel == null }.distinctBy { it.key } }.take(6) }
 
     var focused by remember { mutableStateOf<Pair<Tile, String>?>(null) }   // card and its row title
     var inRows by remember { mutableStateOf(false) }
@@ -93,7 +95,7 @@ fun HomeSection(m: AppModel) {
         while (true) { delay(9000); featuredIdx = (featuredIdx + 1) % featured.size }
     }
     val subject: Pair<Tile, String>? = if (inRows) focused else featured.getOrNull(featuredIdx % featured.size.coerceAtLeast(1))?.let { t ->
-        t to (rows.firstOrNull { r -> r.tiles.any { it.key == t.key } }?.title ?: "")
+        t to (if (heroList.isNotEmpty()) "Featured" else rows.firstOrNull { r -> r.tiles.any { it.key == t.key } }?.title ?: "")
     }
     // the hero waits ~250 ms after a focus move (moving quickly along a row changes nothing)
     val settled by produceState(subject, subject?.first?.key) { delay(250); value = subject }
@@ -199,8 +201,10 @@ fun HomeSection(m: AppModel) {
 }
 
 /** OK on a card or a hero button: channels play, titles open their page ([play]: films start playing). */
-private fun open(m: AppModel, t: Tile, play: Boolean) {
+private fun open(m: AppModel, t: Tile, play: Boolean, unlocked: Boolean = false) {
     t.channel?.let { m.play(it); return }
+    // a catalog title of a PIN-locked category (its category name is not known here, so the PIN is asked each time)
+    if (t.locked && !unlocked && m.prefs.pinHash.isNotEmpty()) { m.askPin { open(m, t, play, unlocked = true) }; return }
     val v: VodItem = t.vod ?: run { m.toast("${t.title} plays from ${t.source.replaceFirstChar { it.uppercase() }}, not on this TV yet"); return }
     // straight to playback only when the file type is known (catalog titles carry none: their page loads it)
     if (play && !t.show && !m.isDirect(v) && v.ext.isNotEmpty()) {

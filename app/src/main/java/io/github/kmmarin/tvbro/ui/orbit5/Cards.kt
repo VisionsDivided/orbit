@@ -58,7 +58,7 @@ private fun BoxScope.NoArt(title: String, poster: Boolean) {
     Box(Modifier.matchParentSize().background(Brush.linearGradient(listOf(Color(0xFF1B2133), Color(0xFF0B0E18)))), contentAlignment = Alignment.BottomCenter) {
         Text(
             title.uppercase(), color = Color.White, fontWeight = FontWeight.ExtraBold, textAlign = TextAlign.Center, maxLines = 3,
-            overflow = TextOverflow.Ellipsis, fontSize = if (poster) 16.sp else 22.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 14.dp),
+            overflow = TextOverflow.Ellipsis, fontSize = if (poster) 16.sp else 22.sp, modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 14.dp, bottom = if (poster) 22.dp else 34.dp), // clear of the progress bar
         )
     }
 }

@@ -129,28 +129,41 @@ private data class Spot(val profile: OrbitProfile?, val label: String)
 fun WhoIsWatching(m: AppModel) {
     val p = m.profiles
     BackHandler(enabled = m.menu == null && m.prompt == null) { p.close() }
-    val spots = remember(p.list) { p.list.map { Spot(it, it.name) } + Spot(null, "Add profile") }
-    var sel by remember(p.list, p.currentId) { mutableIntStateOf(p.list.indexOfFirst { it.id == p.currentId }.coerceAtLeast(0)) }
-    val choose: (Spot) -> Unit = { s ->
-        if (s.profile != null) p.choose(s.profile)
-        else m.prompt = PromptState("Name of the new profile", "", false) { name -> p.add(name) }
-    }
-    val manage = { manageMenu(m) }
+    val posters by produceState(emptyList<String>()) { value = withContext(Dispatchers.IO) { wallPosters(m) } }
+    ProfilePicker(
+        p.list, p.currentId, p.style, p.message, posters,
+        onChoose = { pr -> if (pr != null) p.choose(pr) else m.prompt = PromptState("Name of the new profile", "", false) { name -> p.add(name) } },
+        onManage = { manageMenu(m) },
+    )
+}
+
+/**
+ * The picker itself, without the app model (also rendered by the JVM UI tests). [onChoose] gets null for
+ * "Add profile".
+ */
+@Composable
+fun ProfilePicker(
+    profiles: List<OrbitProfile>, currentId: String?, style: PickerStyle, message: String, posters: List<String>,
+    onChoose: (OrbitProfile?) -> Unit, onManage: () -> Unit,
+) {
+    val spots = remember(profiles) { profiles.map { Spot(it, it.name) } + Spot(null, "Add profile") }
+    var sel by remember(profiles, currentId) { mutableIntStateOf(profiles.indexOfFirst { it.id == currentId }.coerceAtLeast(0)) }
+    val choose: (Spot) -> Unit = { s -> onChoose(s.profile) }
     OrbitCanvas {
         Box(Modifier.fillMaxSize().background(O5.Bg).focusTrap().testTag("whos-watching")) {
-            PickerBackground(m)
+            PickerBackground(posters)
             Column(Modifier.fillMaxWidth().padding(top = 64.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("Who's watching?", style = O5Type.PickerTitle)
                 Text(
-                    p.message.ifEmpty { "Profile picker style: ${p.style.label} · change it in Settings › Home server" },
+                    message.ifEmpty { "Profile picker style: ${style.label} · change it in Settings › Home server" },
                     style = O5Type.Body, modifier = Modifier.padding(top = 10.dp),
                 )
             }
             val manageFr = remember { SafeFocus() }
-            if (p.style == PickerStyle.ORBIT) OrbitPicker(spots, sel, { sel = it }, p.currentId, choose, manageFr)
-            else ClassicPicker(spots, sel, { sel = it }, p.currentId, choose)
+            if (style == PickerStyle.ORBIT) OrbitPicker(spots, sel, { sel = it }, currentId, choose, manageFr)
+            else ClassicPicker(spots, sel, { sel = it }, currentId, choose)
             Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 44.dp)) {
-                ManageButton(manageFr, manage)
+                ManageButton(manageFr, onManage)
             }
         }
     }
@@ -171,8 +184,7 @@ private fun ManageButton(fr: SafeFocus, onClick: () -> Unit) {
 
 /** Poster wall (16 %, turned -6°), the orbit mesh and the radial darkening. */
 @Composable
-private fun PickerBackground(m: AppModel) {
-    val posters by produceState(emptyList<String>()) { value = withContext(Dispatchers.IO) { wallPosters(m) } }
+private fun PickerBackground(posters: List<String>) {
     Box(Modifier.fillMaxSize().mesh(MeshColors.Orbit))
     Box(Modifier.fillMaxSize().vignette())
     if (posters.isNotEmpty()) {
@@ -214,7 +226,7 @@ private fun OrbitPicker(spots: List<Spot>, sel: Int, onSel: (Int) -> Unit, curre
             val g = grow.dp.toPx()
             drawOval(Color(0xFF8A5CFF).copy(alpha = a), Offset(tl.x - g / 2, tl.y - g / 2), Size(sz.width + g, sz.height + g), style = Stroke(g))
         }
-        drawOval(Color(0x1F2FD3FF), Offset(tl.x + 12.dp.toPx(), tl.y + 12.dp.toPx()), Size(sz.width - 24.dp.toPx(), sz.height - 24.dp.toPx()), style = Stroke(24.dp.toPx()))
+        drawOval(Color(0x142FD3FF), Offset(tl.x + 7.dp.toPx(), tl.y + 7.dp.toPx()), Size(sz.width - 14.dp.toPx(), sz.height - 14.dp.toPx()), style = Stroke(12.dp.toPx()))
         drawOval(Color(0x42FFFFFF), tl, sz, style = Stroke(3.dp.toPx()))
     })
     Image(painterResource(R.drawable.orbit_planet), null, Modifier.offset(730.dp, 331.dp).width(460.dp))

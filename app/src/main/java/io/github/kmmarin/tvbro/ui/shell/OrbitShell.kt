@@ -77,47 +77,60 @@ fun openTab(m: AppModel, t: NavTab) {
 @Composable
 fun OrbitShell(m: AppModel) {
     OrbitCanvas {
-        val barFocus = remember { SafeFocus() }
-        val scope = rememberCoroutineScope()
-        val fm = LocalFocusManager.current
         val overlay = m.menu != null || m.prompt != null || m.progMenu != null
         BackHandler(enabled = m.screen == Screen.LIST && !overlay && m.section != Section.HOME) { m.section = Section.HOME }
-        Box(Modifier.fillMaxSize().background(O5.Bg)) {
-            // the section; leaving it upwards always lands on the top bar's current item (not the nearest one)
-            Box(
-                Modifier.fillMaxSize()
-                    .focusProperties { exit = { d -> if (d == FocusDirection.Up) barFocus.target() else FocusRequester.Default } }
-                    .focusGroup().testTag("section"),
-            ) {
-                when (m.section) {
-                    Section.HOME -> HomeSection(m)
-                    Section.MOVIES, Section.SHOWS -> MoviesShowsSection(m)
-                    Section.TV, Section.RECORDINGS, Section.MYLIST -> LiveTvSection(m)
-                    Section.DISCOVER -> DiscoverSection(m)
-                    Section.SEARCH -> LegacyPage(O5Space.TopBar) { SearchScreen(m) { m.section = Section.HOME } }
-                }
+        ShellFrame(
+            active = if (m.screen == Screen.SETTINGS) null else navTabOf(m.section),
+            onTab = { t -> openTab(m, t) },
+            onSearch = { m.screen = Screen.LIST; m.section = Section.SEARCH },
+            onAvatar = { m.settingsBack = Screen.LIST; m.screen = Screen.SETTINGS },
+            profileName = m.orbit.link?.profile?.ifEmpty { null } ?: "Orbit",
+            searchActive = m.section == Section.SEARCH && m.screen != Screen.SETTINGS,
+            settingsActive = m.screen == Screen.SETTINGS,
+            legend = m.screen == Screen.LIST,
+        ) {
+            when (m.section) {
+                Section.HOME -> HomeSection(m)
+                Section.MOVIES, Section.SHOWS -> MoviesShowsSection(m)
+                Section.TV, Section.RECORDINGS, Section.MYLIST -> LiveTvSection(m)
+                Section.DISCOVER -> DiscoverSection(m)
+                Section.SEARCH -> LegacyPage(O5Space.TopBar) { SearchScreen(m) { m.section = Section.HOME } }
             }
-            // OK on an item: its section opens and focus moves into it once it is there
-            val enter: () -> Unit = {
-                scope.launch {
-                    delay(300)
-                    runCatching { fm.moveFocus(FocusDirection.Down) }
-                }
-            }
-            TopBar(
-                active = if (m.screen == Screen.SETTINGS) null else navTabOf(m.section),
-                onTab = { t -> openTab(m, t); enter() },
-                onSearch = { m.screen = Screen.LIST; m.section = Section.SEARCH; enter() },
-                onAvatar = { m.settingsBack = Screen.LIST; m.screen = Screen.SETTINGS },
-                profileName = m.orbit.link?.profile?.ifEmpty { null } ?: "Orbit",
-                currentFocus = barFocus,
-                searchActive = m.section == Section.SEARCH && m.screen != Screen.SETTINGS,
-                settingsActive = m.screen == Screen.SETTINGS,
-                downTarget = { FocusMemory.contentTarget() ?: FocusRequester.Default },
-            )
-            if (m.screen == Screen.LIST) ColorKeyLegend(Modifier.align(Alignment.BottomStart).padding(start = O5Space.Side, bottom = 28.dp))
-            if (m.screen == Screen.SETTINGS) LegacyDensity { SettingsScreen(m) }
         }
+        if (m.screen == Screen.SETTINGS) LegacyDensity { SettingsScreen(m) }
+    }
+}
+
+/**
+ * The shell without the app model (the JVM UI tests drive it with stand-in sections): [section] under the top bar,
+ * the focus wiring between them, and the colour-key legend. Call inside an [OrbitCanvas].
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+fun ShellFrame(
+    active: NavTab?, onTab: (NavTab) -> Unit, onSearch: () -> Unit, onAvatar: () -> Unit, profileName: String,
+    searchActive: Boolean = false, settingsActive: Boolean = false, legend: Boolean = true,
+    section: @Composable BoxScope.() -> Unit,
+) {
+    val barFocus = remember { SafeFocus() }
+    val scope = rememberCoroutineScope()
+    val fm = LocalFocusManager.current
+    Box(Modifier.fillMaxSize().background(O5.Bg)) {
+        // the section; leaving it upwards always lands on the top bar's current item (not the nearest one)
+        Box(
+            Modifier.fillMaxSize()
+                .focusProperties { exit = { d -> if (d == FocusDirection.Up) barFocus.target() else FocusRequester.Default } }
+                .focusGroup().testTag("section"),
+            content = section,
+        )
+        // OK on an item: its section opens and focus moves into it once it is there
+        val enter: () -> Unit = { scope.launch { delay(300); runCatching { fm.moveFocus(FocusDirection.Down) } } }
+        TopBar(
+            active = active, onTab = { t -> onTab(t); enter() }, onSearch = { onSearch(); enter() }, onAvatar = onAvatar,
+            profileName = profileName, currentFocus = barFocus, searchActive = searchActive, settingsActive = settingsActive,
+            onDown = { FocusMemory.restoreContent() },
+        )
+        if (legend) ColorKeyLegend(Modifier.align(Alignment.BottomStart).padding(start = O5Space.Side, bottom = 28.dp))
     }
 }
 

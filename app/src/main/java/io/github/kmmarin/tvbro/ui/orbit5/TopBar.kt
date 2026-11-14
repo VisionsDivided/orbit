@@ -35,6 +35,11 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -53,8 +58,8 @@ enum class NavTab(val label: String) { HOME("Home"), MOVIES("Movies"), SHOWS("Sh
  * The top bar (spec section 4): logo, Home · Movies · Shows · Live TV · Discover, then search, clock and avatar on the
  * right. 120 px high, no background (the page's top scrim keeps it legible).
  *
- * Focus: entering the bar (Up from the page) lands on [current]'s item ([currentFocus]); Down leaves it to
- * [downTarget] (the item the user was on in the page) or, when that is gone, the nearest item below. Items are not
+ * Focus: entering the bar (Up from the page) lands on the active item ([currentFocus]); Down runs [onDown] (the shell
+ * focuses the item the user was on in the page) and, when that returns false, moves to the nearest item below. Items are not
  * remembered as places in the page ([LocalInRail]).
  */
 @OptIn(ExperimentalComposeUiApi::class)
@@ -62,14 +67,16 @@ enum class NavTab(val label: String) { HOME("Home"), MOVIES("Movies"), SHOWS("Sh
 fun TopBar(
     active: NavTab?, onTab: (NavTab) -> Unit, onSearch: () -> Unit, onAvatar: () -> Unit,
     profileName: String, currentFocus: SafeFocus, modifier: Modifier = Modifier,
-    searchActive: Boolean = false, settingsActive: Boolean = false, downTarget: () -> FocusRequester = { FocusRequester.Default },
+    searchActive: Boolean = false, settingsActive: Boolean = false, onDown: () -> Boolean = { false },
 ) {
     CompositionLocalProvider(LocalInRail provides true) {
         Row(
             modifier.fillMaxWidth().height(O5Space.TopBar).padding(horizontal = O5Space.Side)
+                // Down: straight back to the page item (a focusProperties exit redirect did not move focus there)
+                .onPreviewKeyEvent { e -> e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown && onDown() }
                 .focusProperties {
                     enter = { currentFocus.target() }
-                    exit = { d -> if (d == FocusDirection.Down) downTarget() else if (d == FocusDirection.Up) FocusRequester.Cancel else FocusRequester.Default }
+                    exit = { d -> if (d == FocusDirection.Up) FocusRequester.Cancel else FocusRequester.Default }
                 }.focusGroup().testTag("topbar"),
             verticalAlignment = Alignment.CenterVertically,
         ) {

@@ -70,6 +70,20 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT) {
         /** What the TV's QR code opens: the web app's "Link a TV" dialog with the code filled in. */
         fun approveUrl(server: String, code: String) = "$server/#pair:$code"
 
+        /** "/img?…" from the catalog -> "<server>/img?…" (absolute addresses stay as they are). */
+        fun absolute(server: String, url: String?): String? = when {
+            url.isNullOrBlank() -> null
+            url.startsWith("/") -> server + url
+            else -> url
+        }
+
+        /**
+         * The session cookie for an image on the home server itself (the catalog's `/img` and `/v1/media/image`
+         * addresses need a signed-in session); null for any other address, so the cookie never goes elsewhere.
+         */
+        fun imageHeaders(link: OrbitLink?, url: String): Map<String, String>? =
+            if (link != null && url.startsWith(link.server + "/")) mapOf("Cookie" to "$COOKIE=${link.session}") else null
+
         internal fun linkFrom(server: String, session: String, csrf: String, me: JsonObject): OrbitLink {
             val acc = me["account"]?.jsonObject
             val prof = (me["profile"] as? JsonObject)

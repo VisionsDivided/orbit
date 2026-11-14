@@ -213,6 +213,8 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
         // Keystore-backed storage and file work stay off the main thread; the UI shows cached data as soon as it is read.
         viewModelScope.launch(Dispatchers.IO) {
             io.github.kmmarin.tvbro.ui.Logos.dir = java.io.File(app.cacheDir, "logos")
+            // Orbit catalog artwork lives on the home server and needs the session cookie (only for that server)
+            io.github.kmmarin.tvbro.ui.Logos.auth = { u -> io.github.kmmarin.tvbro.orbit.OrbitApi.imageHeaders(orbit.link, u) }
             SyncStatus.init(app)
             val s = store.sources(); sources = s
             store.hasSourcesHint = s.isNotEmpty()
