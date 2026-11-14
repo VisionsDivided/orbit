@@ -36,6 +36,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -147,6 +148,8 @@ fun GroupTabs(
     onFocus: (String) -> Unit, onClick: (String) -> Unit, onLong: (String) -> Unit, onDown: () -> Boolean, modifier: Modifier = Modifier,
     /** A tab steered from outside besides the selected one (the "All groups" tab, where Back from the side menu lands). */
     extraFocus: Pair<String, SafeFocus>? = null,
+    /** Up from a tab (Live TV: the sub-menu's active pill); false = the normal focus search. */
+    onUp: () -> Boolean = { false },
 ) {
     LazyRow(
         modifier.focusProperties { enter = { selFocus.target() } }.focusGroup(), state = state,
@@ -155,7 +158,8 @@ fun GroupTabs(
         items(groups, key = { it }) { g -> // keyed: a moved group keeps its focus
             val sel = g == selected
             Box(
-                Modifier.onPreviewKeyEvent { e -> e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown && onDown() }
+                Modifier.onPreviewKeyEvent { e -> e.type == KeyEventType.KeyDown && ((e.key == Key.DirectionDown && onDown()) || (e.key == Key.DirectionUp && onUp())) }
+                    .testTag("tab-$g")
                     .o5Focus(O5Shape.Pill, 30.dp, focus = if (sel) selFocus else extraFocus?.takeIf { it.first == g }?.second, scaleTo = 1.04f,
                         onFocus = { onFocus(g) }, onLongClick = { onLong(g) }) { onClick(g) }
                     .padding(horizontal = 14.dp, vertical = 8.dp),

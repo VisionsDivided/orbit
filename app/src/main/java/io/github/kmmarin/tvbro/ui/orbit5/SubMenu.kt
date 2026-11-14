@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -104,7 +105,7 @@ fun SubPill(text: String, active: Boolean, focus: SafeFocus? = null, onClick: ()
         Modifier.o5Focus(O5Shape.Pill, 30.dp, focus = focus, scaleTo = 1.05f, onClick = onClick)
             .background(if (active) Color.White else O5.ChipBg, O5Shape.Pill)
             .then(if (active) Modifier else Modifier.border(1.dp, O5.ChipRing, O5Shape.Pill))
-            .padding(horizontal = 24.dp, vertical = 10.dp),
+            .padding(horizontal = 24.dp, vertical = 10.dp).testTag("subpill-$text"),
     ) { Text(text, style = pillStyle(active, O5Type.SubPill), maxLines = 1) }
 }
 
