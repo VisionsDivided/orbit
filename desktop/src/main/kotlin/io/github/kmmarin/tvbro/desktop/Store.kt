@@ -18,18 +18,39 @@ import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
+/** Where the app keeps its files on each OS (pure, so every OS's layout is testable anywhere). */
+data class AppDirs(val config: File, val cache: File, val logs: File, val recordings: File) {
+    companion object {
+        /** The folder name. Windows and macOS: "tvBro"; Linux: "tvbro" (XDG style). One place to change for a rename. */
+        const val NAME = "tvBro"
+
+        fun of(os: Os, home: String, env: (String) -> String?): AppDirs = when (os) {
+            Os.WINDOWS -> {
+                val local = env("LOCALAPPDATA") ?: "$home\\AppData\\Local"
+                AppDirs(File(env("APPDATA") ?: "$home\\AppData\\Roaming", NAME), File(local, "$NAME\\cache"), File(local, "$NAME\\logs"), File(home, "Videos\\$NAME"))
+            }
+            // ~/Library/Application Support, ~/Library/Caches, ~/Library/Logs; recordings in ~/Movies (macOS has no Videos)
+            Os.MAC -> File(home, "Library").let { lib ->
+                AppDirs(File(File(lib, "Application Support"), NAME), File(File(lib, "Caches"), NAME), File(File(lib, "Logs"), NAME), File(File(home, "Movies"), NAME))
+            }
+            Os.LINUX -> AppDirs(
+                File(env("XDG_CONFIG_HOME") ?: "$home/.config", "tvbro"), File(env("XDG_CACHE_HOME") ?: "$home/.cache", "tvbro"),
+                File(env("XDG_STATE_HOME") ?: "$home/.local/state", "tvbro"), File(home, "Videos/$NAME"),
+            )
+        }
+    }
+}
+
 object Paths {
     private val home = System.getProperty("user.home")
+    private val dirs = AppDirs.of(Platform.os, home, System::getenv)
     /** Overridable for tests (-Dtvbro.config=<dir>). */
-    val config: File = File(System.getProperty("tvbro.config") ?: File(
-        if (Platform.windows) System.getenv("APPDATA") ?: "$home\\AppData\\Roaming"
-        else System.getenv("XDG_CONFIG_HOME") ?: "$home/.config", if (Platform.windows) "tvBro" else "tvbro"
-    ).path).let { Perms.dir(it) }.also { Perms.tighten(it) } // 0700 / 0600 on Linux, also for files of older versions
-    val cache: File = File(System.getProperty("tvbro.cache") ?: File(
-        if (Platform.windows) System.getenv("LOCALAPPDATA") ?: "$home\\AppData\\Local"
-        else System.getenv("XDG_CACHE_HOME") ?: "$home/.cache", if (Platform.windows) "tvBro\\cache" else "tvbro"
-    ).path).let { Perms.dir(it) }
-    val recordings: File = File(home, if (Platform.windows) "Videos\\tvBro" else "Videos/tvBro")
+    val config: File = File(System.getProperty("tvbro.config") ?: dirs.config.path)
+        .let { Perms.dir(it) }.also { Perms.tighten(it) } // 0700 / 0600 on Linux and macOS, also for files of older versions
+    val cache: File = File(System.getProperty("tvbro.cache") ?: dirs.cache.path).let { Perms.dir(it) }
+    /** Log files (created on first use; nothing writes here yet on Windows / Linux). */
+    val logs: File get() = Perms.dir(File(System.getProperty("tvbro.logs") ?: dirs.logs.path))
+    val recordings: File = dirs.recordings
     /** Network-share recordings are written here first and copied to the share when they finish. */
     val recStaging: File get() = Perms.dir(File(cache, "rec-staging"))
 }
@@ -85,6 +106,21 @@ data class Settings(
     val externalPlayer: String = "",
     val useExternal: Boolean = false,
 )
+
+/**
+ * The diagnostic log as a file (macOS: an app started from Finder has no visible stderr). One file of up to 1 MB plus
+ * one older generation, owner-only. Diag lines never carry logins (see docs); stream URLs only go to TVBRO_MPV_LOG.
+ */
+class FileLog(private val f: File, private val max: Long = 1 shl 20) {
+    init { try { if (f.length() > max) Perms.replace(f, File(f.parentFile, f.name + ".1")) } catch (e: Exception) { } }
+    @Synchronized fun line(s: String) {
+        try {
+            val new = !f.exists()
+            java.io.FileOutputStream(f, true).use { it.write("${java.time.LocalDateTime.now().withNano(0)} $s\n".toByteArray(Charsets.UTF_8)) }
+            if (new) Perms.file(f)
+        } catch (e: Exception) { }
+    }
+}
 
 object Json2 { val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; prettyPrint = true } }
 

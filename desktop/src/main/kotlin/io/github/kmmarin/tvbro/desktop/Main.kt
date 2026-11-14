@@ -56,7 +56,8 @@ object AppIcon : Painter() {
  * --screenshot <png> --exit-after <s> saves a screen capture and quits (used for unattended smoke tests).
  */
 fun main(args: Array<String>) {
-    Diag.sink = { System.err.println("tvbro: $it") }
+    val fileLog = if (Platform.mac) try { FileLog(java.io.File(Paths.logs, "tvbro.log")) } catch (e: Exception) { null } else null // ~/Library/Logs/tvBro
+    Diag.sink = { System.err.println("tvbro: $it"); fileLog?.line(it) }
     Thread({ Perms.tighten(Paths.cache) }, "tighten-cache").apply { isDaemon = true; start() } // 0700 / 0600 (Linux)
     fun arg(n: String) = args.indexOf(n).takeIf { it >= 0 && it + 1 < args.size }?.let { args[it + 1] }
     arg("--render-missing")?.let { png -> renderMissing(png); return }
