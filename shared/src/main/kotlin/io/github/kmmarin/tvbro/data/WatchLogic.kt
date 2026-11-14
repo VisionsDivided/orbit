@@ -14,6 +14,17 @@ data class WatchState(val posMs: Long = 0, val durMs: Long = 0, val watched: Boo
 /** Subtitle choice remembered for a series: off, or on with a language ("" = first text track). */
 data class SubPref(val on: Boolean, val lang: String = "")
 
+/**
+ * Per-series memory: last episode, the next one to offer, and the caption / audio choices for the whole series.
+ * The TV keeps these in its WatchDb; Orbit show sync (OrbitSyncLogic.planShows) reads and writes them on every client.
+ */
+data class SeriesRow(
+    val key: String, val updated: Long = 0, val lastEp: String? = null,
+    val nextEp: String? = null, val nextSeason: Int = 0, val nextNum: Int = 0, val nextTitle: String? = null,
+    val finished: Boolean = false, val active: Boolean = false,
+    val subs: SubPref? = null, val audioLang: String? = null,
+)
+
 /** What a series looks like for "Continue watching" and the series page. */
 data class SeriesSummary(val next: Episode?, val finished: Boolean, val active: Boolean)
 
