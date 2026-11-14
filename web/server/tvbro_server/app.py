@@ -1040,6 +1040,7 @@ class App:
             ensure_iptv=lambda: [p.ensure_vod() for p in self.sources.enabled()])
         self.v1.routes.update(self.catalog.routes())
         self.v1.prefix_routes.update(self.catalog.prefix_routes())
+        self.discover.local_finder = self.catalog.tmdb_finder          # Discover: Play instead of Request
         NET.set_allow_private(lambda: bool(self.settings.get("allowLanSources")))
         # Orbit: the LAN servers the household configured (Plex / Jellyfin links, Seerr), exact host and port only
         NET.set_private_hosts(lambda: self.media.private_hosts() | self.discover.private_hosts())

@@ -314,6 +314,38 @@ def media_status(info) -> str:
     return MEDIA_STATUS.get(st, "requestable")
 
 
+def _bytes(v) -> int:
+    return max(0, int(v)) if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v else 0
+
+
+def _iso(v) -> Optional[str]:
+    """An ISO 8601 time as Seerr sends it ("2026-11-14T10:20:00.000Z"), else None."""
+    return v[:40] if isinstance(v, str) and re.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d", v) else None
+
+
+def download_status(info) -> Optional[dict]:
+    """Sonarr / Radarr progress that Seerr attaches to a media object (``downloadStatus``, else
+    ``downloadStatus4k``: one entry per queue item, e.g. one per episode) -> ``{"percent", "size", "sizeLeft",
+    "eta", "items"}`` summed over the items (``eta``: the latest ``estimatedCompletionTime``), or None while nothing
+    downloads."""
+    if not isinstance(info, dict):
+        return None
+    items = []
+    for k in ("downloadStatus", "downloadStatus4k"):
+        v = info.get(k)
+        items = [d for d in v if isinstance(d, dict)] if isinstance(v, list) else []
+        if items:
+            break
+    if not items:
+        return None
+    size = sum(_bytes(d.get("size")) for d in items)
+    left = min(size, sum(_bytes(d.get("sizeLeft")) for d in items))
+    etas = [e for e in (_iso(d.get("estimatedCompletionTime")) for d in items) if e]
+    pct = int((size - left) * 100 // size) if size > 0 else 0
+    return {"percent": max(0, min(100, pct)), "size": size, "sizeLeft": left, "eta": max(etas) if etas else None,
+            "items": len(items)}
+
+
 def latest_request(info) -> Optional[dict]:
     reqs = (info or {}).get("requests") if isinstance(info, dict) else None
     reqs = [r for r in reqs if isinstance(r, dict)] if isinstance(reqs, list) else []
@@ -369,6 +401,9 @@ def normalize(raw, kind: Optional[str] = None, details: bool = False) -> Optiona
     req = latest_request(info)
     if req is not None and _int(req.get("status")) in REQUEST_STATUS:
         out["requestStatus"] = REQUEST_STATUS[req["status"]]
+    dl = download_status(info)
+    if dl is not None:
+        out["download"] = dl
     if t == "tv" and details:
         out["seasons"] = _seasons(raw, info)
     return out
@@ -392,4 +427,7 @@ def normalize_request(raw) -> Optional[dict]:
            "requestedBy": {"seerrUserId": _int(by.get("id")), "name": _text(by.get("displayName"), 100)}}
     if t == "tv":
         out["seasons"] = seasons
+    dl = download_status(media)
+    if dl is not None:
+        out["download"] = dl
     return out

@@ -340,10 +340,21 @@ Server code: `web/server/orbit/seerr.py` (settings, client, cache, normalization
 
 Objects:
 - `Title`: `{"type": "movie"|"tv", "tmdb", "title", "year", "overview", "poster", "backdrop", "rating",
-  "status": "available"|"partial"|"processing"|"pending"|"requestable", "requestStatus"?: "pending"|"approved"|"declined"|"failed"|"completed", "seasons"?: [{"season", "episodes", "name", "status"}]}`.
+  "status": "available"|"partial"|"processing"|"pending"|"requestable", "requestStatus"?: "pending"|"approved"|"declined"|"failed"|"completed", "download"?: Download, "play"?: Item, "seasons"?: [{"season", "episodes", "name", "status"}]}`.
   `status` comes from Seerr's media status (5 available, 4 partially available, 3 processing, 2 pending; anything
   else is requestable). `requestStatus` is the newest request's state. Specials (season 0) are left out.
-- `Request`: `{"id", "type", "tmdb", "status", "mediaStatus", "created", "seasons"? , "requestedBy": {"seerrUserId", "name", "accountId"?}, "title": Title|null}`.
+- `Request`: `{"id", "type", "tmdb", "status", "mediaStatus", "created", "seasons"? , "download"?: Download, "requestedBy": {"seerrUserId", "name", "accountId"?}, "title": Title|null}`.
+  The request's `title` carries the request's own `download` and `mediaStatus` (the list is fetched fresh on every
+  call; the title may come from the cache).
+- `Download`: `{"percent": 0-100, "size", "sizeLeft", "eta": ISO time|null, "items"}`, only while Sonarr or Radarr
+  is downloading the title. Seerr attaches the queue to its media objects (`mediaInfo.downloadStatus`, else
+  `downloadStatus4k`: one entry per queue item, e.g. per episode); `size` and `sizeLeft` are bytes summed over the
+  items, `eta` is the latest `estimatedCompletionTime`, `items` the number of queue entries. Clients show
+  "Downloading N% · ~T" from it; poll `GET /v1/requests` (not cached) for live progress, since rows and titles are
+  cached (10 minutes, 1 hour).
+- `play`: the profile's catalogue `Item` (see "Catalogue") with the same TMDb id, when the title is in the catalogue
+  (IPTV first, then the account's Plex / Jellyfin; titles a kids profile may not see are left out). `status` is then
+  `"available"`. Clients show Play instead of Request.
 
 How it works:
 - **Requests are made as the account's Seerr user.** The server uses Seerr's admin API key with `X-Api-User:
@@ -362,8 +373,10 @@ How it works:
   (or answers 5xx), the last answer is served with `"stale": true`; with nothing cached the call answers 503. After
   a failure the server does not try Seerr again for 15 seconds, so pages stay fast. `POST /v1/requests` always
   checks Seerr's current state first and answers 503 while Seerr is down.
-- **Play instead of Request:** `discover.availability_override(tmdb, type)` is merged over every Title. It does
-  nothing yet; Phase 5 (catalogue merge) will return local Plex / Jellyfin / IPTV matches by TMDb id there.
+- **Play instead of Request:** every Title is looked up in the signed-in profile's catalogue by TMDb id
+  (`Catalog.tmdb_finder`, set as `discover.local_finder` by the app); a match adds `play` and sets `status` to
+  `"available"`. IPTV titles match when the provider sends a TMDb id; Plex and Jellyfin titles by their TMDb guid.
+  `discover.availability_override(tmdb, type)` stays as a second, household-wide hook (no-op).
 - **Privacy note:** `poster` and `backdrop` are full `https://image.tmdb.org/t/p/...` URLs, so clients load artwork
   straight from TMDB's public image CDN (no key, but TMDB sees the client's address and which artwork it loads). A
   later option can proxy them through the server's image cache.
