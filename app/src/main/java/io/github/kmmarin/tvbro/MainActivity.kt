@@ -144,6 +144,7 @@ class MainActivity : ComponentActivity() {
                     // One live video surface: full screen or in the TV preview spot, animated between them.
                     LiveVideo(m)
                     if (m.screen == Screen.PLAYER) PlayerScreen(m)
+                    OrbitStreamPrompt(m)   // Orbit: every stream in use -> stop the oldest viewer?
                     ReminderPopup(m)
                     ProgMenu(m)
                     ActionMenu(m)

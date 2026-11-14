@@ -42,7 +42,12 @@ interface OrbitHost {
     fun replaceSources(list: List<Source>, remove: Set<String>)
     /** My list entry for the web app: {key, kind, name, logo / poster, id}, or null when unknown here. */
     fun describe(key: String): JsonObject?
+    /** Another device took this TV's stream slot: stop live / film playback and say why. */
+    fun stopPlayback(reason: String)
 }
+
+/** Every stream is in use: who uses them, and the answer (true = stop the oldest viewer and watch here). */
+data class StreamAsk(val max: Int, val inUse: List<String>, val oldest: String?, val answer: kotlinx.coroutines.CompletableDeferred<Boolean>)
 
 /**
  * Orbit state for the TV app: the home-server link, the pairing screen and sync (playlists, My list, film resume
@@ -217,6 +222,78 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
             link = null; signedOut = signedOutByServer
             if (ids.isNotEmpty()) host?.replaceSources(emptyList(), ids)
         }
+    }
+
+    // ---------- the provider's stream limit, shared with browsers and recordings (Phase 2) ----------
+    /** Shown while the TV asks whether to stop another viewer. */
+    var streamAsk by mutableStateOf<StreamAsk?>(null); private set
+    private val holders = mutableSetOf<String>()
+    private var beat: Job? = null
+
+    /**
+     * Before IPTV plays on this TV (linked only): joins the household's stream count. [tag] says who holds the slot
+     * ("live", "vod"); one TV is one slot however often it zaps. When every stream is in use, [ask] = true asks
+     * whether to stop the oldest viewer (a player opening), [ask] = false just answers false (the preview stays off).
+     * The home server not answering never blocks playback.
+     */
+    suspend fun claimStream(tag: String, what: String, ask: Boolean): Boolean {
+        val l = link ?: return true
+        if (beat?.isActive == true) { synchronized(holders) { holders += tag }; return true }
+        val sid = store.streamSid
+        try {
+            val st = withContext(Dispatchers.IO) { api.streams(l) }
+            val mine = st.active.any { it.sid.isNotEmpty() && sid.startsWith(it.sid) }
+            if (!mine && st.count >= st.max) {
+                if (!ask) return false
+                val others = st.active.map { u -> listOf(u.label, u.what).filter { it.isNotBlank() }.joinToString(": ") + if (u.recording) " (recording)" else "" }
+                val oldest = st.active.firstOrNull { !it.recording }?.let { u -> listOf(u.label, u.what).filter { it.isNotBlank() }.joinToString(": ") }
+                val q = StreamAsk(st.max, others, oldest, kotlinx.coroutines.CompletableDeferred())
+                withContext(Dispatchers.Main) { streamAsk = q }
+                val yes = try { q.answer.await() } finally { withContext(Dispatchers.Main) { if (streamAsk === q) streamAsk = null } }
+                if (!yes) return false
+            }
+            val ok = withContext(Dispatchers.IO) { api.streamStart(l, sid, device, what) }
+            if (!ok) {
+                withContext(Dispatchers.Main) { host?.stopPlayback("Every stream is in use by a recording on the home server") }
+                return false
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Diag.log("Orbit: stream count not reachable (${e.javaClass.simpleName}); playing anyway")
+            return true
+        }
+        synchronized(holders) { holders += tag }
+        startBeat(l, sid)
+        return true
+    }
+
+    fun answerStreamAsk(yes: Boolean) { streamAsk?.answer?.complete(yes) }
+
+    private fun startBeat(l: OrbitLink, sid: String) {
+        beat?.cancel()
+        beat = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(10_000)
+                val why = try { api.streamHeartbeat(l, sid) } catch (e: Exception) { null }
+                if (why != null) {
+                    synchronized(holders) { holders.clear() }
+                    withContext(Dispatchers.Main) {
+                        host?.stopPlayback(if (why == "recording") "Stopped: a recording needs the stream" else "Stopped: another device started watching")
+                    }
+                    break
+                }
+            }
+        }
+    }
+
+    /** [tag] stopped playing; the slot is given back when nothing on this TV plays any more. */
+    fun releaseStream(tag: String) {
+        val empty = synchronized(holders) { holders -= tag; holders.isEmpty() }
+        if (!empty || beat == null) return
+        beat?.cancel(); beat = null
+        val l = link ?: return
+        scope.launch(Dispatchers.IO) { api.streamStop(l, store.streamSid) }
     }
 
     // ---------- pairing ----------

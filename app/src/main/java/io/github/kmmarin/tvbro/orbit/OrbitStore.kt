@@ -57,6 +57,15 @@ class OrbitStore(private val ctx: Context) {
         get() = try { prefs?.getStringSet("serverSources", emptySet())?.toSet() ?: emptySet() } catch (e: Exception) { emptySet() }
         set(v) { try { prefs?.edit { putStringSet("serverSources", v) } } catch (e: Exception) { } }
 
+    /** This TV's stream id for the shared stream count (made once, so zapping never takes a second slot). */
+    val streamSid: String by lazy {
+        try {
+            prefs?.getString("streamSid", null) ?: ("tv" + java.util.UUID.randomUUID().toString().replace("-", "")).also { v ->
+                prefs?.edit { putString("streamSid", v) }
+            }
+        } catch (e: Exception) { "tv" + java.util.UUID.randomUUID().toString().replace("-", "") }
+    }
+
     var lastServer: String
         get() = try { prefs?.getString("lastServer", "") ?: "" } catch (e: Exception) { "" }
         set(v) { try { prefs?.edit { putString("lastServer", v) } } catch (e: Exception) { } }

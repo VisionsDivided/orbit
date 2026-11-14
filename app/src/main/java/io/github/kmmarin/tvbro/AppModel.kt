@@ -1364,6 +1364,11 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
             else { if (screen == Screen.ADD_SOURCE) screen = Screen.LIST; loadAll(true) }
         }
         override fun describe(key: String) = orbitDescribe(key)
+        override fun stopPlayback(reason: String) {
+            liveExo?.stop(); liveUrl = null; liveKey = null
+            if (screen == Screen.PLAYER || screen == Screen.VODPLAY) screen = Screen.LIST
+            toast(reason)
+        }
     })
 
     /** A My list entry the web app can show: channels by name and logo, films and shows by poster and id. */

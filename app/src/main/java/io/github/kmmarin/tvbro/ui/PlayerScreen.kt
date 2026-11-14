@@ -83,6 +83,8 @@ fun PlayerScreen(m: AppModel) {
         if (a > 0) delay(minOf(1000L shl (a - 1).coerceAtMost(4), 15_000L))
         // already playing this channel (opened from the preview): keep going, no re-buffer
         if (a == 0 && m.liveUrl == url && exo.playbackState != Player.STATE_IDLE) { exo.playWhenReady = true; m.liveKey = ch.key; return@LaunchedEffect }
+        // Orbit: join the household's stream count (asks to stop the oldest viewer when every stream is in use)
+        if (!m.orbit.claimStream("live", ch.name, ask = true)) { m.screen = Screen.LIST; return@LaunchedEffect }
         m.liveUrl = url; m.liveKey = ch.key
         liveLoad(exo, url, if (m.catchup != null) ch.name + " (catch-up)" else ch.name)
     }

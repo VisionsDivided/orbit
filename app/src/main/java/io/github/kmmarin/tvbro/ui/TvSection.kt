@@ -67,6 +67,7 @@ private fun Preview(m: AppModel, ch: Channel?, modifier: Modifier) {
         // already playing this channel (back from full screen, catch-up or an alternate stream included): keep picture
         // and sound exactly as they are, no re-buffer
         if (m.liveKey == ch.key && m.liveUrl != null && exo.playbackState != androidx.media3.common.Player.STATE_IDLE) { exo.playWhenReady = true; return@LaunchedEffect }
+        if (!m.orbit.claimStream("live", ch.name, ask = false)) return@LaunchedEffect   // Orbit: every stream in use
         m.liveUrl = ch.url; m.liveKey = ch.key
         liveLoad(exo, ch.url, ch.name)
     }
@@ -91,6 +92,7 @@ private fun Preview(m: AppModel, ch: Channel?, modifier: Modifier) {
         if (m.previewRetry == 0 || ch == null || m.screen != Screen.LIST || !m.previewOn || m.streamsFull()) return@LaunchedEffect
         delay(minOf(2000L * m.previewRetry, 15_000L))
         if (m.liveKey != null) return@LaunchedEffect // something else started a stream meanwhile
+        if (!m.orbit.claimStream("live", ch.name, ask = false)) return@LaunchedEffect   // Orbit: every stream in use
         m.liveUrl = ch.url; m.liveKey = ch.key
         liveLoad(exo, ch.url, ch.name)
     }

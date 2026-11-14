@@ -40,6 +40,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import io.github.kmmarin.tvbro.*
 import io.github.kmmarin.tvbro.data.Net
 
@@ -201,6 +202,7 @@ fun VodPlayerScreen(m: AppModel) {
     val nextEp = remember(vp.key) { if (isEpisode) m.nextEpisode() else null }
 
     fun back() { m.screen = if (vp.key.startsWith("r|")) Screen.RECORDINGS else if (m.detail != null) Screen.DETAIL else Screen.LIST }
+    val vodScope = rememberCoroutineScope()
     fun markDone() { if (!done[0]) { done[0] = true; m.episodeDone(vp.key) } }
     fun leave() {
         val d = exo.duration
@@ -255,8 +257,14 @@ fun VodPlayerScreen(m: AppModel) {
         io.github.kmmarin.tvbro.data.Busy.playing = true
         exo.addListener(l)
         exo.setVideoChangeFrameRateStrategy(if (m.matchFps) C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_ONLY_IF_SEAMLESS else C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
-        exo.setMediaItem(MediaItem.fromUri(vp.url)); exo.prepare(); exo.playWhenReady = true
+        val fromProvider = vp.url.startsWith("http")
+        val claim = vodScope.launch {
+            // Orbit: join the household's stream count (asks to stop the oldest viewer when every stream is in use)
+            if (fromProvider && !m.orbit.claimStream("vod", vp.title, ask = true)) { back(); return@launch }
+            exo.setMediaItem(MediaItem.fromUri(vp.url)); exo.prepare(); exo.playWhenReady = true
+        }
         onDispose {
+            claim.cancel(); if (fromProvider) m.orbit.releaseStream("vod")
             // switching episode from the bar, or leaving by any route: keep the position
             if (!done[0] && resumed[0] && exo.currentPosition > 0) m.savePos(vp.key, exo.currentPosition, exo.duration.coerceAtLeast(0))
             io.github.kmmarin.tvbro.data.Busy.playing = false; exo.removeListener(l); exo.release()

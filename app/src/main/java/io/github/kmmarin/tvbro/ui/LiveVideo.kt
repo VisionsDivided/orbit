@@ -150,7 +150,7 @@ fun LiveVideo(m: AppModel) {
     LaunchedEffect(shownSurface, m.previewMuted) { if (shownSurface > 0) exo.volume = if (shownSurface == 1 && m.previewMuted) 0f else 1f }
     // Stop only when the video stays hidden: a screen change that passes through a hidden frame (or a preview not
     // laid out yet) must not cut picture and sound.
-    LaunchedEffect(vis) { if (!vis) { kotlinx.coroutines.delay(500); exo.stop(); exo.clearMediaItems(); m.liveUrl = null; m.liveKey = null } }
+    LaunchedEffect(vis) { if (!vis) { kotlinx.coroutines.delay(500); exo.stop(); exo.clearMediaItems(); m.liveUrl = null; m.liveKey = null; m.orbit.releaseStream("live") } }
     var shown by remember { mutableStateOf(false) }
     // drawn full screen, or at the preview spot (with a channel chosen); leaving full screen before the preview spot is
     // laid out the video stays full size until it is, then shrinks into it: the surface is never taken down

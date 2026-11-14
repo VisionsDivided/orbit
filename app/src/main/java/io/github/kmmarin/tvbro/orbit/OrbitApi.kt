@@ -135,6 +135,34 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT) {
         }
     }
 
+    /** Who uses the provider's streams now (tvBro's stream count, shared by TVs, browsers and recordings). */
+    data class StreamUse(val sid: String, val label: String, val what: String, val recording: Boolean)
+    data class StreamStatus(val max: Int, val count: Int, val active: List<StreamUse>)
+
+    fun streams(link: OrbitLink): StreamStatus {
+        val j = call(link.server, "/v1/streams", null, link)
+        val act = (j["active"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            StreamUse(o.str("sid") ?: "", o.str("label") ?: "", o.str("what") ?: "", (o["recording"] as? JsonPrimitive)?.booleanOrNull ?: false)
+        }
+        return StreamStatus((j["max"] as? JsonPrimitive)?.intOrNull ?: 1, (j["count"] as? JsonPrimitive)?.intOrNull ?: act.size, act)
+    }
+
+    private fun streamCall(link: OrbitLink, op: String, sid: String, label: String = "", what: String = ""): JsonObject {
+        val body = JsonObject(mapOf("sid" to JsonPrimitive(sid), "label" to JsonPrimitive(label), "what" to JsonPrimitive(what)))
+        return call(link.server, "/api/stream/$op", Json.encodeToString(JsonObject.serializer(), body), link)
+    }
+
+    /** Takes a slot (the oldest viewer's when all are in use); false when every slot is held by a recording. */
+    fun streamStart(link: OrbitLink, sid: String, label: String, what: String): Boolean =
+        (streamCall(link, "start", sid, label, what)["ok"] as? JsonPrimitive)?.booleanOrNull ?: false
+
+    /** Keeps the slot; returns why it was taken away, or null while it is still ours. */
+    fun streamHeartbeat(link: OrbitLink, sid: String): String? =
+        (streamCall(link, "heartbeat", sid)["stopped"] as? JsonPrimitive)?.contentOrNull
+
+    fun streamStop(link: OrbitLink, sid: String) { runCatching { streamCall(link, "stop", sid) } }
+
     /** Episode marks and show summaries of this TV's profile (/v1/progress/shows). */
     fun showsState(link: OrbitLink): Pair<List<ServerEpisode>, List<ServerShow>> {
         val j = call(link.server, "/v1/progress/shows", null, link)
