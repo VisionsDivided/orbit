@@ -2,12 +2,14 @@
 // Orbit accounts and profiles in the web app (server: docs/orbit/API-v1.md).
 // - tvBro mode (no accounts): nothing changes; Settings offers "Set up accounts" to the admin.
 // - Orbit mode: sign in with a username and password, "Who's watching?" when an account has more
-//   than one profile, a profile chip in the side menu, and Settings ▸ Accounts (profiles, this
+//   than one profile, the profile's avatar in the top bar, and Settings ▸ Accounts (profiles, this
 //   account's devices, and for the owner / admins the household's accounts).
 // Everything works with a remote: arrows move between fields and tiles, OK selects, Back / Escape closes.
 // Names are always set as text (never as HTML).
-import { apiReq, apiAuthPost, deviceLabel } from './api.js';
+import { api, apiReq, apiAuthPost, deviceLabel } from './api.js';
 import { h, toast } from './util.js';
+import { prefs } from './prefs.js';
+import { ic as icon } from './ui5.js';
 
 let status = null;
 let me = null;
@@ -129,45 +131,132 @@ export function showAccountSignIn() {
 }
 
 // ---------- who's watching ----------
-/** Profile tiles; OK picks one (the page reloads with that profile's lists). force: no Back. */
+// Two styles (Settings ▸ Profiles ▸ Profile picker style, saved in the profile's prefs as
+// pickerStyle): 'orbit' (default; DESIGN-SPEC-5 §8: the profiles on an elliptical orbit around the
+// planet, the focused one at the bottom, Left / Right turn the orbit) and 'classic' (one centred row).
+// One "Manage profiles" button; no colour-key legend.
+const GRADS = [['#ff9a76', '#c8507f'], ['#8de0b0', '#2a8f84'], ['#8892b0', '#39425f'], ['#ffd166', '#e0803a'], ['#7fb8ff', '#4057c8'], ['#f39ad6', '#8a5cff'], ['#9fe6ff', '#2a8fb0'], ['#c9a6ff', '#6b45e6']];
+const gradOf = (p, cur) => { if (cur) return 'linear-gradient(135deg,#2fd3ff,#8a5cff)'; let n = 0; for (const ch of String(p.id || p.name)) n = (n * 31 + ch.charCodeAt(0)) >>> 0; const g = GRADS[n % GRADS.length]; return `linear-gradient(135deg,${g[0]},${g[1]})`; };
+const reducedMotion = () => { try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; } };
+
+/** Profile picker; OK picks one (the page reloads with that profile's lists). force: no Back. */
 export function showProfilePicker(m, opts = {}) {
   const info = m || me;
   if (!info) return;
+  document.querySelectorAll('.op-back').forEach((x) => x.remove());
+  const style = opts.style || (prefs().pickerStyle === 'classic' ? 'classic' : 'orbit');
   const cur = info.profile ? info.profile.id : null;
-  const tiles = info.profiles.map((p) => h('button', { class: 'orbit-tile focusable' + (p.id === cur ? ' current' : ''), type: 'button',
-    'aria-label': p.name + (p.kids ? ' (kids)' : '') + (p.id === cur ? ' (current)' : ''),
-    onclick: async () => {
-      try { await apiReq('/v1/profiles/select', { method: 'POST', body: JSON.stringify({ id: p.id }) }); location.reload(); }
-      catch (e) { toast(e.message); }
-    } },
-    h('span', { class: 'orbit-avatar' + (p.kids ? ' kids' : '') }, initial(p.name)), h('span', { class: 'orbit-name' }, p.name),
-    p.kids ? h('span', { class: 'orbit-badge' }, 'Kids') : null));
-  const grid = h('div', { class: 'orbit-tiles' }, ...tiles);
-  const box = h('div', { class: 'orbit-picker', role: 'dialog', 'aria-label': "Who's watching?" },
-    h('h1', {}, "Who's watching?"), grid,
-    h('p', { class: 'hint' }, `Signed in as ${info.account.displayName}. Profiles have their own My list, favourite channels and resume points.`),
-    opts.force ? null : h('button', { class: 'btn secondary focusable', type: 'button', onclick: () => close() }, 'Back'));
-  const back = h('div', { class: 'modal-back orbit-picker-back' }, box);
-  const close = () => back.remove();
+  const pick = async (p) => {
+    try { await apiReq('/v1/profiles/select', { method: 'POST', body: JSON.stringify({ id: p.id }) }); location.reload(); }
+    catch (e) { toast(e.message); }
+  };
+  const entries = info.profiles.map((p) => ({ p }));
+  if (info.profiles.length < 8) entries.push({ add: true });
+  const tiles = entries.map((en) => {
+    const p = en.p;
+    const t = en.add
+      ? h('button', { class: 'op-tile add focusable', type: 'button', 'aria-label': 'Add profile' }, h('span', { class: 'op-av' }, '+'), h('span', { class: 'op-nm' }, 'Add profile'))
+      : h('button', { class: 'op-tile focusable' + (p.id === cur ? ' current' : ''), type: 'button', 'aria-label': p.name + (p.kids ? ' (kids)' : '') + (p.id === cur ? ' (current)' : '') },
+        h('span', { class: 'op-av', style: { background: gradOf(p, false) } }, initial(p.name)),
+        h('span', { class: 'op-nm' }, p.name, p.kids ? h('span', { class: 'bd' }, 'Kids') : null));
+    t._en = en;
+    return t;
+  });
+  const addProfile = async () => {
+    const v = await formDialog('Add a profile', [{ name: 'name', label: 'Name', max: '40' }, { name: 'kids', label: 'Kids profile', type: 'checkbox' }],
+      null, 'Add', (x) => (x.name.trim() ? null : 'Give it a name'));
+    if (!v) { focusAt(fi); return; }
+    try { await apiReq('/v1/profiles', { method: 'POST', body: JSON.stringify({ name: v.name.trim(), kids: v.kids }) }); toast('Profile added'); await orbitLoad(); close(); showProfilePicker(me, opts); }
+    catch (e) { toast(e.message); }
+  };
+  const manage = h('button', { class: 'btn5 sec focusable op-manage', type: 'button', onclick: async () => {
+    if (opts.force) { const p = info.profiles.find((x) => x.id === cur) || info.profiles[0]; location.hash = 'settings:profiles'; if (p) await pick(p); return; }
+    close(); location.hash = 'settings:profiles';
+  } });
+  manage.append(icon('gear'), h('span', {}, 'Manage profiles'));
+  const wall = h('div', { class: 'op-wall', 'aria-hidden': 'true' });
+  const stage = h('div', { class: 'op-stage ' + style });
+  const box = h('div', { class: 'op-box', role: 'dialog', 'aria-modal': 'true', 'aria-label': "Who's watching?" },
+    h('div', { class: 'op-head' }, h('h1', {}, "Who's watching?"), h('p', {}, `Profile picker style: ${style === 'orbit' ? 'Orbit' : 'Classic'} · change it in Settings › Profiles`)),
+    stage, h('div', { class: 'op-foot' }, manage));
+  const back = h('div', { class: 'op-back' }, wall, h('div', { class: 'op-mesh' }), h('div', { class: 'op-dark' }), box);
+  if (style === 'orbit') stage.append(h('div', { class: 'op-ring' }), h('img', { class: 'op-planet', src: 'brand/orbit-planet.webp', alt: '' }));
+  stage.append(...tiles);
+  const close = () => { cancelAnimationFrame(raf); window.removeEventListener('resize', layout); back.remove(); };
+  let fi = Math.max(0, tiles.findIndex((t) => t.classList.contains('current')));
+  let rot = fi, raf = 0;
+  const n = tiles.length;
+  function layout() {
+    if (style !== 'orbit') return;
+    const W = stage.clientWidth, H = stage.clientHeight; if (!W || !H) return;
+    const k = Math.min(W / 1920, H / 760);
+    const cx = W / 2, cy = H * 0.42, rx = Math.min(W * 0.36, 660 * k * 1.1), ry = Math.max(120, 250 * k * 1.15);
+    const ring = stage.querySelector('.op-ring');
+    Object.assign(ring.style, { left: cx - rx + 'px', top: cy - ry + 'px', width: rx * 2 + 'px', height: ry * 2 + 'px' });
+    const pl = stage.querySelector('.op-planet'); const pw = Math.min(460 * k * 1.1, rx * 0.75);
+    Object.assign(pl.style, { width: pw + 'px', left: cx - pw / 2 + 'px', top: cy - pw * 0.34 + 'px' });
+    const step = Math.min(39, 360 / Math.max(n, 1)) * Math.PI / 180;
+    tiles.forEach((t, i) => {
+      let d = i - rot; if (d > n / 2) d -= n; if (d < -n / 2) d += n;
+      const a = Math.PI / 2 + d * step;
+      const front = Math.sin(a);                  // 1 at the bottom (focused), < 0 behind the planet
+      const near = Math.max(0, 1 - Math.abs(d));  // 1 for the focused one
+      const size = (150 + 50 * near) * Math.max(k * 1.1, 0.5);
+      t.style.setProperty('--sz', size + 'px');
+      t.style.left = cx + rx * Math.cos(a) - size / 2 + 'px';
+      t.style.top = cy + ry * Math.sin(a) - size / 2 + 'px';
+      t.style.opacity = String(front < -0.2 ? 0.35 : 1);
+      t.style.zIndex = String(10 + Math.round(front * 10));
+      t.classList.toggle('front', i === fi);
+    });
+  }
+  function turnTo(i) {
+    fi = (i + n) % n;
+    const from = rot; let to = fi; let d = to - from; if (d > n / 2) to -= n; if (d < -n / 2) to += n;
+    cancelAnimationFrame(raf);
+    if (reducedMotion() || style !== 'orbit') { rot = fi; layout(); return; }
+    const t0 = performance.now(), dur = 400;
+    const tick = (now) => { const p = Math.min(1, (now - t0) / dur); const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2; rot = from + (to - from) * e; if (p >= 1) rot = fi; layout(); if (p < 1) raf = requestAnimationFrame(tick); };
+    raf = requestAnimationFrame(tick);
+  }
+  function focusAt(i) { const t = tiles[(i + n) % n]; if (t) t.focus({ preventScroll: true }); }
+  tiles.forEach((t, i) => {
+    t.addEventListener('focus', () => { if (fi !== i || style !== 'orbit') turnTo(i); else layout(); });
+    t.addEventListener('click', () => { if (t._en.add) addProfile(); else pick(t._en.p); });
+  });
   box.addEventListener('keydown', (e) => {
     e.stopPropagation();
     if ((e.key === 'Escape' || e.key === 'Backspace' || e.key === 'BrowserBack') && !opts.force) { e.preventDefault(); close(); return; }
-    if (arrowFocus(box, e)) e.preventDefault();
+    const onTile = tiles.includes(document.activeElement);
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); if (onTile) focusAt(fi + (e.key === 'ArrowRight' ? 1 : -1)); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); manage.focus(); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); focusAt(fi); return; }
+    if (e.key === 'Tab') {   // keep the focus in the dialog
+      const f = [...tiles, manage]; const i = f.indexOf(document.activeElement);
+      e.preventDefault(); f[(i + (e.shiftKey ? -1 : 1) + f.length) % f.length].focus();
+    }
   });
   document.body.append(back);
-  setTimeout(() => (grid.querySelector('.current') || tiles[0]).focus(), 30);
+  window.addEventListener('resize', layout);
+  layout();
+  setTimeout(() => focusAt(fi), 30);
+  // a faint wall of posters behind (best effort; nothing when the catalogue is empty)
+  api.vodList('movie', '__all', 1).then((r) => {
+    const ps = (r.items || []).map((x) => api.img(x.poster)).filter(Boolean).slice(0, 30);
+    wall.replaceChildren(...ps.map((src) => h('img', { src, alt: '', loading: 'lazy' })));
+  }).catch(() => {});
 }
 
-// ---------- side menu chip ----------
-/** A side-menu item showing the current profile; OK opens "Who's watching?". */
+// ---------- top bar avatar ----------
+/** The top bar's avatar shows who is watching (the current profile's initial). */
 export function addNavChip() {
-  if (!me || !me.profile || document.querySelector('.nav-profile')) return;
-  const settings = document.querySelector('.nav-item[data-screen="settings"]');
-  if (!settings) return;
-  const chip = h('button', { class: 'nav-item nav-profile', 'data-screen': 'profile', tabindex: '0', title: 'Switch profile',
-    onclick: () => showProfilePicker(me) },
-    h('span', { class: 'ic orbit-avatar small' + (me.profile.kids ? ' kids' : '') }, initial(me.profile.name)), h('span', {}, me.profile.name));
-  settings.before(chip);
+  const av = document.querySelector('.tb-avatar');
+  if (!av) return;
+  if (me && me.profile) {
+    av.textContent = initial(me.profile.name);
+    av.setAttribute('aria-label', `${me.profile.name}: profile and settings`);
+    av.title = me.profile.name;
+  } else { av.textContent = ''; av.append(icon('user')); }
 }
 
 // ---------- link a TV ----------

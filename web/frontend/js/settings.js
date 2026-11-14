@@ -1,6 +1,8 @@
 // Copyright 2026 The tvBro authors. SPDX-License-Identifier: Apache-2.0
 // Settings: sign-in, per-playlist sync status (Guide / Channels / Movies & Series) with live
 // progress, refresh intervals, stream limit, and the per-browser preferences.
+// Direction 5: reached from the avatar; a sub-menu row of categories (Profiles · Playback · Live TV ·
+// Sources · Requests · Appearance · About) shows one group of cards at a time (#settings:<category>).
 
 import { api, cacheClear, loadState } from './api.js';
 import { h, toast, fmtTime, spatialMove } from './util.js';
@@ -8,7 +10,22 @@ import { prefs, setPref } from './prefs.js';
 import { storageDialog } from './recstore.js';
 import { parentalInfo, changePin, lockManager } from './parental.js';
 import { passwordDialog } from './signin.js';
-import { orbitMode, orbitSettingsCard } from './orbit.js';
+import { orbitMode, orbitMe, orbitSettingsCard, showProfilePicker, formDialog } from './orbit.js';
+import { getJson } from './catalog.js';
+import { apiReq } from './api.js';
+import { uiLoad, uiSave } from './uistate.js';
+import { plainScene } from './backdrop.js';
+
+const CATS = [['profiles', 'Profiles'], ['playback', 'Playback'], ['livetv', 'Live TV'], ['sources', 'Sources'], ['requests', 'Requests'], ['appearance', 'Appearance'], ['about', 'About']];
+/** The category of each card, by its heading (cards without one belong to Sources: playlist headers, notes). */
+const CAT_OF = { 'Guide (EPG)': 'sources', Channels: 'sources', 'Movies & Series': 'sources', Account: 'sources', Streams: 'playback', Playback: 'playback',
+  Recordings: 'livetv', 'Live TV': 'livetv', General: 'appearance', 'This browser': 'appearance', 'Parental controls': 'profiles', Accounts: 'profiles',
+  'Backup & restore': 'about', Security: 'about', About: 'about', Requests: 'requests', Profiles: 'profiles' };
+export function catOf(el) {
+  if (el.dataset && el.dataset.cat) return el.dataset.cat;
+  const t = el.querySelector && el.querySelector('.card-h h3');
+  return (t && CAT_OF[t.textContent.trim()]) || 'sources';
+}
 
 function ago(ts) {
   if (!ts) return 'never';
@@ -41,10 +58,28 @@ async function withPin(fn) {
   }
 }
 
-export function settingsScreen(main, nav, ctx) {
+export function settingsScreen(main, nav, ctx, arg) {
   main.innerHTML = '';
-  const scr = h('div', { class: 'screen set' }, h('h1', {}, 'Settings'));
+  let cat = CATS.some(([c]) => c === arg) ? arg : (uiLoad().setCat || 'profiles');
+  const subRow = h('div', { class: 'sub5', role: 'navigation', 'aria-label': 'Settings categories' });
+  const head = h('div', { class: 'set-head' }, h('h1', {}, 'Settings'), h('span', { class: 'mut' }, ''));
+  const scr = h('div', { class: 'screen set screen5 set5' }, subRow, head);
   main.append(scr);
+  plainScene();
+  function drawCats() {
+    subRow.replaceChildren(...CATS.map(([c, t]) => h('button', { class: 'pill focusable' + (c === cat ? ' on' : ''), type: 'button', 'aria-current': c === cat ? 'page' : null, 'data-k': 'cat-' + c,
+      onclick: () => { cat = c; uiSave({ setCat: c }); history.replaceState(null, '', '#settings:' + c); drawCats(); applyCat(); } }, t)));
+    head.lastChild.textContent = (CATS.find(([c]) => c === cat) || [, ''])[1];
+  }
+  /** Shows only the cards of the selected category (the sign-in / add-playlist form always shows). */
+  function applyCat() {
+    body.querySelectorAll(':scope > .set-none').forEach((x) => x.remove());
+    const filtering = !!status && !adding;      // before a playlist is set up, the sign-in form shows on its own
+    for (const el of body.children) el.hidden = filtering && !el.classList.contains('form') && catOf(el) !== cat;
+    if (!filtering) return;
+    if (![...body.children].some((el) => !el.hidden)) body.append(h('div', { class: 'empty5 set-none', 'data-cat': cat }, h('p', {}, 'Nothing to set here on this server.')));
+  }
+  drawCats();
   let alive = true, timer = null, status = null, adding = false, role = 'admin', viewerPw = false, required = false;
   const body = h('div', { class: 'set-body' }); scr.append(body);
   const orbitCard = orbitSettingsCard(() => role === 'admin');   // Orbit: accounts and profiles
@@ -260,7 +295,10 @@ export function settingsScreen(main, nav, ctx) {
         } }, 'Set…')) : null,
       !shared ? h('div', { class: 'hint' }, 'Every device signs in with an account (see Accounts above). The server never fetches addresses on your own network (router, NAS, hypervisor) unless you allow it here; loopback and link-local addresses are always refused.') : null,
       shared && h('div', { class: 'hint' }, 'With a password required, every device signs in once: the admin password changes playlists, settings, storage and restores; the viewer password (optional) only watches. Turn it on when the server can be reached from beyond your own trusted home network. Wrong passwords are slowed down. The server never fetches addresses on your own network (router, NAS, hypervisor) unless you allow it here, e.g. for a tvheadend box; loopback and link-local addresses are always refused.')));
+    kids.unshift(profilesCard());
+    kids.push(liveTvCard(), requestsCard, aboutCard());
     body.replaceChildren(...kids.flat().filter(Boolean));
+    applyCat();
     if (focusKey) { const f = body.querySelector(`[data-k="${focusKey}"]`); if (f) f.focus(); }
   }
 
@@ -320,13 +358,90 @@ export function settingsScreen(main, nav, ctx) {
     body.replaceChildren(form);
   }
 
+  // ---------------------------------------------------------------- direction 5 cards
+  /** Profiles: the picker style (Orbit / Classic, saved in this profile's prefs), Who's watching, manage. */
+  function profilesCard() {
+    const P = prefs();
+    const style = P.pickerStyle === 'classic' ? 'classic' : 'orbit';
+    const setStyle = (v) => { if (v === style) return; setPref('pickerStyle', v); toast('Profile picker style: ' + (v === 'orbit' ? 'Orbit' : 'Classic')); render(); };
+    const seg = h('div', { class: 'seg5', role: 'radiogroup', 'aria-label': 'Profile picker style', 'data-k': 'picker' },
+      ...[['orbit', 'Orbit'], ['classic', 'Classic']].map(([v, t]) => h('button', { class: 'focusable' + (v === style ? ' on' : ''), type: 'button', role: 'radio', 'aria-checked': v === style ? 'true' : 'false', 'data-k': 'picker-' + v, onclick: () => setStyle(v) }, t)));
+    const pv = (v, label) => h('div', { class: 'pv5 ' + v + (v === style ? ' on' : ''), 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i'), h('i'), h('span', {}, label));
+    const me = orbitMe();
+    const srow = (label, small, ...right) => h('div', { class: 'srow5' }, h('div', { class: 'srow-l' }, label, small ? h('small', {}, small) : null), ...right);
+    return h('section', { class: 'card glass prof5', 'data-cat': 'profiles' }, h('div', { class: 'card-h' }, h('h3', {}, 'Profiles')),
+      h('div', { class: 'prof5-cols' },
+        h('div', { class: 'prof5-rows' },
+          srow('Profile picker style', 'How "Who\'s watching?" looks', seg),
+          orbitMode() && me ? srow("Who's watching?", me.profile ? 'Now: ' + me.profile.name : null, h('button', { class: 'btn5 sec focusable', type: 'button', 'data-k': 'picker-open', onclick: () => showProfilePicker(me) }, 'Switch profile')) : null,
+          srow('Manage profiles', orbitMode() ? 'Names, Kids profiles, accounts and devices' : 'Profiles come with accounts (below)', h('button', { class: 'btn5 sec focusable', type: 'button', 'data-k': 'manage', onclick: () => { const c = body.querySelector('.orbit-card'); const f = c && c.querySelector('.focusable'); if (c) c.scrollIntoView({ block: 'start', behavior: 'smooth' }); if (f) f.focus({ preventScroll: true }); } }, 'Manage'))),
+        h('div', { class: 'prof5-pv' }, h('div', { class: 'pv5-h' }, 'Preview'), pv('orbit', 'Orbit'), pv('classic', 'Classic · one row'))));
+  }
+  /** Live TV: the guide's companions (the guide's own settings are per playlist under Sources). */
+  function liveTvCard() {
+    return h('section', { class: 'card glass', 'data-cat': 'livetv' }, h('div', { class: 'card-h' }, h('h3', {}, 'Live TV')),
+      h('div', { class: 'set-actions' },
+        h('button', { class: 'btn secondary focusable', 'data-k': 'lt-guide', onclick: () => { location.hash = 'live'; } }, 'Open the guide'),
+        h('button', { class: 'btn secondary focusable', 'data-k': 'lt-editor', onclick: () => { location.hash = 'editor'; } }, '✎ Channels & groups'),
+        h('button', { class: 'btn secondary focusable', 'data-k': 'lt-rec', onclick: () => { location.hash = 'recordings'; } }, 'Recordings')),
+      h('div', { class: 'hint' }, 'Guide refresh and time shift are under Sources, per playlist. Live preview and channel numbers are under Appearance.'));
+  }
+  /** About: what this is. */
+  function aboutCard() {
+    return h('section', { class: 'card glass', 'data-cat': 'about' }, h('div', { class: 'card-h' }, h('h3', {}, 'About')),
+      row('App', 'Orbit for the web'), row('Server mode', orbitMode() ? 'Orbit accounts' : 'Shared household (no accounts)'));
+  }
+  /** Requests: the household's Seerr (Discover). Owners and admins connect it here. */
+  const requestsCard = h('section', { class: 'card glass', 'data-cat': 'requests' }, h('div', { class: 'card-h' }, h('h3', {}, 'Requests')), h('div', { class: 'hint' }, 'Loading…'));
+  async function drawRequests() {
+    const kids = [h('div', { class: 'card-h' }, h('h3', {}, 'Requests'))];
+    if (!orbitMode()) { kids.push(h('div', { class: 'hint' }, 'Discover and requests (Seerr) need Orbit accounts: set them up under Profiles ▸ Accounts.')); requestsCard.replaceChildren(...kids); return; }
+    let st = null;
+    try { const r = await getJson('/v1/discover/status', null); st = r.ok ? r.data : null; } catch {}
+    const me = orbitMe(), admin = me && me.account && me.account.role !== 'member';
+    kids.push(row('Seerr', st ? (st.configured ? (st.reachable === false ? 'Connected, but it cannot be reached now' : 'Connected' + (st.version ? ' · ' + st.version : '')) : 'Not connected') : 'Unknown'));
+    if (st && st.configured) kids.push(row('Your Seerr user', st.linked ? 'Linked: you can request' : 'Not linked: ask the owner to link it'));
+    if (admin) {
+      kids.push(h('div', { class: 'set-actions' },
+        h('button', { class: 'btn secondary focusable', 'data-k': 'seerr-set', onclick: async () => {
+          const v = await formDialog('Connect Seerr', [
+            { name: 'baseUrl', label: 'Seerr address (http://host:5055)', value: (st && st.baseUrl) || '' },
+            { name: 'apiKey', label: st && st.keySet ? 'API key (leave empty to keep the saved one)' : 'API key (Seerr ▸ Settings ▸ General)', type: 'password' },
+          ], 'The server keeps the key encrypted; browsers never see it.', 'Connect', (x) => (x.baseUrl.trim() ? null : 'Enter the address'));
+          if (!v) return;
+          const body = { baseUrl: v.baseUrl.trim() }; if (v.apiKey) body.apiKey = v.apiKey;
+          try { await apiReq('/v1/discover/settings', { method: 'POST', body: JSON.stringify(body) }); toast('Seerr connected'); } catch (e) { toast('Not connected: ' + e.message); }
+          drawRequests();
+        } }, st && st.configured ? 'Change…' : 'Connect Seerr…'),
+        st && st.configured ? h('button', { class: 'btn secondary focusable', 'data-k': 'seerr-map', onclick: async () => {
+          try { const r = await apiReq('/v1/discover/map', { method: 'POST', body: JSON.stringify({ auto: true }) }); toast(`${(r.linked || []).length} account(s) linked`); } catch (e) { toast(e.message); }
+          drawRequests();
+        } }, 'Link accounts automatically') : null,
+        st && st.configured ? h('button', { class: 'btn secondary focusable', 'data-k': 'seerr-rm', onclick: async () => {
+          if (!confirm('Disconnect Seerr? Discover and requests stop working until it is connected again.')) return;
+          try { await apiReq('/v1/discover/settings', { method: 'POST', body: JSON.stringify({ remove: true }) }); toast('Seerr disconnected'); } catch (e) { toast(e.message); }
+          drawRequests();
+        } }, 'Disconnect') : null));
+    }
+    kids.push(h('div', { class: 'hint' }, 'Discover shows what is trending and lets each person request films and shows as their own Seerr user, so Seerr\'s permissions and quotas apply.'));
+    requestsCard.replaceChildren(...kids);
+    applyCat();
+  }
+  drawRequests();
+
   return {
     onKey(e) {
-      if (e.key.startsWith('Arrow')) { if (!spatialMove(scr, e.key) && e.key === 'ArrowLeft') nav.focusActive(); return true; }
+      if (e.key.startsWith('Arrow')) {
+        // the picker style row: Left / Right change it (DESIGN-SPEC-5 §12)
+        const ae = document.activeElement;
+        if (ae && ae.closest && ae.closest('.seg5[data-k="picker"]') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { const b = ae.closest('.seg5').querySelectorAll('button')[e.key === 'ArrowLeft' ? 0 : 1]; b.click(); b.focus(); return true; }
+        if (!spatialMove(scr, e.key) && (e.key === 'ArrowLeft' || e.key === 'ArrowUp')) nav.focusActive();
+        return true;
+      }
       if (e.key === 'Escape' || e.key === 'Backspace') { nav.focusActive(); return true; }
       return false;
     },
-    focusIn() { const f = scr.querySelector('.focusable'); if (f) f.focus(); },
+    focusIn() { const f = subRow.querySelector('.pill.on') || scr.querySelector('.focusable'); if (f) f.focus(); },
     destroy() { alive = false; clearTimeout(timer); },
   };
 }
