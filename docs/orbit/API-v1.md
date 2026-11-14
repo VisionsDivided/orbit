@@ -51,7 +51,7 @@ It is written so another implementation (for example Rust) could replace the ser
 
 | Method | Path | Who | Body → Answer |
 |---|---|---|---|
-| POST | `/v1/pair/start` | the TV (public, `X-TvBro: 1`) | `{"device"}` → `{"pairId", "code", "expires", "interval"}`. `code` is `XXXX-XXXX` (letters without vowels, digits 2–9). At most 5 waiting pairings per address, 50 in all (429). 409 while the server has no accounts. |
+| POST | `/v1/pair/start` | the TV (public, `X-TvBro: 1`) | `{"device"}` → `{"pairId", "code", "expires", "interval"}`. `code` is `XXXX-XXXX` (letters without vowels, digits 2–9). At most 3 pairings per client address and 20 in all may wait at once (expired ones do not count); over that: 429 with a message saying which limit was hit and `Retry-After` (seconds until the oldest of those codes expires). 409 while the server has no accounts. |
 | POST | `/v1/pair/poll` | the TV (public, `X-TvBro: 1`) | `{"pairId"}` → `{"status": "pending"}` or, once, `{"status": "approved", "session", "csrf", "me": Me}`. 404 when expired, collected or cancelled. Poll every `interval` seconds. |
 | POST | `/v1/pair/approve` | signed in | `{"code", "profileId"?}` → `{"ok": true, "device"}`. The profile must be your own (else 404); unknown or expired codes answer 404 and are throttled per address (429). |
 
