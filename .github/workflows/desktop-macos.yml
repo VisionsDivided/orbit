@@ -6,7 +6,7 @@ name: Desktop macOS
 
 on:
   push:
-    branches: [dev, main, orbit/macos]
+    branches: [dev, main, orbit/main, orbit/macos]
   pull_request:
     branches: [dev, main]
   workflow_dispatch:
