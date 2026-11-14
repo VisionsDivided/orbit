@@ -133,25 +133,41 @@ fun LazyListScope.playbackStatsSection() {
 }
 
 /**
- * Every stream of the provider is in use (TVs, browsers and recordings share the count): asks whether to stop the
- * oldest viewer and watch here. OK on the first button = yes; Back or Cancel = no.
+ * Every stream of the provider is in use (TVs, browsers and recordings share the count): lists each one with its own
+ * "Stop <name> and watch" (Up / Down moves between them, OK chooses), recordings without a button, then Cancel.
+ * Back or Cancel = keep everything as it is.
  */
 @Composable
 fun OrbitStreamPrompt(m: AppModel) {
     val a = m.orbit.streamAsk ?: return
-    BackHandler { m.orbit.answerStreamAsk(false) }
-    val yesFr = remember { FocusRequester() }
-    LaunchedEffect(a) { delay(150); runCatching { yesFr.requestFocus() } }
+    BackHandler { m.orbit.answerStreamAsk(null) }
+    val firstFr = remember { FocusRequester() }
+    LaunchedEffect(a) { delay(150); runCatching { firstFr.requestFocus() } }
+    val stoppable = a.streams.filter { it.stoppable }
+    // a server from before stream ids: it can only stop the oldest viewer
+    val oldestOnly = stoppable.isEmpty() && a.streams.any { !it.recording }
     Box(Modifier.fillMaxSize().background(Color(0xCC000000)), contentAlignment = Alignment.Center) {
-        Column(Modifier.width(720.dp).background(Color(0xFF141A22)).padding(28.dp).focusTrap(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.width(760.dp).background(Color(0xFF141A22)).padding(28.dp).focusTrap(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(if (a.max == 1) "The stream is in use" else "All ${a.max} streams are in use", color = Accent, fontSize = 26.sp)
-            Text("Your provider allows ${a.max} at a time. Watching now:", color = TextMain, fontSize = 17.sp)
-            for (u in a.inUse) Text("•  $u", color = TextMain, fontSize = 17.sp, modifier = Modifier.padding(start = 8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(top = 14.dp)) {
-                TvButton(if (a.oldest != null) "Stop ${a.oldest.take(40)} and watch here" else "Watch here", Modifier.focusRequester(yesFr)) {
-                    m.orbit.answerStreamAsk(true)
+            Text("Your provider allows ${a.max} at a time. Choose which one to stop:", color = TextMain, fontSize = 17.sp)
+            var first = true
+            for (r in a.streams) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text(r.name, color = TextMain, fontSize = 18.sp)
+                        Text(r.what.ifEmpty { "Watching" } + if (r.recording) "  (recording, keeps going)" else "",
+                            color = TextDim, fontSize = 14.sp)
+                    }
+                    if (r.stoppable) {
+                        val mod = if (first) Modifier.focusRequester(firstFr) else Modifier
+                        first = false
+                        TvButton(r.button, mod) { m.orbit.answerStreamAsk(r.id) }
+                    }
                 }
-                TvButton("Cancel") { m.orbit.answerStreamAsk(false) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(top = 14.dp)) {
+                if (oldestOnly) TvButton("Stop the oldest and watch here", Modifier.focusRequester(firstFr)) { m.orbit.answerStreamAsk("") }
+                TvButton("Cancel", if (stoppable.isEmpty() && !oldestOnly) Modifier.focusRequester(firstFr) else Modifier) { m.orbit.answerStreamAsk(null) }
             }
         }
     }

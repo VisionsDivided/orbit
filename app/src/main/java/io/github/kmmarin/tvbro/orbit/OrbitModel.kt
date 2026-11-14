@@ -46,8 +46,12 @@ interface OrbitHost {
     fun stopPlayback(reason: String)
 }
 
-/** Every stream is in use: who uses them, and the answer (true = stop the oldest viewer and watch here). */
-data class StreamAsk(val max: Int, val inUse: List<String>, val oldest: String?, val answer: kotlinx.coroutines.CompletableDeferred<Boolean>)
+/**
+ * Every stream is in use: each active stream, and the answer: the id of the stream to stop, "" = stop the oldest
+ * viewer (servers without stream ids), null = cancel.
+ */
+data class StreamAsk(val max: Int, val streams: List<io.github.kmmarin.tvbro.data.StreamChoice.Row>,
+                     val answer: kotlinx.coroutines.CompletableDeferred<String?>)
 
 /**
  * Orbit state for the TV app: the home-server link, the pairing screen and sync (playlists, My list, film resume
@@ -232,8 +236,8 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
 
     /**
      * Before IPTV plays on this TV (linked only): joins the household's stream count. [tag] says who holds the slot
-     * ("live", "vod"); one TV is one slot however often it zaps. When every stream is in use, [ask] = true asks
-     * whether to stop the oldest viewer (a player opening), [ask] = false just answers false (the preview stays off).
+     * ("live", "vod"); one TV is one slot however often it zaps. When every stream is in use, [ask] = true lists
+     * them and asks which one to stop (a player opening), [ask] = false just answers false (the preview stays off).
      * The home server not answering never blocks playback.
      */
     suspend fun claimStream(tag: String, what: String, ask: Boolean): Boolean {
@@ -241,21 +245,30 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
         if (beat?.isActive == true) { synchronized(holders) { holders += tag }; return true }
         val sid = store.streamSid
         try {
-            val st = withContext(Dispatchers.IO) { api.streams(l) }
-            val mine = st.active.any { it.sid.isNotEmpty() && sid.startsWith(it.sid) }
-            if (!mine && st.count >= st.max) {
-                if (!ask) return false
-                val others = st.active.map { u -> listOf(u.label, u.what).filter { it.isNotBlank() }.joinToString(": ") + if (u.recording) " (recording)" else "" }
-                val oldest = st.active.firstOrNull { !it.recording }?.let { u -> listOf(u.label, u.what).filter { it.isNotBlank() }.joinToString(": ") }
-                val q = StreamAsk(st.max, others, oldest, kotlinx.coroutines.CompletableDeferred())
-                withContext(Dispatchers.Main) { streamAsk = q }
-                val yes = try { q.answer.await() } finally { withContext(Dispatchers.Main) { if (streamAsk === q) streamAsk = null } }
-                if (!yes) return false
-            }
-            val ok = withContext(Dispatchers.IO) { api.streamStart(l, sid, device, what) }
-            if (!ok) {
-                withContext(Dispatchers.Main) { host?.stopPlayback("Every stream is in use by a recording on the home server") }
-                return false
+            var st = withContext(Dispatchers.IO) { api.streams(l) }
+            var tries = 0
+            while (true) {
+                val mine = st.active.any { it.sid.isNotEmpty() && sid.startsWith(it.sid) }
+                var replace: String? = null
+                if (!mine && st.count >= st.max) {
+                    if (!ask) return false
+                    val rows = io.github.kmmarin.tvbro.data.StreamChoice.rows(st.active.map { u ->
+                        io.github.kmmarin.tvbro.data.StreamChoice.Use(u.id, u.label, u.profile, u.what, u.recording)
+                    })
+                    val q = StreamAsk(st.max, rows, kotlinx.coroutines.CompletableDeferred())
+                    withContext(Dispatchers.Main) { streamAsk = q }
+                    replace = (try { q.answer.await() } finally { withContext(Dispatchers.Main) { if (streamAsk === q) streamAsk = null } })
+                        ?: return false
+                }
+                when (val r = withContext(Dispatchers.IO) { api.streamStart(l, sid, device, what, replace) }) {
+                    OrbitApi.StreamStart.Ok -> break
+                    OrbitApi.StreamStart.Recording -> {
+                        withContext(Dispatchers.Main) { host?.stopPlayback("Every stream is in use by a recording on the home server") }
+                        return false
+                    }
+                    // the chosen stream ended and someone else took the slot: ask again with the list as it is now
+                    is OrbitApi.StreamStart.Changed -> { if (++tries >= 3) return false; st = r.now }
+                }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -268,7 +281,8 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
         return true
     }
 
-    fun answerStreamAsk(yes: Boolean) { streamAsk?.answer?.complete(yes) }
+    /** [stop]: the id of the stream to stop ("" = the oldest viewer), or null to cancel. */
+    fun answerStreamAsk(stop: String?) { streamAsk?.answer?.complete(stop) }
 
     private fun startBeat(l: OrbitLink, sid: String) {
         beat?.cancel()
