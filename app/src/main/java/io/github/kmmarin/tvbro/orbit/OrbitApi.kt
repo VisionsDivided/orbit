@@ -38,7 +38,9 @@ class OrbitError(val code: Int, message: String) : IOException(message)
 /** The home server's /v1 API (docs/orbit/API-v1.md) as far as the TV needs it. */
 class OrbitApi(private val client: OkHttpClient = DEFAULT) {
     companion object {
-        val DEFAULT: OkHttpClient = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS).build()
+        // no redirects: the session cookie and CSRF token are set by hand and OkHttp would carry them to any host
+        val DEFAULT: OkHttpClient = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS)
+            .followRedirects(false).followSslRedirects(false).build()
         private val JSON = "application/json".toMediaType()
         private const val COOKIE = "tvbro_s"
         /** The Orbit home server's port (docs/orbit/DEPLOY.md). */
