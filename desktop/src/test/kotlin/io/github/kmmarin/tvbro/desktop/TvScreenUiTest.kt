@@ -93,17 +93,21 @@ class TvScreenUiTest {
         assertEquals(nowWin, app.winStart)
         assertTrue(app.homeHasFocus) // never lost, never trapped
 
-        // 2. zones: name -> groups (the selected group) -> the top bar; Down goes back to the groups, Right to the name
+        // 2. zones: name -> the group tabs (on the selected group) -> Up to the top bar; Down goes back to the tabs, Down
+        // again to the channel's name
         rule.waitUntil(2_000) { app.tvZone == Zone.LABEL || app.tvZone == Zone.GROUPS }
         if (app.tvZone == Zone.LABEL) press(Key.DirectionLeft)
         assertEquals(Zone.GROUPS, app.tvZone)
-        press(Key.DirectionLeft) // the top bar (Live TV)
+        val g = app.group
+        press(Key.DirectionUp) // the top bar
+        rule.waitUntil(2_000) { !app.homeHasFocus || app.tvZone == Zone.GROUPS }
+        assertEquals(g, app.group)                             // moving along the tabs never changed the group
         rule.waitUntil(2_000) { app.tvZone == Zone.GROUPS }    // the zone the guide returns to stays the groups
         press(Key.DirectionDown)
         rule.waitUntil(2_000) { app.tvZone == Zone.GROUPS }
-        press(Key.DirectionRight)
-        rule.waitUntil(2_000) { app.tvZone == Zone.LABEL }
-        assertEquals("s|c2", app.focusCh?.key) // the same channel as before
+        press(Key.DirectionDown)
+        rule.waitUntil(500) { app.tvZone != Zone.GROUPS }
+        assertTrue(app.tvZone == Zone.LABEL || app.tvZone == Zone.GRID)   // Down from the tabs enters the channel list
         assertEquals("s|c2", app.playing?.live?.key) // and the preview never followed any of it
     }
 

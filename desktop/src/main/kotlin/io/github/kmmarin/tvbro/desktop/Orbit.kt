@@ -5,6 +5,7 @@ package io.github.kmmarin.tvbro.desktop
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import io.github.kmmarin.tvbro.data.ChannelFormats
 import io.github.kmmarin.tvbro.data.Diag
 import io.github.kmmarin.tvbro.data.Source
 import io.github.kmmarin.tvbro.data.StreamChoice
@@ -100,7 +101,8 @@ object OrbitDesk {
 }
 
 /** The stream limit is reached: the active streams, and the answer (the stream id to stop, "" = the oldest, null = cancel). */
-class StreamAsk(val max: Int, val rows: List<StreamChoice.Row>, val answer: CompletableDeferred<String?>)
+/** [what]: the channel or title asked for; [verb]: "watch", or "record" for a recording started by hand. */
+class StreamAsk(val max: Int, val rows: List<StreamChoice.Row>, val answer: CompletableDeferred<String?>, val what: String = "", val verb: String = "watch")
 
 /**
  * The desktop app as an Orbit device, like a linked TV (app/.../orbit/OrbitModel.kt): signs in with an account and
@@ -132,6 +134,9 @@ class OrbitDesktop(private val app: AppState, private val scope: CoroutineScope,
     private var cached: SyncSnapshot? = null
     private var legacy = false
 
+    /** Tests (design shots): a sign-in to show, without saving it or talking to any server. */
+    internal fun showForTest(s: OrbitSaved) { saved = s }
+
     private fun persist(s: OrbitSaved) {
         saved = s
         try { Secrets.writeString("orbit", Json2.json.encodeToString(OrbitSaved.serializer(), s)) }
@@ -148,7 +153,31 @@ class OrbitDesktop(private val app: AppState, private val scope: CoroutineScope,
         val s = load()
         withContext(Dispatchers.Main) { saved = s }
         val l = s.link ?: return@launch
+        // "Who's watching?" at start (Settings ▸ Profiles), from the profiles saved last time: no waiting for the server
+        if (app.settings.askWho && s.profiles.size > 1) withContext(Dispatchers.Main) { picking = true }
         if (check(l)) startLoop()
+    }
+
+    // ---------- Manage profiles (POST /v1/profiles, /v1/profiles/delete; docs/orbit/API-v1.md) ----------
+    /** The account's profiles again from the server (GET /v1/me). */
+    suspend fun refreshProfiles() {
+        val me = try { call { api.account(it) } } catch (e: Exception) { null } ?: return
+        withContext(Dispatchers.Main) { if (saved.link?.session == me.link.session) persist(saved.with(me)) }
+    }
+
+    suspend fun addProfile(name: String, kids: Boolean) {
+        message = ""
+        try { call { api.post(it, "/v1/profiles", JsonObject(mapOf("name" to JsonPrimitive(name), "kids" to JsonPrimitive(kids)))) }; refreshProfiles(); app.toast("Profile $name added") }
+        catch (e: OrbitError) { message = e.message ?: "Could not add the profile" }
+        catch (e: Exception) { message = OrbitDesk.describe(e) }
+    }
+
+    suspend fun deleteProfile(id: String) {
+        message = ""
+        if (id == saved.profileId) { message = "Switch to another profile before removing this one"; return }
+        try { call { api.post(it, "/v1/profiles/delete", JsonObject(mapOf("id" to JsonPrimitive(id)))) }; refreshProfiles(); app.toast("Profile removed") }
+        catch (e: OrbitError) { message = e.message ?: "Could not remove the profile" }
+        catch (e: Exception) { message = OrbitDesk.describe(e) }
     }
 
     private suspend fun check(l: OrbitLink): Boolean {
@@ -295,6 +324,7 @@ class OrbitDesktop(private val app: AppState, private val scope: CoroutineScope,
             val eps = OrbitSyncLogic.planEpisodes(states.filterKeys { it.startsWith("e|") }, seriesOf::get, snap.episodes, Watch.MIN_RESUME_MS)
             for (p in eps.toServer) out.episodes += OrbitBatch.episodeItem(p, withContext(Dispatchers.Main) { app.describe(p.seriesKey) })
             if (!out.isEmpty) send(l, out)
+            syncFormats(l, snap)
             withContext(Dispatchers.Main) {
                 if (link != l) return@withContext                      // signed out meanwhile: keep nothing
                 persist(saved.copy(listBase = m.result))
@@ -314,6 +344,18 @@ class OrbitDesktop(private val app: AppState, private val scope: CoroutineScope,
             withContext(Dispatchers.Main) { syncStatus = "Home server not reachable; will try again" }
         }
         return false
+    }
+
+    /**
+     * The per-channel live stream formats (TS / HLS) follow the profile like on the TV (app/.../orbit/FormatSync.kt):
+     * one value in the profile's server prefs ("tvChannelFormats"); the newer copy wins as a whole.
+     */
+    private suspend fun syncFormats(l: OrbitLink, snap: SyncSnapshot) {
+        val local = withContext(Dispatchers.Main) { app.channelFormats() }
+        val server = snap.prefs?.get(ChannelFormats.PREF_KEY)?.let { ChannelFormats.fromJson(it) }
+        val m = ChannelFormats.merge(local, server)
+        if (m.toServer) api.statePut(l, "prefs", ChannelFormats.PREF_KEY, m.result.toJson())
+        else if (m.result != local) withContext(Dispatchers.Main) { if (link == l) app.setChannelFormats(m.result) }
     }
 
     private data class Quad(val list: Set<String>, val states: Map<String, io.github.kmmarin.tvbro.data.WatchState>,
@@ -347,6 +389,7 @@ class OrbitDesktop(private val app: AppState, private val scope: CoroutineScope,
         withContext(Dispatchers.Main) {
             loop?.cancel(); loop = null; soon?.cancel()
             beat?.cancel(); beat = null; holding = false
+            recBeats.values.forEach { it.cancel() }; recBeats.clear()
             streamAsk?.answer?.complete(null)
             picking = false
             signedOut = signedOutByServer
@@ -376,6 +419,15 @@ class OrbitDesktop(private val app: AppState, private val scope: CoroutineScope,
     suspend fun get(path: String): JsonObject? {
         val l = link ?: return null
         return try { withContext(Dispatchers.IO) { api.get(l, path) } } catch (e: OrbitError) {
+            if (e.code == 401) { forget(signedOutByServer = true); return null }
+            throw e
+        }
+    }
+
+    /** A signed-in call off the UI thread (catalogue, profiles); a 401 signs out and answers null, other errors are thrown. */
+    suspend fun <T> call(f: (OrbitLink) -> T): T? {
+        val l = link ?: return null
+        return try { withContext(Dispatchers.IO) { f(l) } } catch (e: OrbitError) {
             if (e.code == 401) { forget(signedOutByServer = true); return null }
             throw e
         }
@@ -415,7 +467,7 @@ class OrbitDesktop(private val app: AppState, private val scope: CoroutineScope,
                 var replace: String? = null
                 if (!mine && st.count >= st.max) {
                     if (!ask) return false
-                    val q = StreamAsk(st.max, StreamChoice.rows(st.active.map { StreamChoice.Use(it.id, it.label, it.profile, it.what, it.recording) }), CompletableDeferred())
+                    val q = StreamAsk(st.max, StreamChoice.rows(st.active.map { StreamChoice.Use(it.id, it.label, it.profile, it.what, it.recording, it.device, it.since) }), CompletableDeferred(), what)
                     streamAsk = q
                     replace = (try { q.answer.await() } finally { if (streamAsk === q) streamAsk = null }) ?: return false
                 }
@@ -456,6 +508,73 @@ class OrbitDesktop(private val app: AppState, private val scope: CoroutineScope,
                 }
             }
         }
+    }
+
+    // ---------- recordings on this computer hold a slot of their own, as the home server's recordings do ----------
+    private val recBeats = HashMap<String, Job>()
+
+    /** The stream id of recording [id]: its own (not the player's), so playing and recording count as two streams. */
+    internal fun recSid(id: String): String = "dr" + id.take(8).padEnd(8, '0') + saved.streamSid.removePrefix("dk").ifEmpty { "0".repeat(24) }.take(24)
+
+    /**
+     * Before recording [id] starts (signed in only): takes a slot of the household's stream count. When every slot is in
+     * use, [ask] lists the streams and asks which to stop (a recording started by hand); without [ask] (a scheduled
+     * one) the home server stops the oldest viewer, as for its own recordings. False when every slot is held by
+     * recordings or the viewer cancelled. The home server not answering never stops a recording.
+     */
+    suspend fun claimRecording(id: String, title: String, ask: Boolean): Boolean {
+        val l = link ?: return true
+        val sid = recSid(id)
+        try {
+            var st = withContext(Dispatchers.IO) { api.streams(l) }
+            var tries = 0
+            while (true) {
+                val mine = st.active.any { it.sid.isNotEmpty() && sid.startsWith(it.sid) }
+                var replace: String? = null
+                if (!mine && st.count >= st.max && ask) {
+                    val q = StreamAsk(st.max, StreamChoice.rows(st.active.map { StreamChoice.Use(it.id, it.label, it.profile, it.what, it.recording, it.device, it.since) }),
+                        CompletableDeferred(), title, verb = "record")
+                    withContext(Dispatchers.Main) { streamAsk = q }
+                    replace = (try { q.answer.await() } finally { withContext(Dispatchers.Main) { if (streamAsk === q) streamAsk = null } }) ?: return false
+                }
+                when (val r = withContext(Dispatchers.IO) { api.streamStart(l, sid, "$device · recording", "Recording: $title", replace) }) {
+                    OrbitApi.StreamStart.Ok -> break
+                    OrbitApi.StreamStart.Recording -> return false
+                    is OrbitApi.StreamStart.Changed -> { if (++tries >= 3) return false; st = r.now }
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: OrbitError) {
+            if (e.code == 401) { scope.launch(Dispatchers.IO) { forget(signedOutByServer = true) }; return true }
+            Diag.log("Orbit: stream count refused the recording (${e.code}); recording anyway"); return true
+        } catch (e: Exception) {
+            Diag.log("Orbit: stream count not reachable (${e.javaClass.simpleName}); recording anyway"); return true
+        }
+        withContext(Dispatchers.Main) {
+            recBeats.remove(id)?.cancel()
+            recBeats[id] = scope.launch(Dispatchers.IO) {
+                while (isActive) {
+                    delay(10_000)
+                    val why = try { api.streamHeartbeat(l, sid) } catch (e: Exception) { null }
+                    if (why != null) {
+                        // another device took this slot: the recording goes on (stopping it would lose it)
+                        withContext(Dispatchers.Main) { app.toast("Another device took the stream of the recording \"$title\"; it goes on, but the provider may cut it") }
+                        break
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    /** Recording [id] ended: its slot is given back. */
+    fun releaseRecording(id: String) {
+        val b = recBeats.remove(id) ?: return
+        b.cancel()
+        val l = link ?: return
+        val sid = recSid(id)
+        scope.launch(Dispatchers.IO) { runCatching { api.streamStop(l, sid) } }
     }
 
     /** Nothing plays any more: the slot is given back. */

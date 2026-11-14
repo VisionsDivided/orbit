@@ -27,10 +27,12 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 
 /** Native child surface mpv draws into; mpv is attached once it has a window id and detached before it goes. */
-private class VideoCanvas(val onReady: (Long) -> Unit, val onGone: () -> Unit, val onMouse: (MouseEvent) -> Unit) : Canvas() {
+private class VideoCanvas(val onReady: (Long) -> Unit, val onGone: () -> Unit, val onMouse: (MouseEvent) -> Unit, val onSize: (Int, Int) -> Unit) : Canvas() {
     init {
         background = java.awt.Color.BLACK; isFocusable = false
         addMouseListener(object : MouseAdapter() { override fun mouseClicked(e: MouseEvent) = onMouse(e) })
+        // the overlay is laid out in the surface's aspect (and clicks on it are mapped back): it needs the size
+        addComponentListener(object : java.awt.event.ComponentAdapter() { override fun componentResized(e: java.awt.event.ComponentEvent) = onSize(width, height) })
     }
     override fun addNotify() { super.addNotify(); onReady(MpvVideo.windowId(this)) }
     override fun removeNotify() { onGone(); super.removeNotify() }
@@ -75,7 +77,8 @@ fun VideoHost(app: AppState) = BoxWithConstraints(Modifier.fillMaxSize()) {
         return@BoxWithConstraints
     }
     SwingPanel(background = Color.Black, modifier = mod, factory = {
-        VideoCanvas(onReady = { wid -> app.player.attach(lib, wid) }, onGone = { app.player.detach() }, onMouse = { e -> app.runOnUi { app.player.mouse(e) } })
+        VideoCanvas(onReady = { wid -> app.player.attach(lib, wid) }, onGone = { app.player.detach() }, onMouse = { e -> app.runOnUi { app.player.mouse(e) } },
+            onSize = { w, h -> app.runOnUi { app.player.surface(w, h) } })
     })
 }
 
@@ -101,7 +104,16 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
     private var digits = ""
     private var digitJob: Job? = null
     val aspects = listOf("Auto" to "-1", "16:9" to "16:9", "4:3" to "4:3", "2.35:1" to "2.35:1", "Fill" to "-1")
-    val items = listOf("Audio", "Subtitles", "Video quality", "Audio delay", "Aspect", "Sleep timer", "Record", "Stream info")
+    /** The video surface's size in pixels (the overlay's aspect; mouse clicks on it). */
+    private var vw = 0
+    private var vh = 0
+    /** "This channel keeps buffering. Try HLS?" is shown (StallHint; once per channel while it plays). */
+    private var hlsHint = false
+    private var stalls = 0
+    private var liveSince = 0L
+    private val hinted = HashSet<String>()
+
+    fun surface(w: Int, h: Int) { vw = w; vh = h; mpv?.let { redraw(it) } }
 
     fun attach(lib: MpvLib, wid: Long) {
         try {
@@ -140,8 +152,26 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
     }
 
     /** Plays [r] in [m]; an address that may not be played ([PlayUrl]) is refused with a notice instead. */
-    private fun start(m: Mpv, r: PlayReq): Boolean = try { m.play(r.url, r.startSec, trustedLocal = r.recording != null); true }
+    private fun start(m: Mpv, r: PlayReq): Boolean = try { m.play(playUrl(r), r.startSec, trustedLocal = r.recording != null); true }
         catch (e: IllegalArgumentException) { Diag.log("${r.title}: address refused"); app.toast(e.message ?: "Not played"); false }
+
+    /** What mpv opens for [r]: live Xtream channels in their own format (TS / HLS, synced per profile); the rest as is. */
+    private fun playUrl(r: PlayReq, alt: Channel? = null): String {
+        val ch = r.live
+        if (ch == null || r.archive != null || r.recording != null) return r.url
+        return if (alt != null) app.liveUrl(alt) else app.liveUrl(ch, r.url)
+    }
+
+    /** The channel's stream format changed: the same channel again in the new format (from its source, not an alternate). */
+    fun reloadLive() {
+        val r = req ?: return
+        val m = mpv ?: return
+        if (r.live == null || r.archive != null) return
+        hlsHint = false
+        startRecovery(r)
+        try { m.play(playUrl(r)) } catch (e: IllegalArgumentException) { app.toast(e.message ?: "Not played") }
+        if (app.full) showBar()
+    }
 
     fun close() { saveResume(); stopRecovery(); sleepMin = 0; sleepJob?.cancel(); menu = false; info = false; upNextAt = 0; req = null; loadedUrl = null; mpv?.cmd("stop") }
 
@@ -162,6 +192,7 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
         val ch = r.live
         if (ch != null && r.archive == null && r.recording == null) recovery = LiveRecovery(ch.key)
         stall.reset(System.currentTimeMillis())
+        stalls = 0; liveSince = System.currentTimeMillis(); hlsHint = false
     }
 
     private fun stopRecovery() { recoverJob?.cancel(); noticeJob?.cancel(); recovery = null; altPlaying = null; setNotice("") }
@@ -183,9 +214,9 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
         Diag.log("${ch.name}: live $why, ${step.javaClass.simpleName}")
         setNotice(LiveRecovery.notice(step, ch.name))
         val (url, wait) = when (step) {
-            is LiveRecovery.Step.Retry -> (rec.alt?.url ?: r.url) to step.delayMs
-            is LiveRecovery.Step.Alt -> step.alt.url to step.delayMs
-            is LiveRecovery.Step.Rest -> r.url to step.delayMs
+            is LiveRecovery.Step.Retry -> playUrl(r, rec.alt) to step.delayMs
+            is LiveRecovery.Step.Alt -> playUrl(r, step.alt) to step.delayMs
+            is LiveRecovery.Step.Rest -> playUrl(r) to step.delayMs
             LiveRecovery.Step.NeedAlts -> return
         }
         recoverJob = scope.launch {
@@ -269,7 +300,7 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
         if (mute != muted) { muted = mute; m.set("mute", if (mute) "yes" else "no") }
         if (r.resumeKey != null && t - lastSave > 10_000 && app.full) saveResume()
         if (recovery != null && recoverJob?.isActive != true) when (stall.tick(m.num("time-pos"), m.get("pause") == "yes", t)) {
-            StallWatch.Event.STALL -> liveFailed("stalled")
+            StallWatch.Event.STALL -> { noteStall(r); liveFailed("stalled") }
             StallWatch.Event.HEALTHY -> liveHealthy()
             StallWatch.Event.NONE -> {}
         }
@@ -282,6 +313,21 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
         }
         if ((barShown || menu) && t - lastInput > 5000) { barShown = false; menu = false }
         redraw(m)
+    }
+
+    /**
+     * A live TS channel that stalls again and again in its first two minutes may play better as HLS (StallHint): the
+     * player offers it once per channel; F3 (yellow) says yes. Never a switch on its own.
+     */
+    private fun noteStall(r: PlayReq) {
+        val ch = r.live ?: return
+        stalls++
+        val t = System.currentTimeMillis()
+        if (!hlsHint && ch.key !in hinted && stalls >= StallHint.MIN_STALLS && t - liveSince <= StallHint.WINDOW_MS &&
+            LiveFormat.canHls(ch.url) && app.channelFormat(ch.key) != ChannelFormats.HLS) {
+            hlsHint = true; hinted += ch.key
+            if (app.full) showBar()
+        }
     }
 
     fun showBar() { barShown = true; lastInput = System.currentTimeMillis(); mpv?.let { redraw(it) } }
@@ -306,66 +352,133 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
         val cur = t.firstOrNull { it.selected }?.id ?: "no"
         val nx = opts[(opts.indexOf(cur) + 1) % opts.size]
         m.set(if (type == "sub") "sid" else "aid", nx)
+        osd((if (type == "sub") "Subtitles: " else "Audio: ") + value(if (type == "sub") "subs" else "audio"))
         // remembered for the series (applied to its later episodes)
         val sk = req?.takeIf { it.isEpisode }?.series?.key ?: return
         val lang = t.firstOrNull { it.id == nx }?.lang
         if (type == "sub") app.watch.rememberSubs(sk, nx != "no", lang) else app.watch.rememberAudio(sk, lang)
     }
 
-    private fun change(i: Int, d: Int) {
+    // ---- quick actions (DESIGN-SPEC-5 §10): Guide, Favourite, Record, Audio, Subtitles, Start over, Format, Channels,
+    //      Sleep timer, Info; then Video quality, Audio delay and Aspect (desktop extras) ----
+
+    /** The quick actions for what plays now. */
+    fun actions(): List<PlayerOsd.Qa> {
+        val r = req ?: return emptyList()
+        val ch = r.live
+        val live = ch != null && r.archive == null && r.recording == null
+        val l = ArrayList<PlayerOsd.Qa>()
+        if (ch != null && r.recording == null) l += PlayerOsd.Qa("guide", "Guide", "≡")
+        if (live) {
+            l += PlayerOsd.Qa("fav", "Favourite", "♥", if (app.inList(ch!!.key)) PlayerOsd.RED else null, on = app.inList(ch.key))
+            l += PlayerOsd.Qa("rec", if (recordingNow() != null) "Stop rec" else "Record", "●", PlayerOsd.REC, on = recordingNow() != null)
+        } else if (r.vod != null || r.series != null) {
+            val k = (r.series ?: r.vod)!!.key
+            l += PlayerOsd.Qa("fav", "My list", "♥", if (app.inList(k)) PlayerOsd.RED else null, on = app.inList(k))
+        }
+        l += PlayerOsd.Qa("audio", "Audio", "♪")
+        l += PlayerOsd.Qa("subs", "Subtitles", "CC")
+        when {
+            live && ch!!.catchup != null && ch.catchupDays > 0 -> l += PlayerOsd.Qa("startover", "Start over", "↺")
+            r.archive != null -> l += PlayerOsd.Qa("tolive", "Back to live", "»")
+            !live && ch == null -> l += PlayerOsd.Qa("startover", "From start", "↺")
+        }
+        if (r.isEpisode && r.nextEpisode() != null) l += PlayerOsd.Qa("next", "Next episode", "»")
+        if (live) {
+            val f = app.channelFormat(ch!!.key)
+            val eff = if (f == io.github.kmmarin.tvbro.data.ChannelFormats.HLS) "HLS" else "TS"
+            l += PlayerOsd.Qa("format", "Format · $eff", eff, if (f != null) PlayerOsd.YELLOW else null, on = f != null)
+            l += PlayerOsd.Qa("channels", "Channels", "#")
+        }
+        l += PlayerOsd.Qa("sleep", if (sleepMin > 0) "Sleep · $sleepMin" else "Sleep timer", "z", on = sleepMin > 0)
+        l += PlayerOsd.Qa("info", "Info", "i", on = info)
+        l += PlayerOsd.Qa("quality", "Quality", "HD")
+        l += PlayerOsd.Qa("delay", "Audio delay", "±", on = app.settings.audioDelayMs != 0)
+        l += PlayerOsd.Qa("aspect", "Aspect · ${aspects[aspect].first}", "AR", on = aspect != 0)
+        return l
+    }
+
+    /** Runs quick action [id]; [d] +1 / −1 steps a value (Enter / Down: +1, Up: −1). */
+    private fun act(id: String, d: Int) {
         val m = mpv ?: return
-        when (items[i]) {
-            "Audio" -> cycleTrack("audio", false)
-            "Subtitles" -> cycleTrack("sub", true)
-            "Video quality" -> {
+        val r = req ?: return
+        val ch = r.live
+        when (id) {
+            "guide" -> { menu = false; saveResume(); app.leavePlayer() }
+            "fav" -> ch?.takeIf { r.archive == null && r.recording == null }?.let { app.toggleList(it.key) } ?: (r.series ?: r.vod)?.let { app.toggleList(it.key) }
+            "rec" -> toggleRec()
+            "audio" -> cycleTrack("audio", false)
+            "subs" -> cycleTrack("sub", true)
+            "startover" -> if (ch != null && r.archive == null) {
+                val cur = app.epg.nowNext(ch, System.currentTimeMillis() / 1000).first
+                if (cur != null) { menu = false; app.playArchive(ch, cur) } else osd("No guide data: nothing to start over")
+            } else m.cmd("seek", "0", "absolute")
+            "tolive" -> ch?.let { menu = false; app.playChannel(it) }
+            "next" -> playNext()
+            "format" -> ch?.let { app.cycleFormat(it) }
+            "channels" -> { menu = false; channelPicker() }
+            "sleep" -> {
+                val steps = listOf(0, 15, 30, 60, 90, 120)
+                sleepMin = steps[(steps.indexOf(sleepMin) + d + steps.size) % steps.size]
+                sleepJob?.cancel()
+                if (sleepMin > 0) sleepJob = scope.launch { delay(sleepMin * 60_000L); app.stopPlayback() }
+                osd(if (sleepMin == 0) "Sleep timer off" else "Sleep in $sleepMin min")
+            }
+            "info" -> info = !info
+            "quality" -> {
                 // HLS / DASH variants are separate video tracks in mpv; "auto" lets mpv pick the best one
                 val v = m.tracks().filter { it.type == "video" }
                 if (v.size < 2) return osd("Only one video quality")
                 val opts = listOf("auto") + v.sortedByDescending { it.h * 10_000_000L + it.bitrate }.map { it.id }
                 val cur = m.get("vid")?.takeIf { it in opts } ?: "auto"
                 m.set("vid", opts[(opts.indexOf(cur) + d + opts.size) % opts.size])
+                osd("Quality: " + value("quality"))
             }
-            "Audio delay" -> {
+            "delay" -> {
                 val ms = (app.settings.audioDelayMs + d * 50).coerceIn(-5000, 5000)
                 app.update { it.copy(audioDelayMs = ms) }
                 m.set("audio-delay", "%.3f".format(java.util.Locale.US, ms / 1000.0))
+                osd("Audio delay $ms ms")
             }
-            "Aspect" -> {
+            "aspect" -> {
                 aspect = (aspect + d + aspects.size) % aspects.size
                 m.set("video-aspect-override", aspects[aspect].second)
                 m.set("panscan", if (aspects[aspect].first == "Fill") "1.0" else "0.0")
             }
-            "Sleep timer" -> {
-                val steps = listOf(0, 15, 30, 60, 90, 120)
-                sleepMin = steps[(steps.indexOf(sleepMin) + d + steps.size) % steps.size]
-                sleepJob?.cancel()
-                if (sleepMin > 0) sleepJob = scope.launch { delay(sleepMin * 60_000L); app.stopPlayback() }
-            }
-            "Record" -> toggleRec()
-            "Stream info" -> info = !info
         }
+        redraw(m)
     }
 
-    private fun value(i: Int): String {
+    /** The quick action Channels: the current group's channels in a pick list (its own window, above the video). */
+    private fun channelPicker() {
+        val cur = req?.live
+        val l = app.filtered.ifEmpty { app.shown }
+        val now = System.currentTimeMillis() / 1000
+        app.menu = MenuState("Channels · ${app.groupLabel(app.group)}", l.take(200).map { c ->
+            val p = app.epg.nowNext(c, now).first
+            ((if (c.key == cur?.key) "▶ " else "") + (if (c.number > 0) "${c.number}  " else "") + c.name + (p?.let { "  ·  ${it.title}" } ?: "")) to {
+                if (app.isLocked(c)) app.askPin { app.focusCh = c; app.update { it.copy(lastChannel = c.key) }; app.setPlaying(PlayReq(c.url, c.name, live = c)) }
+                else { app.focusCh = c; app.update { it.copy(lastChannel = c.key) }; app.setPlaying(PlayReq(c.url, c.name, live = c)) }
+            }
+        })
+    }
+
+    private fun value(id: String): String {
         val m = mpv
         fun label(type: String, none: String) = m?.tracks()?.firstOrNull { it.type == type && it.selected }
             ?.let { listOfNotNull(it.lang?.uppercase(), it.title.takeIf { t -> t.isNotBlank() }).joinToString(" ") }?.ifBlank { "#" } ?: none
-        return when (items[i]) {
-            "Audio" -> label("audio", "—")
-            "Subtitles" -> label("sub", "Off")
-            "Video quality" -> m?.tracks()?.filter { it.type == "video" }?.let { v ->
+        return when (id) {
+            "audio" -> label("audio", "—")
+            "subs" -> label("sub", "Off")
+            "quality" -> m?.tracks()?.filter { it.type == "video" }?.let { v ->
                 val s = v.firstOrNull { it.selected }
                 if (v.size < 2) "Single" else (if (m.get("vid") == "auto") "Auto · " else "") + (s?.let { if (it.h > 0) "${it.h}p" else "#${it.id}" } ?: "Auto") + (s?.bitrate?.takeIf { it > 0 }?.let { " ${it / 1000} kb/s" } ?: "")
             } ?: "Auto"
-            "Audio delay" -> "${app.settings.audioDelayMs} ms"
-            "Aspect" -> aspects[aspect].first
-            "Sleep timer" -> if (sleepMin == 0) "Off" else "$sleepMin min"
-            "Record" -> if (recordingNow() != null) "On" else "Off"
-            else -> if (info) "On" else "Off"
+            else -> ""
         }
     }
 
-    private fun infoText(m: Mpv): String {
+    private fun techText(m: Mpv): List<String> {
         fun g(k: String) = m.get(k)
         val w = g("video-params/w"); val h = g("video-params/h")
         val fps = (g("estimated-vf-fps") ?: g("container-fps"))?.toDoubleOrNull()
@@ -374,72 +487,151 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
             "Video: ${if (w != null) "${w}×$h" else "—"}${fps?.let { " @ %.2f fps".format(it) } ?: ""}  ${g("video-codec") ?: ""}",
             "Audio: ${g("audio-codec-name") ?: "—"}  ${g("audio-params/channel-count") ?: ""} ch  ${g("audio-params/samplerate") ?: ""} Hz",
             "Bitrate: video ${vbr?.let { "%.1f Mb/s".format(it / 1e6) } ?: "—"}, audio ${abr?.let { "${(it / 1000).toInt()} kb/s" } ?: "—"}",
-            "Decoder: ${g("hwdec-current")?.takeIf { it.isNotBlank() && it != "no" } ?: "software"}   Cache: ${g("demuxer-cache-duration")?.toDoubleOrNull()?.toInt() ?: 0} s",
-        ).joinToString("\\N")
+            "Decoder: ${g("hwdec-current")?.takeIf { it.isNotBlank() && it != "no" } ?: "software"}   Cache: ${g("demuxer-cache-duration")?.toDoubleOrNull()?.toInt() ?: 0} s" +
+                (req?.live?.takeIf { req?.archive == null }?.let { "   Stream: ${app.formatLabel(it)}" } ?: ""),
+        )
     }
 
-    private fun bar(len: Int, f: Float): String { val n = (f.coerceIn(0f, 1f) * len).toInt(); return "{\\1c&H33CCFF&}" + "█".repeat(n) + "{\\1c&H555555&}" + "█".repeat(len - n) + "{\\1c&HFFFFFF&}" }
+    /** ASS width of the OSD (720 × the video surface's aspect). */
+    private val aw: Double get() = if (vw > 0 && vh > 0) PlayerOsd.H * vw / vh else 1280.0
 
-    private fun barText(m: Mpv): String {
-        val r = req ?: return ""
+    /** The colour keys in the player (§9): Favourite, Record, Format: TS / HLS (live), Options. */
+    private fun legendKeys(): List<PlayerOsd.Key> {
+        val r = req ?: return emptyList()
+        val live = r.live != null && r.archive == null && r.recording == null
+        return listOfNotNull(PlayerOsd.Key(PlayerOsd.RED, if (live) "Favourite" else "My list"),
+            if (live) PlayerOsd.Key(PlayerOsd.GREEN, if (recordingNow() != null) "Stop recording" else "Record") else null,
+            if (live) PlayerOsd.Key(PlayerOsd.YELLOW, if (hlsHint) "Try HLS" else "Format: TS / HLS") else null,
+            PlayerOsd.Key(PlayerOsd.BLUE, "Options"))
+    }
+
+    /** The overlay: scrims, channel / title top left, clock top right, the info block, the quick actions, the legend. */
+    private fun barEvents(m: Mpv): List<String> {
+        val r = req ?: return emptyList()
+        val w = aw
+        val side = PlayerOsd.SIDE
         val nowS = System.currentTimeMillis() / 1000
-        val lines = ArrayList<String>()
-        val rec = if (recordingNow() != null) "   {\\1c&H5F5AFF&}● REC{\\1c&HFFFFFF&}" else ""
-        lines += "{\\fs30\\b1}${esc(r.title)}{\\b0}$rec{\\fs22}     ${TimeFmt.time(nowS)}"
+        val out = ArrayList<String>(PlayerOsd.scrims(w))
         val ch = r.live
-        if (ch != null && r.archive == null) {
+        // top left: the channel (logo tile, name, number and group) or the title's kind; top right: the clock
+        if (ch != null) {
+            out += PlayerOsd.box(side, 40.0, 48.0, 48.0, 11.0, "&H8A3F6B&")
+            out += PlayerOsd.text(side + 24, 64.0, ch.name.split(' ', '-').filter { it.isNotBlank() }.take(2).joinToString("") { it.take(1) }.uppercase(), 17.0, bold = true, an = 5)
+            out += PlayerOsd.text(side + 62, 47.0, ch.name, 19.0, bold = true)
+            out += PlayerOsd.text(side + 62, 71.0, listOfNotNull(if (ch.number > 0) "Channel ${ch.number}" else null, app.groupLabel(ch.group).takeIf { it.isNotBlank() }).joinToString(" · "), 15.0, PlayerOsd.MUTED, .64)
+        } else out += PlayerOsd.text(side, 47.0, if (r.isEpisode) "Episode" else if (r.recording != null) "Recording" else "Film", 15.0, PlayerOsd.MUTED, .64, bold = true)
+        out += PlayerOsd.text(w - side, 41.0, io.github.kmmarin.tvbro.data.TimeFmt.time(nowS), 27.0, an = 9, light = true)
+        if (recordingNow() != null) out += PlayerOsd.text(w - side, 80.0, "● REC", 15.0, PlayerOsd.REC, bold = true, an = 9)
+        // the info block (§10) at y ≈ 408
+        val y0 = 408.0
+        if (ch != null && r.archive == null && r.recording == null) {
             val (cur, next) = app.epg.nowNext(ch, nowS)
-            if (cur != null) {
-                lines += "${TimeFmt.time(cur.start)} – ${TimeFmt.time(cur.stop)}   ${esc(cur.title)}" + (EpisodeNum.line(cur.ep, cur.sub)?.let { "  ·  " + esc(it) } ?: "") + "   ${ProgTime.minutesLeft(cur.stop, nowS)} min left"
-                lines += bar(60, ProgTime.progress(cur.start, cur.stop, nowS))
-            } else lines += "No guide data"
-            altPlaying?.let { lines += "{\\1c&H33CCFF&}Alternate source: ${esc(it.name)}{\\1c&HFFFFFF&}" }
-            next?.let { lines += "{\\1c&HAAAAAA&}Next ${TimeFmt.time(it.start)}  ${esc(it.title)}{\\1c&HFFFFFF&}" }
-            lines += "{\\fs18\\1c&HAAAAAA&}↑↓ channel · Enter quick settings · I info · R record · Esc back to the guide"
+            val (pill, pw) = PlayerOsd.livePill(side, y0)
+            out += pill
+            out += PlayerOsd.text(side + pw + 11, y0 + 10, cur?.let { io.github.kmmarin.tvbro.data.TimeFmt.time(it.start) + " – " + io.github.kmmarin.tvbro.data.TimeFmt.time(it.stop) +
+                (io.github.kmmarin.tvbro.data.EpisodeNum.line(it.ep, it.sub)?.let { e -> " · $e" } ?: "") } ?: "No guide data", 16.0, PlayerOsd.MUTED, .64, an = 4)
+            out += PlayerOsd.text(side, y0 + 30, cur?.title ?: ch.name, 48.0, bold = true)
+            if (cur != null) out += PlayerOsd.scrubber(y0 + 104, w, io.github.kmmarin.tvbro.data.ProgTime.progress(cur.start, cur.stop, nowS).toDouble(),
+                io.github.kmmarin.tvbro.data.TimeFmt.time(cur.start), io.github.kmmarin.tvbro.data.TimeFmt.time(cur.stop))
+            val nextLine = listOfNotNull(next?.let { "Next · ${io.github.kmmarin.tvbro.data.TimeFmt.time(it.start)} ${it.title}" }, altPlaying?.let { "Playing from another source: ${it.name}" }).joinToString("   ·   ")
+            if (nextLine.isNotEmpty()) out += PlayerOsd.text(side, y0 + 122, nextLine, 15.0, PlayerOsd.MUTED, .64)
+            if (hlsHint) out += PlayerOsd.hintChip(w, y0 + 2, "This channel keeps buffering. Try HLS?")
         } else {
             val p = pos() ?: 0; val d = dur()
-            lines += "${Watch.clock(p)} / ${if (d > 0) Watch.clock(d) else "--:--"}" + (if (m.get("pause") == "yes") "   ❚❚ paused" else "")
-            if (d > 0) lines += bar(60, p.toFloat() / d)
-            lines += "{\\fs18\\1c&HAAAAAA&}←→ 10 s · PgUp PgDn 1 min" + (if (r.isEpisode) " · N next / B previous episode" else "") + " · Space pause · Esc back"
+            val sub = when {
+                r.archive != null -> "Catch-up · ${io.github.kmmarin.tvbro.data.TimeFmt.dayTime(r.archive.start * 1000, "EEE")}"
+                r.isEpisode -> r.series!!.name + " · " + Watch.code(r.episode!!)
+                else -> null
+            }
+            if (sub != null) out += PlayerOsd.text(side, y0 + 10, sub, 16.0, PlayerOsd.MUTED, .64, an = 4)
+            val title = if (r.isEpisode) VodFmt.cleanTitle(r.series!!.name, r.episode!!.title) else r.archive?.title ?: r.title
+            out += PlayerOsd.text(side, y0 + 30, title, 48.0, bold = true)
+            out += PlayerOsd.scrubber(y0 + 104, w, if (d > 0) p.toDouble() / d else 0.0, Watch.clock(p), if (d > 0) "-" + Watch.clock((d - p).coerceAtLeast(0)) else "--:--")
+            out += PlayerOsd.text(side, y0 + 122, if (m.get("pause") == "yes") "❚❚  Paused" else listOfNotNull(if (d > 0) "Ends ${io.github.kmmarin.tvbro.data.TimeFmt.time(nowS + (d - p) / 1000)}" else null,
+                r.nextEpisode()?.let { "Next · ${Watch.code(it)}" }).joinToString("   ·   "), 15.0, PlayerOsd.MUTED, .64)
         }
-        return "{\\an1\\fs22\\bord2\\shad0\\1c&HFFFFFF&\\3c&H000000&\\pos(32,690)}" + lines.joinToString("\\N")
+        if (menu) out += PlayerOsd.quickActions(actions(), sel)
+        else out += PlayerOsd.text(side, PlayerOsd.QA_Y + 20, "Enter quick actions · ↑↓ " + (if (ch != null && r.archive == null) "channel" else "show the bar") + " · ←→ " + (if (ch != null && r.archive == null) "seek" else "10 s") + " · right click for the actions", 14.0, PlayerOsd.MUTED, .5)
+        out += PlayerOsd.legend(legendKeys(), if (menu) listOf("Enter" to "Select", "Esc" to "Close") else listOf("Enter" to "Actions", "Esc" to "Back"))
+        return out
     }
 
-    private fun upNextText(): String? {
+    private fun infoEvents(m: Mpv): List<String> {
+        val r = req ?: return emptyList()
+        val nowS = System.currentTimeMillis() / 1000
+        val lines = ArrayList<String>()
+        val ch = r.live
+        val prog = if (ch != null && r.archive == null) app.epg.nowNext(ch, nowS).first else r.archive
+        val desc = prog?.desc ?: r.vod?.let { app.detailCache[it.key]?.plot } ?: r.episode?.plot
+        val side = PlayerOsd.SIDE
+        val w = 560.0
+        val descLines = desc?.let { wrap(it, 70).take(4) }.orEmpty()
+        val tech = techText(m)
+        val h = 50.0 + descLines.size * 20 + 12 + tech.size * 19 + 14
+        lines += PlayerOsd.panel(side, 104.0, w, h)
+        lines += PlayerOsd.text(side + 18, 118.0, prog?.title ?: r.title, 19.0, bold = true)
+        var y = 146.0
+        for (l in descLines) { lines += PlayerOsd.text(side + 18, y, l, 15.0, PlayerOsd.MUTED, .8); y += 20 }
+        y += 12
+        for (l in tech) { lines += PlayerOsd.text(side + 18, y, l, 14.0, PlayerOsd.MUTED, .64); y += 19 }
+        return lines
+    }
+
+    private fun wrap(s: String, n: Int): List<String> {
+        val out = ArrayList<String>(); val b = StringBuilder()
+        for (word in s.split(Regex("\\s+"))) { if (b.length + word.length + 1 > n && b.isNotEmpty()) { out += b.toString(); b.clear() }; if (b.isNotEmpty()) b.append(' '); b.append(word) }
+        if (b.isNotEmpty()) out += b.toString()
+        return out
+    }
+
+    private fun upNextEvents(): List<String>? {
         val r = req ?: return null
         if (upNextAt == 0L) return null
         val n = r.nextEpisode() ?: return null
         val left = (Watch.UP_NEXT_COUNTDOWN_S - (System.currentTimeMillis() - upNextAt) / 1000).coerceAtLeast(0)
-        return "{\\an3\\fs24\\bord2\\shad0\\1c&HFFFFFF&\\3c&H000000&\\pos(1248,560)}{\\1c&H33CCFF&}Up next{\\1c&HFFFFFF&}\\N{\\fs30\\b1}${Watch.code(n)} · ${esc(VodFmt.cleanTitle(r.series!!.name, n.title))}{\\b0}\\N" +
-            "Playing in $left s{\\fs20\\1c&HAAAAAA&}\\NEnter play now · Esc cancel"
+        val w = aw; val pw = 380.0; val x = w - PlayerOsd.SIDE - pw; val y = 300.0
+        return listOf(PlayerOsd.panel(x, y, pw, 112.0),
+            PlayerOsd.text(x + 18, y + 14, "UP NEXT · PLAYING IN $left S", 12.0, PlayerOsd.ACCENT, bold = true),
+            PlayerOsd.text(x + 18, y + 36, "${Watch.code(n)} · ${VodFmt.cleanTitle(r.series!!.name, n.title)}", 20.0, bold = true),
+            PlayerOsd.text(x + 18, y + 72, "Enter play now · Esc cancel", 14.0, PlayerOsd.MUTED, .64))
     }
 
     fun redraw(m0: Mpv? = mpv) {
         val m = m0 ?: return
         // the reconnect notice: a small label in the top right corner, also in the TV screen's preview
-        m.overlay(5, notice.takeIf { it.isNotEmpty() }?.let { "{\\an9\\fs${if (app.full) 22 else 40}\\bord2\\shad0\\1c&HFFFFFF&\\3c&H000000&\\pos(1260,16)}" + esc(it) })
+        m.overlay(5, notice.takeIf { it.isNotEmpty() }?.let { "{\\an9\\fs${if (app.full) 18 else 40}\\bord2\\shad0\\1c&HFFFFFF&\\3c&H000000&\\pos(${(aw - 16).toInt()},${if (app.full) 96 else 16})}" + PlayerOsd.esc(it) })
         if (!app.full) { m.overlay(1, null); m.overlay(2, null); m.overlay(3, null); m.overlay(4, null); return }
-        val style = "{\\an7\\fs26\\bord2\\shad0\\1c&HFFFFFF&\\3c&H000000&\\pos(24,24)}"
-        m.overlay(1, if (info) style + "{\\b1}${esc(req?.title ?: "")}{\\b0}\\N" + infoText(m) else null)
-        m.overlay(2, if (!menu) null else {
-            val rows = items.indices.joinToString("\\N") { i ->
-                val c = if (i == sel) "{\\1c&H33CCFF&}▶ " else "{\\1c&HFFFFFF&}   "
-                c + items[i] + ":  " + esc(value(i))
-            }
-            "{\\an9\\fs26\\bord2\\shad0\\3c&H000000&\\pos(1256,24)}{\\b1}Quick settings{\\b0}\\N$rows\\N{\\fs20\\1c&HAAAAAA&}↑↓ choose  ←→ change  Esc close"
-        })
-        m.overlay(3, if (barShown || menu) barText(m) else null)
-        m.overlay(4, upNextText())
+        val bar = barShown || menu
+        m.overlay(1, if (info) infoEvents(m).joinToString("\n") else null)
+        m.overlay(2, null)
+        m.overlay(3, if (bar) barEvents(m).joinToString("\n") else null)
+        m.overlay(4, upNextEvents()?.joinToString("\n"))
     }
-
-    private fun esc(s: String) = s.replace("\\", "/").replace("{", "(").replace("}", ")").replace("\n", " ")
 
     fun mouse(e: MouseEvent) {
         if (!app.full) { if (e.button == MouseEvent.BUTTON1) app.playing?.live?.let { app.playChannel(it) }; return }
+        lastInput = System.currentTimeMillis()
+        if (e.button == MouseEvent.BUTTON1 && menu && vw > 0 && vh > 0) {
+            // a click on a quick action runs it (the OSD is 720 high, as wide as the surface's aspect)
+            val i = PlayerOsd.qaAt(e.x * aw / vw, e.y * PlayerOsd.H / vh, actions().size)
+            if (i >= 0) { sel = i; act(actions()[i].id, 1); showBar(); return }
+        }
         when {
             e.button == MouseEvent.BUTTON3 -> { menu = !menu; sel = 0; showBar() }
             e.clickCount >= 2 -> app.fullscreen = !app.fullscreen
             else -> showBar()
+        }
+    }
+
+    /** The colour keys F1 to F4 (§9 player row): Favourite, Record, Format (or yes to "Try HLS?"), Options. */
+    private fun colorKey(k: Int) {
+        val r = req ?: return
+        val ch = r.live?.takeIf { r.archive == null && r.recording == null }
+        when (k) {
+            1 -> act("fav", 1)
+            2 -> if (ch != null) toggleRec()
+            3 -> if (ch != null) { if (hlsHint) { hlsHint = false; app.setChannelFormat(ch, io.github.kmmarin.tvbro.data.ChannelFormats.HLS) } else app.cycleFormat(ch) }
+            4 -> if (ch != null) app.channelMenu(ch) else (r.series ?: r.vod)?.let { app.vodMenu(it) } ?: run { menu = !menu; sel = 0 }
         }
     }
 
@@ -459,15 +651,17 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
             digitJob?.cancel(); digitJob = scope.launch { delay(1500); val n = digits.toIntOrNull(); digits = ""; if (n != null && !app.zapNumber(n)) osd("No channel $n") }
             return true
         }
+        val acts = if (menu) actions() else emptyList()
+        if (menu) sel = sel.coerceIn(0, (acts.size - 1).coerceAtLeast(0))
         when (e.keyCode) {
             KeyEvent.VK_ESCAPE, KeyEvent.VK_BACK_SPACE -> if (menu) menu = false else if (info) info = false else { saveResume(); app.leavePlayer() }
-            KeyEvent.VK_ENTER -> if (menu) change(sel, 1) else { menu = true; sel = 0 }
-            KeyEvent.VK_UP -> if (menu) sel = (sel + items.size - 1) % items.size else if (live) app.zap(-1) else showBar()
-            KeyEvent.VK_DOWN -> if (menu) sel = (sel + 1) % items.size else if (live) app.zap(1) else showBar()
+            KeyEvent.VK_ENTER -> if (menu) acts.getOrNull(sel)?.let { act(it.id, 1) } else { menu = true; sel = 0 }
+            KeyEvent.VK_UP -> if (menu) acts.getOrNull(sel)?.let { if (it.id in STEPPED) act(it.id, -1) } else if (live) app.zap(-1) else showBar()
+            KeyEvent.VK_DOWN -> if (menu) acts.getOrNull(sel)?.let { if (it.id in STEPPED) act(it.id, 1) } else if (live) app.zap(1) else { menu = true; sel = 0 }
             KeyEvent.VK_PAGE_UP -> if (live) app.zap(-1) else m?.cmd("seek", "60")
             KeyEvent.VK_PAGE_DOWN -> if (live) app.zap(1) else m?.cmd("seek", "-60")
-            KeyEvent.VK_LEFT -> if (menu) change(sel, -1) else m?.cmd("seek", "-10")
-            KeyEvent.VK_RIGHT -> if (menu) change(sel, 1) else m?.cmd("seek", "10")
+            KeyEvent.VK_LEFT -> if (menu) sel = (sel - 1).coerceAtLeast(0) else m?.cmd("seek", "-10")
+            KeyEvent.VK_RIGHT -> if (menu) sel = (sel + 1).coerceAtMost(acts.size - 1) else m?.cmd("seek", "10")
             KeyEvent.VK_SPACE, KeyEvent.VK_P -> m?.cmd("cycle", "pause")
             KeyEvent.VK_I -> info = !info
             KeyEvent.VK_M, KeyEvent.VK_CONTEXT_MENU -> { menu = !menu; sel = 0 }
@@ -477,13 +671,22 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
             KeyEvent.VK_N -> if (r?.isEpisode == true) { if (r.nextEpisode() != null) playNext() else osd("Last episode") }
             KeyEvent.VK_B -> if (r?.isEpisode == true) playPrev()
             KeyEvent.VK_W -> app.dueReminder?.let { app.reminderDone(it, true) }
-            KeyEvent.VK_Y -> r?.live?.let { app.toggleList(it.key) }
+            KeyEvent.VK_Y -> act("fav", 1)
+            KeyEvent.VK_F1 -> colorKey(1)
+            KeyEvent.VK_F2 -> colorKey(2)
+            KeyEvent.VK_F3 -> colorKey(3)
+            KeyEvent.VK_F4 -> colorKey(4)
             KeyEvent.VK_F, KeyEvent.VK_F11 -> app.fullscreen = !app.fullscreen
-            KeyEvent.VK_OPEN_BRACKET -> change(items.indexOf("Audio delay"), -1)
-            KeyEvent.VK_CLOSE_BRACKET -> change(items.indexOf("Audio delay"), 1)
+            KeyEvent.VK_OPEN_BRACKET -> act("delay", -1)
+            KeyEvent.VK_CLOSE_BRACKET -> act("delay", 1)
             else -> return false
         }
         if (app.full) showBar()
         return true
+    }
+
+    private companion object {
+        /** Quick actions whose value Up / Down step (the others only run on Enter). */
+        val STEPPED = setOf("sleep", "quality", "delay", "aspect")
     }
 }

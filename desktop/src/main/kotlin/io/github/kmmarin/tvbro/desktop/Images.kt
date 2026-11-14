@@ -26,7 +26,14 @@ object Images {
     private val gate = Semaphore(4)
     private val dir = Perms.dir(File(Paths.cache, "img"))
 
+    /** Extra request headers for [url] (the Orbit session for the home server's own images; null for any other host). */
+    @Volatile var auth: (String) -> Map<String, String>? = { null }
+    private val noRedirects by lazy { Net.http.newBuilder().followRedirects(false).followSslRedirects(false).build() }
+
     fun cached(url: String, maxW: Int = 400) = synchronized(mem) { mem[key(url, maxW)] }
+
+    /** Tests (design shots): [img] as the picture of [url] at every size, without any download. */
+    internal fun prime(url: String, img: ImageBitmap) = synchronized(mem) { for (w in listOf(400, 1280)) mem[key(url, w)] = img }
     private fun key(url: String, maxW: Int) = if (maxW == 400) url else "$url@$maxW"
 
     /** [maxW]: wider images are scaled down to this (posters 400; cinematic backdrops larger). */
@@ -38,7 +45,11 @@ object Images {
                 try {
                     val f = File(dir, Cache.hash(url))
                     val bytes = if (f.exists()) f.readBytes() else {
-                        Net.http.newCall(Request.Builder().url(url).build()).execute().use { r ->
+                        val rb = Request.Builder().url(url)
+                        val h = auth(url)
+                        h?.forEach { (k, v) -> rb.header(k, v) }
+                        // with the session cookie: no redirects (OkHttp would carry a hand-set Cookie to any host)
+                        (if (h != null) noRedirects else Net.http).newCall(rb.build()).execute().use { r ->
                             if (!r.isSuccessful) null else r.body?.bytes()?.also { if (it.size < 2_000_000) f.writeBytes(it) }
                         }
                     } ?: return@withPermit null.also { synchronized(failed) { failed += url } }

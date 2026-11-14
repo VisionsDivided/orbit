@@ -12,6 +12,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -90,6 +93,11 @@ fun VodBrowse(app: AppState, all: List<VodItem>, shows: Boolean) {
     }
 }
 
+/**
+ * The title page in direction 5 (DESIGN-SPEC-5, "Title detail"): the backdrop behind it (Home draws it), the eyebrow
+ * with the source badge, the big title, the meta line, two lines of synopsis, the buttons and a muted status line;
+ * a show then has its seasons as tabs and the episodes as landscape cards. Colour keys: My list, trailer, watched, more.
+ */
 @Composable
 fun DetailScreen(app: AppState, v: VodItem) {
     val repo = remember(v) { app.repo(v.sourceId) }
@@ -100,70 +108,95 @@ fun DetailScreen(app: AppState, v: VodItem) {
     }
     val first = remember { FocusRequester() }
     LaunchedEffect(v, d != null) { first.settle() }
+    LaunchedEffect(v, app.inList(v.key)) { app.colorKeys = vodKeys(app, v).let { k -> ColorKeys(k.red, k.green, k.yellow, k.blue, listOf("Enter" to "Play", "Esc" to "Back")) } }
     val data = app.watch.data // recompose on watch changes
-    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        NetImage(v.poster, Modifier.width(220.dp).aspectRatio(2f / 3f).clip(RoundedCornerShape(8.dp)), ContentScale.Crop)
-        Column(Modifier.weight(1f)) {
-            T(v.name, 24, bold = true, maxLines = 2)
-            val dd = d
-            T(listOfNotNull(dd?.year, dd?.genre, (dd?.rating ?: v.rating)?.let { "★ $it" }, VodFmt.runtime(dd?.duration)).joinToString("  ·  "), 14, Theme.dim)
-            val eps = dd?.episodes.orEmpty()
-            Row(Modifier.padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (v.kind != "series" && repo != null) {
-                    val st = app.watch.state(v.key)
-                    Btn(if (st?.inProgress == true) "Resume ${Watch.clock(st.posMs)}" else "Play", requester = first) { app.openMovie(v, repo, d) }
-                    if (st?.inProgress == true || st?.watched == true) Btn("Play from start") { app.openMovie(v, repo, d, fromStart = true) }
-                    Btn(if (st?.watched == true) "Mark unwatched" else "Mark watched") { app.markMovie(v, st?.watched != true) }
+    val info = app.catalog.info[v.key]
+    val media = info != null && CatalogMap.isMedia(info)
+    val dd = d
+    val eps = dd?.episodes.orEmpty()
+    val st = app.watch.state(v.key)
+    Column(Modifier.fillMaxSize().padding(start = 56.dp, end = 56.dp, top = 30.dp)) {
+        Eyebrow(app, v, if (v.kind == "series") "Series" else "Film")
+        Spacer(Modifier.height(8.dp))
+        Text2(v.name, 64, Color.White, FontWeight.ExtraBold, Modifier.widthIn(max = 820.dp), maxLines = 2)
+        Spacer(Modifier.height(8.dp))
+        val seasons = eps.map { it.season }.distinct().sortedWith(compareBy { if (it <= 0) Int.MAX_VALUE else it })
+        MetaLine(app, v, dd, extra = seasons.count { it > 0 }.takeIf { it > 0 }?.let { "$it Season" + if (it > 1) "s" else "" })
+        dd?.plot?.let { Spacer(Modifier.height(10.dp)); Text2(it, 15, Color(0xDDF4F6FF), modifier = Modifier.widthIn(max = 680.dp), maxLines = 2) }
+        Spacer(Modifier.height(18.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            when {
+                media -> OButton("▶  Play", primary = true, requester = first) { app.toast("Plex and Jellyfin titles play on the TV and in the Orbit web app for now") }
+                v.kind != "series" && repo != null -> {
+                    OButton(if (st?.inProgress == true) "▶  Resume ${Watch.clock(st.posMs)}" else "▶  Play", primary = true, requester = first) { app.openMovie(v, repo, d) }
+                    if (st?.inProgress == true || st?.watched == true) OButton("↺  From the start") { app.openMovie(v, repo, d, fromStart = true) }
+                    OButton(if (st?.watched == true) "Mark unwatched" else "✓  Mark watched") { app.markMovie(v, st?.watched != true) }
                 }
-                if (v.kind == "series" && eps.isNotEmpty()) {
+                v.kind == "series" && eps.isNotEmpty() -> {
                     val t = remember(data, eps) { app.resumeTarget(v, eps) }
                     if (t != null) {
-                        Btn(t.second, requester = first) { app.playEpisode(v, eps, t.first) }
-                        if (app.watch.state(WatchStore.epKey(v, t.first))?.inProgress == true) Btn("Play from start") { app.playEpisode(v, eps, t.first, fromStart = true) }
-                    } else Btn("Watched all · play S${Watch.ordered(eps).first().season} E${Watch.ordered(eps).first().num}", requester = first) { app.playEpisode(v, eps, Watch.ordered(eps).first(), fromStart = true) }
-                    Btn("Watched / unwatched…") {
+                        OButton("▶  " + t.second, primary = true, requester = first) { app.playEpisode(v, eps, t.first) }
+                        if (app.watch.state(WatchStore.epKey(v, t.first))?.inProgress == true) OButton("↺  From the start") { app.playEpisode(v, eps, t.first, fromStart = true) }
+                    } else OButton("▶  Watched all · play S${Watch.ordered(eps).first().season} E${Watch.ordered(eps).first().num}", primary = true, requester = first) {
+                        app.playEpisode(v, eps, Watch.ordered(eps).first(), fromStart = true)
+                    }
+                    OButton("Watched…") {
                         app.menu = MenuState(v.name, listOf("Mark show as watched" to { app.markEpisodes(v, eps, eps, true) }, "Mark show as unwatched" to { app.markEpisodes(v, eps, eps, false) }))
                     }
                 }
-                Btn(if (app.inList(v.key)) "Remove from My list" else "Add to My list") { app.toggleList(v.key) }
-                Btn("Back") { app.detail = null }
-            }
-            err?.let { T("Could not load details: $it", 13, Theme.live) }
-            dd?.plot?.let { T(it, 14, maxLines = 5) }
-            dd?.cast?.let { T("Cast: $it", 13, Theme.dim, maxLines = 2) }
-            dd?.director?.let { T("Director: $it", 13, Theme.dim) }
-            if (eps.isNotEmpty() && repo != null) {
-                val seasons = eps.map { it.season }.distinct().sortedWith(compareBy { if (it <= 0) Int.MAX_VALUE else it })
-                val row = app.watch.series(v.key)
-                val startSeason = row?.nextSeason?.takeIf { it in seasons } ?: seasons.first()
-                var season by remember(v) { mutableStateOf(startSeason) }
-                LazyRow(Modifier.padding(top = 10.dp)) {
-                    items(seasons) { s ->
-                        val inS = eps.filter { it.season == s }
-                        val all = inS.all { app.watch.state(WatchStore.epKey(v, it))?.watched == true }
-                        Box(Modifier.tvItem(onMenu = {
-                            app.menu = MenuState("Season $s", listOf("Mark season $s as watched" to { app.markEpisodes(v, eps, inS, true) }, "Mark season $s as unwatched" to { app.markEpisodes(v, eps, inS, false) }))
-                        }) { season = s }.padding(10.dp, 6.dp)) { T((if (s <= 0) "Specials" else "Season $s") + if (all) " ✓" else "", 14, if (s == season) Theme.accent else Theme.text) }
-                    }
+                else -> OButton(if (dd == null && err == null) "Loading…" else "▶  Play", primary = true, requester = first) {
+                    if (repo == null) app.toast("The playlist of this title is not available") else if (v.kind != "series") app.openMovie(v, repo, d)
                 }
-                LazyColumn {
-                    items(eps.filter { it.season == season }.sortedBy { it.num }, key = { it.id }) { e ->
-                        val st = app.watch.state(WatchStore.epKey(v, e))
-                        val next = row?.nextEp == e.id
-                        Row(Modifier.fillMaxWidth().tvItem(onMenu = { app.episodeMenu(v, eps, e) }) { app.playEpisode(v, eps, e) }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            T("E${e.num}", 14, if (next) Theme.accent else Theme.dim, modifier = Modifier.width(48.dp))
-                            Column(Modifier.weight(1f)) {
-                                T(VodFmt.cleanTitle(v.name, e.title), 14, bold = true)
-                                e.plot?.let { T(it, 12, Theme.dim, maxLines = 2) }
-                                if (st?.inProgress == true) ProgressLine(st.fraction, Modifier.fillMaxWidth(0.6f).padding(top = 3.dp))
-                            }
-                            T(listOfNotNull(if (st?.watched == true) "✓" else null, st?.takeIf { it.inProgress }?.let { "Resume ${Watch.clock(it.posMs)}" }, VodFmt.runtime(e.duration)).joinToString("  "), 12,
-                                if (st?.watched == true) Theme.ok else Theme.dim)
-                        }
+            }
+            OButton(if (app.inList(v.key)) "✓  My list" else "+  My list") { app.toggleList(v.key) }
+        }
+        // the muted status line under the buttons (§ title detail): progress, next episode, My list
+        val status = listOfNotNull(
+            st?.takeIf { it.inProgress }?.let { app.catalog.left(it.posMs, it.durMs) },
+            app.watch.series(v.key)?.takeIf { it.nextEp != null }?.let { r -> (if (r.nextSeason > 0) "Next S${r.nextSeason} E${r.nextNum}" else "Next E${r.nextNum}") + (r.nextTitle?.let { " · $it" } ?: "") },
+            if (app.inList(v.key)) "My list ✓" else null,
+            dd?.director?.let { "Director: $it" }, dd?.cast?.let { "Cast: $it" },
+        ).joinToString(" · ")
+        if (status.isNotEmpty()) Text2(status, 13, O5.muted, modifier = Modifier.padding(top = 10.dp).widthIn(max = 900.dp))
+        err?.let { Text2("Could not load the details: $it", 13, O5.live, modifier = Modifier.padding(top = 6.dp)) }
+        if (eps.isNotEmpty()) {
+            val row = app.watch.series(v.key)
+            val startSeason = row?.nextSeason?.takeIf { it in seasons } ?: seasons.first()
+            var season by remember(v) { mutableStateOf(startSeason) }
+            Spacer(Modifier.weight(1f))
+            // season tabs (§2 row heading size; the active one white with the accent underline)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 6.dp)) {
+                items(seasons) { s ->
+                    val inS = eps.filter { it.season == s }
+                    val all = inS.all { app.watch.state(WatchStore.epKey(v, it))?.watched == true }
+                    SeasonTab((if (s <= 0) "Specials" else "Season $s") + if (all) " ✓" else "", s == season,
+                        onMenu = { app.menu = MenuState("Season $s", listOf("Mark season $s as watched" to { app.markEpisodes(v, eps, inS, true) }, "Mark season $s as unwatched" to { app.markEpisodes(v, eps, inS, false) })) }) { season = s }
+                }
+            }
+            LazyRow(Modifier.padding(bottom = 56.dp), horizontalArrangement = Arrangement.spacedBy(18.dp), contentPadding = PaddingValues(top = 10.dp, bottom = 6.dp, end = 56.dp)) {
+                items(eps.filter { it.season == season }.sortedBy { it.num }, key = { it.id }) { e ->
+                    val es = app.watch.state(WatchStore.epKey(v, e))
+                    val cap = when {
+                        es?.inProgress == true -> app.catalog.left(es.posMs, es.durMs)
+                        es?.watched == true -> "Watched"
+                        else -> (if (row?.nextEp == e.id) "Next · " else "") + (VodFmt.runtime(e.duration) ?: "")
                     }
+                    LandCard("E${e.num} · " + VodFmt.cleanTitle(v.name, e.title), e.image ?: dd?.backdrop ?: v.poster, 220.dp, cap.ifBlank { null },
+                        es?.takeIf { it.inProgress }?.fraction, es?.watched == true, onMenu = { app.episodeMenu(v, eps, e) }) { app.playEpisode(v, eps, e) }
                 }
             }
         }
+    }
+}
+
+/** A season tab: bold text, white with a 3 px accent underline when chosen, muted otherwise; a white ring on focus. */
+@Composable
+private fun SeasonTab(label: String, on: Boolean, onMenu: () -> Unit, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    Column(Modifier.onFocusChanged { focused = it.hasFocus }.tvItem(onMenu = onMenu, onClick = onClick).padding(10.dp, 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text2(label, 17, if (on || focused) Color.White else Color(0x80FFFFFF), FontWeight.Bold)
+        Spacer(Modifier.height(6.dp))
+        Box(Modifier.width(if (on) 36.dp else 0.dp).height(3.dp).background(if (on) O5.accent else Color.Transparent, RoundedCornerShape(2.dp)))
     }
 }
 

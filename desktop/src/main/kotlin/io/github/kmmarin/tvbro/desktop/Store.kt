@@ -107,6 +107,12 @@ data class Settings(
     val useExternal: Boolean = false,
     /** Orbit: the home server last signed in to (the sign-in itself is in Secrets, "orbit"). */
     val orbitServer: String = "",
+    /** "Who's watching?" look: "orbit" (the ring) or "classic" (one row); Settings ▸ Profiles. */
+    val pickerStyle: String = "orbit",
+    /** Orbit: ask "Who's watching?" at start when the account has two or more profiles. */
+    val askWho: Boolean = true,
+    /** Orbit: per-channel live stream format of the signed-in profile (shared ChannelFormats as JSON; "" = none). */
+    val channelFormats: String = "",
 )
 
 /**

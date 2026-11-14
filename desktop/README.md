@@ -86,6 +86,14 @@ Test options: `--m3u <file|url>` (temporary source, not saved), `--play <n>`, `-
 `--render`, loads the URL as M3U and renders the TV screen off-screen). `TVBRO_MPV_LOG=<file>` writes an mpv log
 (it can contain stream URLs). `testdata/` has a synthetic playlist of public test streams plus a generated guide.
 
+Orbit design shots: `./gradlew :desktop:test --tests "*DesignShotsTest*"` renders the direction-5 screens off-screen at
+1280 × 760 into `desktop/build/orbit-shots/` (Home and Movies local and from a made-up catalogue, the title page,
+search, the guide, Settings, both "Who's watching?" styles, the stream prompt). The player overlay is ASS drawn by mpv
+(`PlayerOsd.kt`), so it is not in the shots; `PlayerOsdTest` checks its layout and hit boxes.
+
+Keys: arrows, Enter, Esc, hold Enter / right click / Menu for options, F11 full screen, and F1–F4 for the remote's
+red, green, yellow and blue keys (the legend at the bottom left says what they do and can be clicked).
+
 ## Status (2026-11-12)
 
 Android parity work (see docs/PARITY.md): series (continue watching, per-episode resume, Up next, per-show tracks,

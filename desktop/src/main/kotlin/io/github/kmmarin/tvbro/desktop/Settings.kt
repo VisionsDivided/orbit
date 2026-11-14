@@ -2,17 +2,27 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.kmmarin.tvbro.desktop
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -25,7 +35,8 @@ import io.github.kmmarin.tvbro.data.*
 import java.io.File
 import java.util.UUID
 
-private val pages = listOf("Orbit account", "Sources", "General", "Playback", "Recording", "Channels and groups", "Backup and restore", "About and diagnostics")
+/** Settings categories, the sub-menu row of DESIGN-SPEC-5 §12 (their order is the saved page number). */
+enum class SetCat(val label: String) { PROFILES("Profiles"), PLAYBACK("Playback"), LIVE_TV("Live TV"), SOURCES("Sources"), REQUESTS("Requests"), APPEARANCE("Appearance"), ABOUT("About") }
 
 @Composable
 private fun Field(label: String, v: String, secret: Boolean = false, width: Int = 420, set: (String) -> Unit) =
@@ -34,43 +45,148 @@ private fun Field(label: String, v: String, secret: Boolean = false, width: Int 
 
 /** One setting: label, current value; Enter / click changes it (cycles). */
 @Composable
-private fun Row2(label: String, value: String, onClick: () -> Unit) =
-    Row(Modifier.fillMaxWidth().tvItem(onClick = onClick).padding(10.dp, 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        T(label, 15, modifier = Modifier.weight(1f)); T(value, 14, Theme.accent)
-    }
+private fun Row2(label: String, value: String, desc: String? = null, onClick: () -> Unit) = SRow(label, desc, onClick = onClick) { RowValue(value) }
+
+/** A switch row: the toggle on the right; Enter, a click or Left / Right flips it. */
+@Composable
+private fun SwitchRow(label: String, desc: String?, on: Boolean, flip: () -> Unit) = SRow(label, desc, onLeftRight = { flip() }, onClick = flip) { Toggle(on) }
 
 @Composable
-private fun H(s: String) = T(s, 18, Theme.accent, modifier = Modifier.padding(top = 10.dp, bottom = 2.dp))
+private fun H(s: String) = SHead(s)
 
+/**
+ * Settings as a page under the top bar (§12): the categories as a sub-menu row, the category's rows below it. Up from
+ * the rows reaches the row, Up again the top bar; the avatar shows the double ring meanwhile.
+ */
 @Composable
 fun SettingsScreen(app: AppState) {
-    val page = app.settingsPage
-    if (page !in 1..pages.size) {
-        val first = remember { FocusRequester() }
-        LaunchedEffect(Unit) { first.settle(5) }
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            T("Settings", 22, Theme.accent)
-            pages.forEachIndexed { i, p -> Box(Modifier.width(420.dp).tvItem(requester = if (i == 0) first else null) { app.settingsPage = i + 1 }.padding(12.dp, 10.dp)) { T(p, 16) } }
+    val cat = SetCat.entries.getOrElse(app.settingsPage) { SetCat.PROFILES }
+    var manage by remember { mutableStateOf(false) }
+    LaunchedEffect(manage) { app.pageBack = if (manage) ({ manage = false }) else null }
+    LaunchedEffect(cat) { if (cat != SetCat.PROFILES) manage = false }
+    DisposableEffect(Unit) { app.manageProfiles = { manage = true }; onDispose { app.manageProfiles = null; app.pageBack = null } }
+    LaunchedEffect(cat) { app.colorKeys = ColorKeys(hints = listOf("Enter" to "Change", "Esc" to "Done")) }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.padding(start = 56.dp, end = 56.dp, top = 2.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (c in SetCat.entries) Pill(c.label, c == cat) { app.settingsPage = c.ordinal }
         }
-        return
+        Row(Modifier.fillMaxSize().padding(start = 56.dp, end = 56.dp)) {
+            Column(Modifier.widthIn(max = 700.dp).weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(bottom = 70.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (cat) {
+                    SetCat.PROFILES -> if (manage) ManageProfiles(app) { manage = false } else ProfilesPage(app) { manage = true }
+                    SetCat.PLAYBACK -> { PageHead("Playback", "Settings for this computer"); PlaybackPage(app) }
+                    SetCat.LIVE_TV -> { PageHead("Live TV", "Guide, recording, channels and groups"); GeneralPage(app); H("Recording"); RecordingPage(app); H("Channels and groups"); ChannelsPage(app) }
+                    SetCat.SOURCES -> { PageHead("Sources", "Home server and playlists"); OrbitAccountPage(app); H("Playlists"); SourcesPage(app) }
+                    SetCat.REQUESTS -> { PageHead("Requests"); RequestsPage(app) }
+                    SetCat.APPEARANCE -> { PageHead("Appearance"); AppearancePage(app) }
+                    SetCat.ABOUT -> { PageHead("About"); AboutPage(app); H("Backup and restore"); BackupPage(app) }
+                }
+            }
+            if (cat == SetCat.PROFILES && !manage) {
+                Spacer(Modifier.width(36.dp))
+                PickerPreviews(app)
+            }
+        }
     }
-    val back = remember { FocusRequester() }
-    LaunchedEffect(page) { back.settle(5) }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Btn("‹ Settings", requester = back) { app.settingsPage = 0 }; T(pages[page - 1], 22, Theme.accent)
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Profiles (§12): picker style Orbit | Classic with live previews, ask at start, switch, Manage profiles
+// ---------------------------------------------------------------------------------------------------------------
+
+@Composable
+private fun ProfilesPage(app: AppState, openManage: () -> Unit) {
+    val o = app.orbit
+    val s = app.settings
+    val first = remember { FocusRequester() }
+    LaunchedEffect(Unit) { first.settle(5) }
+    PageHead("Profiles", "Settings for this computer")
+    val styles = listOf("orbit", "classic")
+    val cur = styles.indexOf(s.pickerStyle).coerceAtLeast(0)
+    val setStyle = { i: Int -> app.update { it.copy(pickerStyle = styles[i.coerceIn(0, 1)]) } }
+    SRow("Profile picker style", "How \"Who's watching?\" looks when Orbit starts", requester = first, onLeftRight = { d -> setStyle(cur + d) },
+        onClick = { setStyle(1 - cur) }) { SegmentView(listOf("Orbit", "Classic"), cur, setStyle) }
+    SwitchRow("Ask who's watching when Orbit starts", "Off: open straight into the last profile", s.askWho) { app.update { it.copy(askWho = !it.askWho) } }
+    if (o.linked) {
+        SRow("Who's watching?", "Now ${o.saved.profile}" + (if (o.saved.kids) " (Kids)" else "") + " · switch to another profile", onClick = { app.stopPlayback(); o.picking = true }) { RowValue(o.saved.profile) }
+        SRow("Manage profiles", "Add or remove the account's profiles", onClick = openManage) { RowValue("${o.profiles.size}") }
+    } else SRow("Profiles come with Orbit", "Sign in to the home server (Sources) to pick a profile and keep My list and progress per person", onClick = { app.openSettings(SetCat.SOURCES) }) { RowValue("Sign in") }
+}
+
+/** The two picker styles as small previews; the chosen one has the accent ring and a check. */
+@Composable
+private fun PickerPreviews(app: AppState) {
+    val orbit = app.settings.pickerStyle != "classic"
+    Column(Modifier.width(400.dp).padding(top = 64.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        SHead("Preview")
+        PreviewCard("Orbit", orbit) {
+            drawOval(Color(0x59FFFFFF), Offset(size.width * .12f, size.height * .24f), androidx.compose.ui.geometry.Size(size.width * .76f, size.height * .58f), style = Stroke(2f))
+            drawCircle(Brush.linearGradient(listOf(O5.accent, O5.violet)), size.height * .12f, Offset(size.width * .5f, size.height * .4f))
+            val dots = listOf(Triple(.12f, .55f, 0xFF8892B0), Triple(.28f, .76f, 0xFFE07A8A), Triple(.5f, .82f, 0xFF5FB6F0), Triple(.72f, .76f, 0xFF5FC9A0), Triple(.88f, .55f, 0x40FFFFFFL))
+            for ((x, y, c) in dots) drawCircle(Color(c), size.height * (if (x == .5f) .1f else .075f), Offset(size.width * x, size.height * y))
         }
-        when (page) {
-            1 -> OrbitAccountPage(app)
-            2 -> SourcesPage(app)
-            3 -> GeneralPage(app)
-            4 -> PlaybackPage(app)
-            5 -> RecordingPage(app)
-            6 -> ChannelsPage(app)
-            7 -> BackupPage(app)
-            8 -> AboutPage(app)
+        PreviewCard("Classic · one row", !orbit) {
+            val cs = listOf(0xFF5FB6F0, 0xFFE07A8A, 0xFF5FC9A0, 0xFF8892B0, 0x2EFFFFFFL)
+            cs.forEachIndexed { i, c -> drawCircle(Color(c), size.height * .16f, Offset(size.width * (.14f + i * .18f), size.height * .48f)) }
         }
     }
+}
+
+@Composable
+private fun PreviewCard(label: String, on: Boolean, draw: androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit) {
+    Box(Modifier.fillMaxWidth().height(152.dp).background(Color(0xB305060C), RoundedCornerShape(12.dp))
+        .border(if (on) 2.dp else 1.dp, if (on) O5.accent else Color(0x1FFFFFFF), RoundedCornerShape(12.dp)).drawBehind(draw)) {
+        Text2(label, 13, if (on) Color.White else O5.muted, FontWeight.Bold, Modifier.align(Alignment.BottomStart).padding(12.dp, 8.dp))
+        if (on) Text2("✓", 16, O5.accent, FontWeight.Bold, Modifier.align(Alignment.TopEnd).padding(12.dp, 8.dp))
+    }
+}
+
+/** Manage profiles: the account's profiles; add one, or remove one that is not in use here (POST /v1/profiles…). */
+@Composable
+private fun ManageProfiles(app: AppState, back: () -> Unit) {
+    val o = app.orbit
+    val scope = rememberCoroutineScope()
+    val first = remember { FocusRequester() }
+    LaunchedEffect(Unit) { first.settle(5); o.refreshProfiles() }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        OButton("‹ Profiles", requester = first, onClick = back)
+        PageHead("Manage profiles", o.saved.account)
+    }
+    if (!o.linked) return T("Sign in to Orbit first (Settings ▸ Sources).", 14, Theme.dim)
+    for (p in o.profiles) {
+        val here = p.id == o.saved.profileId
+        SRow(p.name + if (p.kids) " · Kids" else "", if (here) "In use on this computer" else "Enter: switch to ${p.name} · hold Enter or right click to remove",
+            onMenu = if (here) null else ({ app.menu = MenuState("Remove the profile ${p.name}?\nIts My list, progress and settings on the home server are deleted for every device.",
+                listOf("Remove ${p.name}" to { scope.launch { o.deleteProfile(p.id) } }, "Cancel" to {})) }),
+            onClick = { if (!here) o.chooseProfile(p.id) }) {
+            Avatar(p.name, 34.dp)
+        }
+    }
+    SRow("Add a profile", "Up to 8 per account", onClick = {
+        app.prompt = PromptState("New profile name", "", false) { v -> if (v.isNotBlank()) scope.launch { o.addProfile(v.trim(), kids = false) } }
+    }) { RowValue("+") }
+    SRow("Add a Kids profile", "Only titles and channels for children", onClick = {
+        app.prompt = PromptState("New Kids profile name", "", false) { v -> if (v.isNotBlank()) scope.launch { o.addProfile(v.trim(), kids = true) } }
+    }) { RowValue("+") }
+    if (o.message.isNotEmpty()) T(o.message, 13, Theme.live, maxLines = 2)
+    T("Names, avatars and PIN locks are edited in the Orbit web app (Settings ▸ Profiles).", 12, Theme.dim, maxLines = 2)
+}
+
+@Composable
+private fun RequestsPage(app: AppState) {
+    SRow("Discover and requests", if (app.orbit.linked) "Ask for films and shows through the household's Seerr" else "Sign in to Orbit to use Discover", onClick = {
+        app.detail = null; app.tab = if (app.orbit.linked) Tab.DISCOVER else Tab.SETTINGS; if (!app.orbit.linked) app.settingsPage = SetCat.SOURCES.ordinal
+    }) { RowValue(if (app.orbit.linked) "Open" else "Sign in") }
+    T("Seerr is set up on the home server (Orbit web app ▸ Settings ▸ Requests); this computer only shows it.", 12, Theme.dim, maxLines = 2)
+}
+
+@Composable
+private fun AppearancePage(app: AppState) {
+    val s = app.settings
+    Row2("Time format", TimeFmt.names[s.timeFmt.coerceIn(0, 2)]) { app.update { it.copy(timeFmt = (it.timeFmt + 1) % 3) } }
+    Row2("Window", if (app.fullscreen) "Full screen (F11)" else "In a window (F11)") { app.fullscreen = !app.fullscreen }
+    T("Orbit's look (direction 5) is the same on the TV, the web app and here.", 12, Theme.dim)
 }
 
 /** The source's login travels unencrypted (Xtream over http, or an http playlist address). */
@@ -133,14 +249,13 @@ private fun SourcesPage(app: AppState) {
 @Composable
 private fun GeneralPage(app: AppState) {
     val s = app.settings
-    Row2("Time format", TimeFmt.names[s.timeFmt.coerceIn(0, 2)]) { app.update { it.copy(timeFmt = (it.timeFmt + 1) % 3) } }
     Row2("Channel numbers", if (s.numberMode == ChannelView.NUM_PROVIDER) "Provider numbers" else "Numbers per group (1, 2, 3…)") { app.update { it.copy(numberMode = 1 - it.numberMode) } }
     Row2("At start", if (s.startLast) "Play the last channel / return to the last screen" else "Open the TV screen") { app.update { it.copy(startLast = !it.startLast) } }
     Row2("Live preview in the TV screen", if (s.previewOn) "On" else "Off") { app.update { it.copy(previewOn = !it.previewOn) }; if (s.previewOn && !app.full) app.stopPlayback() }
     Row2("Preview sound", if (s.previewMuted) "Muted" else "On") { app.update { it.copy(previewMuted = !it.previewMuted) } }
     val shifts = listOf(0, 30, 60, 90, 120, 180, -180, -120, -90, -60, -30)
     Row2("Guide time shift", (if (s.epgShiftMin > 0) "+" else "") + "${s.epgShiftMin} min") { app.setShift(shifts[(shifts.indexOf(s.epgShiftMin) + 1) % shifts.size]) }
-    T("Keys: arrows move · Enter selects · hold Enter, right click or the Menu key for options · Esc back · F11 full screen.", 12, Theme.dim, maxLines = 2)
+    T("Keys: arrows move · Enter selects · hold Enter, right click or the Menu key for options · F1–F4 the colour keys · Esc back · F11 full screen.", 12, Theme.dim, maxLines = 2)
 }
 
 @Composable
@@ -299,9 +414,10 @@ private fun BackupPage(app: AppState) {
 @Composable
 private fun AboutPage(app: AppState) {
     H("Keys")
-    T("Arrows move · Enter selects · hold Enter / right click / Menu key: options · Esc back · F11 full screen.\n" +
-        "Player: ↑↓ or PgUp PgDn channel (VOD: PgUp PgDn ±1 min), ←→ seek 10 s, digits pick a channel, Enter or M quick settings, I info, Space pause, A audio, S subtitles, " +
-        "[ ] audio delay, R record, N / B next / previous episode, Y favourite, Esc back (live TV shrinks into the guide preview).", 13, Theme.dim, maxLines = 6)
+    T("Arrows move · Enter selects · hold Enter / right click / Menu key: options · F1–F4 the colour keys (red, green, yellow, blue; or click the legend) · Esc back · F11 full screen.\n" +
+        "Player: ↑↓ or PgUp PgDn channel (VOD: PgUp PgDn ±1 min), ←→ seek 10 s, digits pick a channel, Enter or M quick actions (←→ choose, Enter use, ↑↓ change a value; " +
+        "or click them), I info, Space pause, A audio, S subtitles, [ ] audio delay, R record, N / B next / previous episode, Y or F1 favourite, F2 record, " +
+        "F3 stream format TS / HLS (live), F4 options, Esc back (live TV shrinks into the guide preview).", 13, Theme.dim, maxLines = 8)
     H("About")
     T("tvBro desktop 0.2.0 · Apache-2.0 · video by libmpv (not included; your own copy, its own licence) · SMB by jcifs-ng (LGPL-2.1) · see NOTICE", 13, Theme.dim, maxLines = 2)
     H("Diagnostics")
