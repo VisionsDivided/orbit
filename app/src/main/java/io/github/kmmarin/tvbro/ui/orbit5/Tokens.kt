@@ -39,6 +39,8 @@ object O5 {
     val Line = Color(0x12FFFFFF)                   // rgba(255,255,255,.07)
     val Live = Color(0xFFFF3B5C)
     val ScrimPanel = Color(0xC705060C)             // rgba(5,6,12,.78)
+    /** The colour-key legend: more solid than the spec's .78, so a row heading under it does not show through (BRAVIA). */
+    val LegendPanel = Color(0xEB05060C)            // rgba(5,6,12,.92)
     val Dialog = Color(0xF20A0C16)                 // rgba(10,12,22,.95)
     val DialogBorder = Color(0x1FFFFFFF)
     val ChipBg = Color(0x800A0C16)                 // rgba(10,12,22,.5)

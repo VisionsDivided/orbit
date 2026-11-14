@@ -12,6 +12,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.test.onNodeWithText
+import io.github.kmmarin.tvbro.ui.orbit5.O5Button
+import io.github.kmmarin.tvbro.ui.orbit5.SubMenuRow
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -89,5 +96,82 @@ class ShellFocusTest {
         key(Key.DirectionRight)
         key(Key.DirectionCenter)
         assertEquals(NavTab.MOVIES, opened)
+    }
+
+    // ---- first visits (nothing remembered in the page): BRAVIA bug, Down from Movies / Shows / Discover did nothing ----
+
+    /** A page shaped like one of the sections, opened with focus on its top-bar item (as after OK on the tab). */
+    private fun page(active: NavTab, content: @Composable () -> Unit) {
+        rule.setContent {
+            OrbitCanvas { ShellFrame(active = active, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani") { content() } }
+        }
+        rule.onNodeWithTag("nav-${active.label}").requestFocus()
+        rule.waitForIdle()
+    }
+
+    /** Movies / Shows: sub-menu, then the hero, then rows. Down lands on the active pill. */
+    @Composable private fun moviesLike() {
+        SubMenuRow(listOf("Recommended", "Browse", "Collections"), 0, {}, Modifier.padding(top = 118.dp))
+        Column(Modifier.padding(start = 96.dp, top = 214.dp)) {
+            Row { O5Button("Play", primary = true) {}; O5Button("My list") {} }
+            Row(Modifier.padding(top = 200.dp), horizontalArrangement = Arrangement.spacedBy(30.dp)) {
+                for (i in 0..5) Box(Modifier.size(166.dp, 249.dp).o5Focus { }.testTag("poster-$i"))
+            }
+        }
+    }
+
+    @Test fun moviesFirstVisitDownLandsOnTheActivePill() {
+        page(NavTab.MOVIES) { moviesLike() }
+        key(Key.DirectionDown)
+        rule.onNodeWithText("Recommended").assertIsFocused()
+    }
+
+    @Test fun showsFirstVisitDownLandsOnTheActivePill() {
+        page(NavTab.SHOWS) { moviesLike() }
+        key(Key.DirectionDown)
+        rule.onNodeWithText("Recommended").assertIsFocused()
+    }
+
+    /** Home / Discover with a hero and no sub-menu: Down lands on the primary button. */
+    @Test fun heroPageDownLandsOnThePrimaryButton() {
+        page(NavTab.HOME) {
+            Column(Modifier.padding(start = 96.dp, top = 600.dp)) {
+                Row { O5Button("More info") {}; O5Button("Play", primary = true) {} }
+                Row(Modifier.padding(top = 60.dp)) { for (i in 0..3) Box(Modifier.size(380.dp, 214.dp).o5Focus { }.testTag("card-$i")) }
+            }
+        }
+        key(Key.DirectionDown)
+        rule.onNodeWithText("Play").assertIsFocused()
+    }
+
+    /** Discover's "Seerr is not set up" page: one button, far from the Discover tab. Down still reaches it. */
+    @Test fun discoverOnlyButtonIsReached() {
+        page(NavTab.DISCOVER) {
+            Box(Modifier.fillMaxSize()) { O5Button("Try again", Modifier.align(Alignment.BottomStart).padding(start = 96.dp, bottom = 300.dp)) {} }
+        }
+        key(Key.DirectionDown)
+        rule.onNodeWithText("Try again").assertIsFocused()
+    }
+
+    /** A remembered item that can no longer take focus must not swallow Down (the request "succeeds" but focus stays). */
+    @Test fun staleRememberedItemFallsBackToThePage() {
+        var canFocus by mutableStateOf(true)
+        page(NavTab.MOVIES) {
+            moviesLike()
+            Box(Modifier.padding(start = 1400.dp, top = 900.dp).size(100.dp).focusProperties { this.canFocus = canFocus }.o5Focus { }.testTag("stale"))
+        }
+        rule.onNodeWithTag("stale").requestFocus(); rule.waitForIdle()
+        canFocus = false; rule.waitForIdle()
+        rule.onNodeWithTag("nav-Movies").requestFocus(); rule.waitForIdle()
+        key(Key.DirectionDown)
+        rule.onNodeWithText("Recommended").assertIsFocused()
+    }
+
+    /** OK on the tab: focus moves into the page by itself (no Down needed). */
+    @Test fun okOnTheTabEntersThePage() {
+        page(NavTab.MOVIES) { moviesLike() }
+        key(Key.DirectionCenter)
+        rule.mainClock.advanceTimeBy(1000); rule.waitForIdle()
+        rule.onNodeWithText("Recommended").assertIsFocused()
     }
 }

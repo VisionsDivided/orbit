@@ -132,7 +132,9 @@ object FocusMemory {
     private var count by androidx.compose.runtime.mutableIntStateOf(0)
     /** Whether a visible item holds focus. */
     val anyFocus: Boolean get() = count > 0
-    internal fun gained() { count++; tries = 0 }
+    /** Something has held focus since the app started (a rescue before that is the first focus, not a lost one). */
+    var ever = false; private set
+    internal fun gained() { count++; tries = 0; ever = true }
     internal fun lost() { if (count > 0) count-- }
 
     fun focused(s: SafeFocus, inRail: Boolean = false) {

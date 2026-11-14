@@ -115,6 +115,8 @@ class MainActivity : ComponentActivity() {
                         // guide window's edge) the newest remembered item still on screen was the side menu entry
                         (m.screen == Screen.LIST && m.section == Section.TV && m.railRight?.request() == true) ||
                         FocusMemory.restore() || m.railRight?.request() == true ||
+                            // in the shell: into the page (its sub-menu, hero button or first item), not the top bar
+                            (hard && io.github.kmmarin.tvbro.ui.shell.ShellFocus.enter?.invoke() == true) ||
                             (hard && runCatching {
                                 fm.moveFocus(androidx.compose.ui.focus.FocusDirection.Next) || fm.moveFocus(androidx.compose.ui.focus.FocusDirection.Down)
                             }.getOrDefault(false))
@@ -126,7 +128,11 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(FocusMemory.anyFocus, inputMode.inputMode) {
                     while (!FocusMemory.anyFocus && inputMode.inputMode != androidx.compose.ui.input.InputMode.Touch) {
                         kotlinx.coroutines.delay(400)
-                        if (!FocusMemory.anyFocus) { val ok = m.focusRescue?.invoke(true); io.github.kmmarin.tvbro.data.Diag.log("focus lost: rescue $ok") }
+                        if (!FocusMemory.anyFocus) {
+                            val ok = m.focusRescue?.invoke(true)
+                            // at start nothing has had focus yet: that is the first focus, not a lost one
+                            io.github.kmmarin.tvbro.data.Diag.log((if (FocusMemory.ever) "focus lost: rescue " else "first focus: ") + "$ok")
+                        }
                     }
                 }
                 Box(Modifier.fillMaxSize().background(Bg)) {
