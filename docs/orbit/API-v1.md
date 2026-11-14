@@ -328,6 +328,10 @@ Playing does not use one of the IPTV provider's streams (`/v1/streams` does not 
   "conn", "source": "plex" | "jellyfin", "id" }
 ```
 `next.subtitle`, `conn`, `source` and `id` are additions to the first draft of this contract.
+`kind` is always sent. `durationSecs` may be `null` (unknown): players then use their own. Devices may load `url`
+and subtitle URLs with or without the session cookie; the relay never redirects. A `"stopped"` report may come
+before playback started, or for an old session that an HLS fallback replaced: the server ends that session and
+its transcode.
 
 **Direct play or transcode.**
 - `client: "web"` always gets HLS with H.264 video and AAC stereo audio. Plex: the universal transcoder
@@ -337,7 +341,8 @@ Playing does not use one of the IPTV provider's streams (`/v1/streams` does not 
   `TranscodingUrl` is used (or `master.m3u8` built from the same parameters on older servers).
 - `client: "tv"` / `"desktop"` get the original file (`kind: "file"`; ExoPlayer and mpv play most containers) unless
   `caps` rule it out, or Jellyfin says the file may not be played directly; then HLS as for the web.
-  `caps` (optional): `{"direct": false}` (always HLS), `"containers": ["mp4", "mkv", ...]`,
+  `caps` (optional): `{"directPlay": false}` (always HLS; the TV sends it to retry after a failed direct play;
+  `"direct": false` is read the same way), `"directPlay": true` (the default), `"containers": ["mp4", "mkv", ...]`,
   `"videoCodecs": ["h264", "hevc", ...]`, `"audioCodecs": ["aac", "ac3", ...]`: a list that is given must contain
   the file's value, else HLS.
 - `audio` (optional): an `audio[].id` from an earlier answer, for a transcode with another audio track. Start a new

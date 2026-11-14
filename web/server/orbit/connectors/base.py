@@ -173,12 +173,13 @@ def colors(c1, c2) -> Optional[list]:
 
 
 def direct_ok(caps, container, vcodec=None, acodec=None) -> bool:
-    """May a device play the original file? ``caps`` (optional, from the device): {"direct": false} never;
+    """May a device play the original file? ``caps`` (optional, from the device): {"directPlay": false} never
+    ("direct": false is read the same way);
     "containers" / "videoCodecs" / "audioCodecs" lists, when given, must contain the file's. Without caps:
     yes (ExoPlayer and mpv play most files)."""
     if not isinstance(caps, dict):
         return True
-    if caps.get("direct") is False:
+    if caps.get("directPlay") is False or caps.get("direct") is False:
         return False
     for name, val in (("containers", container), ("videoCodecs", vcodec), ("audioCodecs", acodec)):
         lst = caps.get(name)

@@ -226,7 +226,10 @@ class Plays:
             first = not p.reported
             p.reported = True
         try:
-            p.connector.play_report(p.ref, p.item, secs, p.duration, state, first)
+            # "stopped" before any other report (the player never started, or an HLS fallback replaced this
+            # session): nothing is told to the media server, so the position it has is kept
+            if not (state == "stopped" and first):
+                p.connector.play_report(p.ref, p.item, secs, p.duration, state, first)
         except ConnectorError as e:
             LOG.info("media play progress %s %s: %s", p.source, p.conn, e.msg)
             if state != "stopped":

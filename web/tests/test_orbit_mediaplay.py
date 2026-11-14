@@ -271,7 +271,7 @@ class Play(unittest.TestCase):
         self.assertEqual((code, hdr["Content-Type"]), (206, "video/x-matroska"), "the type follows the file when the server is vague")
         b = self.play(self.alex, cid, "22", "tv", caps={"containers": ["mp4", "mkv"], "videoCodecs": ["h264"]})
         self.assertEqual(b["kind"], "hls", "HEVC is not in the device's list: transcode")
-        c = self.play(self.alex, cid, "22", "tv", caps={"direct": False})
+        c = self.play(self.alex, cid, "22", "tv", caps={"directPlay": False})
         self.assertEqual(c["kind"], "hls")
         d = self.play(self.alex, cid, "10", "web", audio="702")
         put = self.seen(self.px, "PUT", "/library/parts/501")[-1]
@@ -345,6 +345,14 @@ class Play(unittest.TestCase):
         self.assertIsNone(self.media.plays.get(sids[0]))
         self.assertIsNotNone(self.media.plays.get(sids[-1]))
 
+    def test_stopped_before_playing_keeps_the_position(self):
+        cid = self.link_plex()["id"]
+        sid = self.play(self.alex, cid, "10", "tv")["session"]
+        n = len(self.seen(self.px, "GET", "/:/timeline"))
+        self.ok("POST", "/v1/media/progress", self.alex, {"session": sid, "positionSecs": 0, "state": "stopped"})
+        self.assertEqual(len(self.seen(self.px, "GET", "/:/timeline")), n, "no timeline at 0 s over the saved position")
+        self.assertIsNone(self.media.plays.get(sid))
+
     def test_another_account_cannot_play_my_connection(self):
         cid = self.link_plex()["id"]
         self.assertEqual(self.call("POST", "/v1/media/play", self.sam, {"conn": cid, "id": "10", "client": "web"})[0], 404)
@@ -415,6 +423,8 @@ class Helpers(unittest.TestCase):
         self.assertFalse(direct_ok({"containers": ["mp4"]}, "mkv"))
         self.assertTrue(direct_ok({"containers": ["webm"]}, "mkv,webm"))
         self.assertFalse(direct_ok({"direct": False}, "mp4"))
+        self.assertFalse(direct_ok({"directPlay": False}, "mp4"))
+        self.assertTrue(direct_ok({"directPlay": True, "containers": ["mp4", "mkv"]}, "mkv", "h264", "aac"))
         self.assertTrue(direct_ok({"videoCodecs": ["h264"]}, "mp4", None))
 
     def test_safe_rel_and_clean_query(self):
