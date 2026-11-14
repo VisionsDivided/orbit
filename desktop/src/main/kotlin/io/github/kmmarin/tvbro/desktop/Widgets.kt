@@ -151,7 +151,7 @@ fun Overlays(app: AppState) {
         // header lines wrap at about 60 characters (a restore summary has long ones)
         val head = m.title.lines().take(6).sumOf { (it.length / 60 + 1).coerceAtMost(3) }.coerceAtMost(14)
         val st = rememberDialogState(position = WindowPosition(Alignment.Center), size = androidx.compose.ui.unit.DpSize(520.dp, (90 + head * 22 + rows * 46).dp))
-        DialogWindow(onCloseRequest = { app.closeMenu() }, state = st, title = "tvBro", undecorated = true, transparent = true, resizable = false) {
+        DialogWindow(onCloseRequest = { app.closeMenu() }, state = st, title = "Orbit", undecorated = true, transparent = true, resizable = false) {
             val first = remember { FocusRequester() }
             LaunchedEffect(m) { first.settle() }
             Column(Modifier.fillMaxSize().background(O5.dialog, RoundedCornerShape(14.dp)).border(1.dp, O5.dialogRing, RoundedCornerShape(14.dp)).padding(14.dp).dialogKeys { app.closeMenu() }) {
@@ -169,7 +169,7 @@ fun Overlays(app: AppState) {
     } }
     app.prompt?.let { p -> key(p) {
         val st = rememberDialogState(position = WindowPosition(Alignment.Center), size = androidx.compose.ui.unit.DpSize(520.dp, 190.dp))
-        DialogWindow(onCloseRequest = { app.prompt = null }, state = st, title = "tvBro", undecorated = true, transparent = true, resizable = false) {
+        DialogWindow(onCloseRequest = { app.prompt = null }, state = st, title = "Orbit", undecorated = true, transparent = true, resizable = false) {
             var v by remember(p) { mutableStateOf(p.initial) }
             val fr = remember { FocusRequester() }
             LaunchedEffect(p) { fr.settle() }
@@ -187,7 +187,7 @@ fun Overlays(app: AppState) {
     app.picker?.let { pk -> key(pk) {
         val st = rememberDialogState(position = WindowPosition(Alignment.Center), size = androidx.compose.ui.unit.DpSize(560.dp, 600.dp))
         val close = { app.picker = null; typing = false }
-        DialogWindow(onCloseRequest = close, state = st, title = "tvBro", undecorated = true, transparent = true, resizable = false) {
+        DialogWindow(onCloseRequest = close, state = st, title = "Orbit", undecorated = true, transparent = true, resizable = false) {
             var q by remember(pk) { mutableStateOf("") }
             var rows by remember(pk) { mutableStateOf(pk.search("")) }
             LaunchedEffect(q) { delay(150); rows = pk.search(q) } // debounce typing
@@ -222,7 +222,7 @@ fun Overlays(app: AppState) {
     } }
     app.dueReminder?.takeIf { !app.full }?.let { r ->
         val st = rememberDialogState(position = WindowPosition(Alignment.Center), size = androidx.compose.ui.unit.DpSize(480.dp, 200.dp))
-        DialogWindow(onCloseRequest = { app.reminderDone(r, false) }, state = st, title = "tvBro", undecorated = true, transparent = true, resizable = false) {
+        DialogWindow(onCloseRequest = { app.reminderDone(r, false) }, state = st, title = "Orbit", undecorated = true, transparent = true, resizable = false) {
             val fr = remember { FocusRequester() }
             LaunchedEffect(r) { fr.settle() }
             Column(Modifier.fillMaxSize().background(O5.dialog, RoundedCornerShape(14.dp)).border(1.dp, O5.dialogRing, RoundedCornerShape(14.dp)).padding(16.dp).dialogKeys { app.reminderDone(r, false) },

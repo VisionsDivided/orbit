@@ -71,7 +71,7 @@ fun VideoHost(app: AppState) = BoxWithConstraints(Modifier.fillMaxSize()) {
     val lib = MpvLoader.lib
     if (lib == null) {
         if (app.full) Box(Modifier.fillMaxSize().background(Color.Black)) {
-            Text("Video library missing (libmpv is not included in tvBro).\n${MpvLoader.error ?: ""}\nSettings > Playback > Video library shows how to add it (see also INSTALL.md).\nPress Esc to go back.\n\n${req.title}",
+            Text("Video library missing (libmpv is not included in Orbit).\n${MpvLoader.error ?: ""}\nSettings > Playback > Video library shows how to add it (see also INSTALL.md).\nPress Esc to go back.\n\n${req.title}",
                 color = Color.White, modifier = Modifier.align(Alignment.Center).padding(32.dp))
         }
         return@BoxWithConstraints

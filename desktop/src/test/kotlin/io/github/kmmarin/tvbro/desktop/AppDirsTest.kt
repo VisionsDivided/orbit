@@ -37,6 +37,14 @@ class AppDirsTest {
         assertEquals("/x/tvbro", p(AppDirs.of(Os.LINUX, "/home/user") { if (it == "XDG_CONFIG_HOME") "/x" else null }.config))
     }
 
+    /** The app is called Orbit now, but its data stays in the tvBro folders and Keychain item so upgrades keep everything. */
+    @Test fun renameToOrbitKeepsTheDataLocations() {
+        assertEquals("tvBro", AppDirs.NAME)
+        assertEquals("tvBro", MacKeychain.SERVICE)
+        val d = AppDirs.of(Os.WINDOWS, "C:\\Users\\<user>") { null }
+        assertTrue(listOf(d.config, d.cache, d.logs, d.recordings).none { p(it).contains("Orbit") })
+    }
+
     @Test fun fileLogRotates() {
         val dir = Files.createTempDirectory("tvbro-log").toFile()
         val f = File(dir, "tvbro.log")

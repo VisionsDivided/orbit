@@ -45,13 +45,17 @@ compose.desktop {
         nativeDistributions {
             // each host builds only its own formats: Msi on Windows, Dmg on macOS (packageDmg)
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg)
-            packageName = "tvBro"
+            // Orbit.exe / Orbit-<version>.msi on Windows. The data folders do NOT follow this name: they stay
+            // "tvBro" (AppDirs.NAME in Store.kt) so settings, the Orbit session and recordings of older installs are kept.
+            packageName = "Orbit"
             packageVersion = "0.1.0"
-            description = "tvBro IPTV player"
-            vendor = "The tvBro authors"
+            description = "Orbit media player (based on tvBro)"
+            vendor = "The Orbit authors" // Add/Remove Programs "Publisher"; tvBro credit stays in NOTICE and LICENSE
             licenseFile.set(rootProject.file("LICENSE"))
             modules("java.naming", "jdk.crypto.ec", "java.net.http", "java.sql", "jdk.httpserver", "java.desktop")
-            windows { menuGroup = "tvBro"; upgradeUuid = "6f3b8f63-2a43-4f7b-9a8e-2d6b0c1e7a51" }
+            // upgradeUuid is the one the tvBro MSI used: kept so the Orbit MSI upgrades an installed tvBro in place
+            // (Windows removes the old product, Add/Remove Programs then lists only Orbit). Never change it.
+            windows { menuGroup = "Orbit"; upgradeUuid = "6f3b8f63-2a43-4f7b-9a8e-2d6b0c1e7a51" }
             // macOS app: Orbit.app in Orbit-<version>.dmg. Unsigned (signing / notarization need a paid Apple
             // Developer account: docs/orbit/MACOS.md). orbit.icns is made from branding/orbit-app-icon.webp.
             macOS {
@@ -71,19 +75,19 @@ compose.desktop {
 // own copy (docs/INSTALL.md); the app explains how when it cannot load one.
 val libmpvName = Regex("(?i)(^|/)(lib)?mpv[^/]*\\.(dll|so(\\.[0-9]+)*|dylib)$")
 
-// Windows download: out/tvbro-windows.zip = the app image (bundled JRE) + NOTICE, LICENSE, INSTALL.md, THIRD_PARTY.md.
+// Windows download: out/orbit-windows-x64.zip = Orbit/Orbit.exe, the app image (bundled JRE) + NOTICE, LICENSE, INSTALL.md, THIRD_PARTY.md.
 tasks.register<Zip>("windowsZip") {
     dependsOn("createDistributable")
-    archiveFileName.set("tvbro-windows.zip")
+    archiveFileName.set("orbit-windows-x64.zip")
     destinationDirectory.set(rootProject.layout.projectDirectory.dir("out"))
     from(layout.buildDirectory.dir("compose/binaries/main/app")) { exclude { libmpvName.containsMatchIn(it.relativePath.pathString) } }
-    into("tvBro") { from(rootProject.files("NOTICE", "LICENSE", "docs/INSTALL.md", "docs/THIRD_PARTY.md")) }
+    into("Orbit") { from(rootProject.files("NOTICE", "LICENSE", "docs/INSTALL.md", "docs/THIRD_PARTY.md")) }
     val zip = archiveFile
     doLast {
         ZipFile(zip.get().asFile).use { z ->
             val bad = z.entries().asSequence().map { it.name }.filter { libmpvName.containsMatchIn(it) }.toList()
             if (bad.isNotEmpty()) throw GradleException("libmpv must not be in the Windows zip: $bad")
-            if (z.getEntry("tvBro/tvBro.exe") == null || z.getEntry("tvBro/INSTALL.md") == null) throw GradleException("tvBro.exe or INSTALL.md missing from the zip")
+            if (z.getEntry("Orbit/Orbit.exe") == null || z.getEntry("Orbit/INSTALL.md") == null || z.getEntry("Orbit/NOTICE") == null) throw GradleException("Orbit.exe, INSTALL.md or NOTICE missing from the zip")
         }
     }
 }

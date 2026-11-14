@@ -53,11 +53,11 @@ class BackupFileTest {
     }
 
     @Test fun badFilesAreRefusedWhole() {
-        refused("not json", "not a tvBro backup")
-        refused("[1,2]", "not a tvBro backup")
+        refused("not json", "not an Orbit backup")
+        refused("[1,2]", "not an Orbit backup")
         refused("""{"format":"tvbro-web-backup","version":1}""", "web app")
         refused("""{"format":"other","version":1,"settings":{}}""", "format")
-        refused("""{"version":9,"settings":{}}""", "newer tvBro")
+        refused("""{"version":9,"settings":{}}""", "newer Orbit")
         refused("""{"version":2}""", "no settings")
         refused("""{"version":2,"settings":{"myList":"oops"}}""", "damaged")
         refused("""{"version":2,"settings":{"epgHours":0}}""", "out of range")

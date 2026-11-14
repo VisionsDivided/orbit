@@ -281,7 +281,7 @@ fun RecordingsScreen(app: AppState) {
         item {
             T("Recordings", 20, Theme.accent)
             T(RecTarget.describe(app.settings) + "   ·   change in Settings > Recording", 12, Theme.dim)
-            T("Recordings run while tvBro is open. From the guide: hold Enter (or right click) on a programme > Record / Record series.", 12, Theme.dim, maxLines = 2)
+            T("Recordings run while Orbit is open. From the guide: hold Enter (or right click) on a programme > Record / Record series.", 12, Theme.dim, maxLines = 2)
         }
         if (rules.isNotEmpty()) {
             item { Section("Series recordings") }

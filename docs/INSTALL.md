@@ -9,7 +9,7 @@ is listed in [SECURITY.md](../SECURITY.md).
 Download links that always point to the newest version:
 
 - Android APK: https://github.com/kmmarin/tvBro/releases/latest/download/tvbro.apk
-- Windows: https://github.com/kmmarin/tvBro/releases/latest/download/tvbro-windows-x64.zip
+- Windows: https://github.com/kmmarin/tvBro/releases/latest/download/orbit-windows-x64.zip
 - Raspberry Pi / Linux arm64: https://github.com/kmmarin/tvBro/releases/latest/download/tvbro-linux-arm64.tar.gz
 
 After installing, open tvBro and add your source: **Settings > Playlists > Add** (Xtream login or
@@ -101,13 +101,13 @@ is accepted. F-Droid builds would be signed by F-Droid and updated by the F-Droi
 
 ## Windows 10 / 11 (x64)
 
-1. Download `tvbro-windows-x64.zip` from the latest release and unzip it, for example to
-   `Documents\tvBro`.
-2. tvBro plays video with **libmpv**, which is not included (it is licensed differently, see
+1. Download `orbit-windows-x64.zip` from the latest release and unzip it, for example to
+   `Documents\Orbit`.
+2. Orbit plays video with **libmpv**, which is not included (it is licensed differently, see
    [THIRD_PARTY.md](THIRD_PARTY.md)). Download `mpv-dev-x86_64-<date>-git-<hash>.7z` from
    https://github.com/shinchiro/mpv-winbuild-cmake/releases, open it with 7-Zip and copy
-   **`libmpv-2.dll`** into the unzipped `tvBro` folder, next to `tvBro.exe`.
-3. Run `tvBro.exe`. Windows SmartScreen may warn about an unknown publisher: More info > Run anyway.
+   **`libmpv-2.dll`** into the unzipped `Orbit` folder, next to `Orbit.exe`.
+3. Run `Orbit.exe`. Windows SmartScreen may warn about an unknown publisher: More info > Run anyway.
 4. Keys: arrows move, Enter selects, Esc goes back, F11 full screen.
 
 ## Raspberry Pi 4 / 5 and other Linux arm64

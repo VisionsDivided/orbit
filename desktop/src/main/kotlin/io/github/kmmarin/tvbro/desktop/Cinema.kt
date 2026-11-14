@@ -202,7 +202,7 @@ fun TopBar(app: AppState) {
             if (app.busy) Text2(app.status.take(40), 12, O5.muted)
             Box(Modifier.tvItem(requester = if (app.tab == Tab.SEARCH) app.railFr else null) { app.detail = null; app.tab = Tab.SEARCH }.padding(6.dp)) { SearchGlyph(20.dp, app.tab == Tab.SEARCH) }
             Text2(TimeFmt.time(app.now), 20, Color.White, FontWeight.Light)
-            val name = if (o.linked) o.saved.profile else "tvBro"
+            val name = if (o.linked) o.saved.profile else "Orbit"
             Box(Modifier.tvItem(onClick = { profileMenu(app) }).padding(3.dp)) {
                 // in Settings the avatar gets the double ring (§4): 3 px of background, then white
                 Box(Modifier.size(42.dp).then(if (inSettings) Modifier.border(2.dp, Color.White, CircleShape).padding(2.dp).border(3.dp, O5.bg, CircleShape).padding(3.dp) else Modifier.padding(3.dp))) {
@@ -232,7 +232,7 @@ fun profileMenu(app: AppState) {
     items += "Settings" to { app.openSettings(SetCat.PROFILES) }
     if (o.linked) items += "Sign out of Orbit" to { app.openSettings(SetCat.SOURCES) }
     else items += "Sign in to Orbit…" to { app.openSettings(SetCat.SOURCES) }
-    app.menu = MenuState(if (o.linked) "${o.saved.profile} · ${o.saved.account}" else "tvBro (not signed in to Orbit)", items)
+    app.menu = MenuState(if (o.linked) "${o.saved.profile} · ${o.saved.account}" else "Orbit (not signed in)", items)
 }
 
 /** A sub-menu pill (§5): white when active, translucent with a thin ring otherwise. */
