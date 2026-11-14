@@ -75,6 +75,13 @@ class Progress(unittest.TestCase):
         self.wait_recompute()
         self.assertTrue(PR.shows_state(self.store)["shows"][0]["finished"])
 
+    def test_an_episode_keeps_its_show(self):
+        now = time.time() * 1000
+        PR.push_episodes(self.store, [{"seriesId": "7", "epId": "101", "secs": 100, "dur": 2400, "at": now - 5000}])
+        PR.push_episodes(self.store, [{"seriesId": "8", "epId": "101", "secs": 200, "dur": 2400, "at": now}])
+        ep = PR.shows_state(self.store)["episodes"][0]
+        self.assertEqual((ep["seriesId"], ep["secs"]), ("7", 200))
+
     def test_bad_input(self):
         for items in ("x", [1], [{"seriesId": "", "epId": "1"}], [{"seriesId": "7", "epId": "1", "secs": -5}],
                       [{"seriesId": "7", "epId": "1", "secs": "a lot"}], [{}] * (PR.MAX_ITEMS + 1)):

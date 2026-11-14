@@ -16,6 +16,20 @@ from tvbro_server import series as SER
 from .accounts import ApiError
 
 MAX_ITEMS = 500
+_workers: dict = {}                       # id(store) -> the one recompute thread running for it
+_workers_lock = threading.Lock()
+
+
+def _recompute_later(store):
+    """At most one background recompute per store at a time (a push while one runs is picked up by it: it reads
+    every stale show when it starts, and the next push starts a new one if needed)."""
+    with _workers_lock:
+        t = _workers.get(id(store))
+        if t is not None and t.is_alive():
+            return
+        t = threading.Thread(target=store.recompute_stale, name="orbit-series-recompute", daemon=True)
+        _workers[id(store)] = t
+    t.start()
 
 
 def _ms(t) -> int:
@@ -72,24 +86,38 @@ def push_episodes(store, items, now=time.time) -> dict:
                       str(it.get("name") or "")[:200] or None, str(it.get("poster") or "")[:500] or None))
     applied, touched = 0, {}
     with store._lock:
-        for sid, ep, secs, dur, done, at, name, poster in clean:
-            old = store.db.execute("SELECT at, season, num, series_id FROM episodes WHERE id=?", (ep,)).fetchone()
-            if old and float(old[0] or 0) >= at - 1e-3:
-                continue
-            store.db.execute("INSERT OR REPLACE INTO episodes(id, series_id, season, num, secs, dur, done, at) VALUES (?,?,?,?,?,?,?,?)",
-                             (ep, sid, old[1] if old else None, old[2] if old else None, dur if done and dur else secs, dur,
-                              1 if done else 0, at))
-            applied += 1
-            t = touched.get(sid)
-            if t is None or at > t[1]:
-                touched[sid] = (ep, at, name or (t[2] if t else None), poster or (t[3] if t else None))
-        for sid, (ep, at, name, poster) in touched.items():
-            store.db.execute(
-                "INSERT INTO series(id, name, poster, skey, last_ep, watched_at, updated, stale) VALUES (?,?,?,?,?,?,?,1) "
-                "ON CONFLICT(id) DO UPDATE SET name=coalesce(excluded.name, series.name), poster=coalesce(excluded.poster, series.poster), "
-                "last_ep=CASE WHEN excluded.watched_at >= series.watched_at THEN excluded.last_ep ELSE series.last_ep END, "
-                "watched_at=max(series.watched_at, excluded.watched_at), hidden=0, stale=1",
-                (sid, name, poster, SER._series_key(sid), ep, at, now()))
+        store.db.execute("BEGIN IMMEDIATE")        # one commit for the whole batch, not one per episode
+        try:
+            touched, applied = _apply(store, clean, now)
+            store.db.execute("COMMIT")
+        except Exception:
+            store.db.execute("ROLLBACK")
+            raise
     if touched:
-        threading.Thread(target=store.recompute_stale, name="orbit-series-recompute", daemon=True).start()
+        _recompute_later(store)
     return {"applied": applied, "shows": len(touched)}
+
+
+def _apply(store, clean, now):
+    applied, touched = 0, {}
+    for sid, ep, secs, dur, done, at, name, poster in clean:
+        old = store.db.execute("SELECT at, season, num, series_id FROM episodes WHERE id=?", (ep,)).fetchone()
+        if old and float(old[0] or 0) >= at - 1e-3:
+            continue
+        if old and old[3] and old[3] != sid:
+            sid = old[3]                       # an episode keeps the show it belongs to (no silent moves)
+        store.db.execute("INSERT OR REPLACE INTO episodes(id, series_id, season, num, secs, dur, done, at) VALUES (?,?,?,?,?,?,?,?)",
+                         (ep, sid, old[1] if old else None, old[2] if old else None, dur if done and dur else secs, dur,
+                          1 if done else 0, at))
+        applied += 1
+        t = touched.get(sid)
+        if t is None or at > t[1]:
+            touched[sid] = (ep, at, name or (t[2] if t else None), poster or (t[3] if t else None))
+    for sid, (ep, at, name, poster) in touched.items():
+        store.db.execute(
+            "INSERT INTO series(id, name, poster, skey, last_ep, watched_at, updated, stale) VALUES (?,?,?,?,?,?,?,1) "
+            "ON CONFLICT(id) DO UPDATE SET name=coalesce(excluded.name, series.name), poster=coalesce(excluded.poster, series.poster), "
+            "last_ep=CASE WHEN excluded.watched_at >= series.watched_at THEN excluded.last_ep ELSE series.last_ep END, "
+            "watched_at=max(series.watched_at, excluded.watched_at), hidden=0, stale=1",
+            (sid, name, poster, SER._series_key(sid), ep, at, now()))
+    return touched, applied
