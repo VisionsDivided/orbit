@@ -95,7 +95,9 @@ class EpgDb(Readers):
         rows = self._conn().execute(
             "SELECT key, start, stop, title, descr, sub, ep FROM prog WHERE key=? AND stop>? AND start<? ORDER BY start",
             (key, frm, to)).fetchall()
-        return [P.Programme(*r) for r in rows]
+        # providers send overlapping entries: every reader (guide, now / next, recordings, search) gets them
+        # normalised, so clients never draw two titles over each other
+        return P.normalize_programmes([P.Programme(*r) for r in rows])
 
     def guide_channels(self, sid: str, q: str = "", limit: int = 60) -> Optional[list[dict]]:
         """Guide channels (XMLTV ids + names), filtered by q (every word, in the id or name). None when
