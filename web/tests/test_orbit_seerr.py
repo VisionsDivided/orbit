@@ -295,6 +295,33 @@ class Discover(unittest.TestCase):
         self.assertEqual(self.call(self.owner, "POST", "/v1/discover/settings", {"remove": True})[1], {"configured": False})
         self.assertFalse(self.cfg.configured())
 
+    def test_settings_test_only_saves_nothing(self):
+        """"Test connection" in Settings > Requests: the same checks as saving, but nothing is stored."""
+        # members may not probe either
+        self.assertEqual(self.call(self.sam, "POST", "/v1/discover/settings",
+                                   {"baseUrl": self.seerr.base, "apiKey": KEY, "test": True})[0], 403)
+        code, j = self.call(self.owner, "POST", "/v1/discover/settings",
+                            {"baseUrl": self.seerr.base + "/", "apiKey": KEY, "test": True})
+        self.assertEqual(code, 200, j)
+        self.assertEqual(j, {"ok": True, "baseUrl": self.seerr.base, "version": "2.0.0"})
+        self.assertTrue(self.seerr.last("GET", "/api/v1/auth/me"), "the key was checked")
+        self.assertFalse(self.cfg.configured())
+        self.assertFalse(os.path.exists(os.path.join(self.d, "seerr.enc")))
+        self.assertEqual(self.cfg.private_hosts(), set(), "the household LAN allowlist is unchanged")
+        # a wrong key and an unreachable address answer like saving does
+        self.assertEqual(self.call(self.owner, "POST", "/v1/discover/settings",
+                                   {"baseUrl": self.seerr.base, "apiKey": "wrong-key-123456", "test": True})[0], 400)
+        self.seerr.down = True
+        self.assertEqual(self.call(self.owner, "POST", "/v1/discover/settings",
+                                   {"baseUrl": self.seerr.base, "apiKey": KEY, "test": True})[0], 502)
+        self.seerr.down = False
+        # testing while connected leaves the saved connection alone
+        self.configure()
+        self.call(self.owner, "POST", "/v1/discover/settings",
+                  {"baseUrl": "http://seerr-other.example.com:5055", "apiKey": "other-key-1234567", "test": True})
+        self.assertEqual(self.cfg.get()["baseUrl"], self.seerr.base)
+        self.assertEqual(self.cfg.get()["apiKey"], KEY)
+
     def test_request_list_title_lookups(self):
         """Review P4: GET /v1/requests looks up each request's title. Measured against the mock with 9 requests for
         6 different titles (one of them unknown to Seerr, asked for twice) and 0.2 s per title answer:

@@ -498,12 +498,14 @@ class Discover:
                 raise ApiError(502, f"Seerr: {e.msg}" if e.code else e.msg)
         if not isinstance(me, dict) or not S._int(me.get("id")):
             raise ApiError(502, "this address does not answer like Seerr")
+        version = S._text(st.get("version"), 40) if isinstance(st, dict) else ""
+        if b.get("test") is True:                            # "Test connection": the same checks, nothing saved
+            return Reply({"ok": True, "baseUrl": base, "version": version})
         self.cfg.set_server(base, key)
         self.cache.clear()
         self._reach, self._down_until = (0.0, None), 0.0
         LOG.warning("Seerr settings changed by account %s (server %s)", c.sess["account_id"], base)
-        return Reply({"configured": True, "baseUrl": base, "keySet": True,
-                      "version": S._text(st.get("version"), 40) if isinstance(st, dict) else ""})
+        return Reply({"configured": True, "baseUrl": base, "keySet": True, "version": version})
 
     def _seerr_users(self, cl: S.SeerrClient) -> list:
         try:
