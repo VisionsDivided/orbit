@@ -39,8 +39,10 @@ class Reply:
 class Api:
     def __init__(self, accounts: Accounts, pairings: Optional[Pairings] = None,
                  playlists: Optional[Callable[[], list]] = None,
-                 stores: Optional[Callable[[dict], tuple]] = None):
+                 stores: Optional[Callable[[dict], tuple]] = None,
+                 streams: Optional[Callable[[], dict]] = None):
         self.acc = accounts
+        self.streams = streams or (lambda: {"max": 1, "count": 0, "active": []})   # tvBro's StreamRegistry.status()
         self.stores = stores                              # (StateStore, SeriesStore) of a session's profile
         self.pair = pairings or Pairings(accounts)
         self.playlists = playlists or (lambda: [])      # the household's enabled playlists, with their logins
@@ -64,6 +66,7 @@ class Api:
             ("POST", "/v1/accounts/disable"): lambda c: Reply(A.set_disabled(c.sess, c.body.get("id"),
                                                                             c.body.get("disabled"))),
             ("GET", "/v1/device/playlists"): self._device_playlists,
+            ("GET", "/v1/streams"): lambda c: Reply(self.streams()),
             ("GET", "/v1/progress/shows"): lambda c: Reply(PROG.shows_state(self._series(c))),
             ("POST", "/v1/progress/episodes"): lambda c: Reply(PROG.push_episodes(self._series(c), c.body.get("items"))),
             ("POST", "/v1/pair/start"): lambda c: Reply(PR.start(c.body.get("device"), c.client)),

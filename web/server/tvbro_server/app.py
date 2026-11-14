@@ -1009,7 +1009,8 @@ class App:
         self.profiles = ProfileStores(DATA_DIR, self.state, self.series, self._series_eps, self.orbit.enabled)
         self.orbit.on_setup = self.profiles.adopt_household
         self.orbit.on_profile_deleted = self.profiles.drop
-        self.v1 = V1.Api(self.orbit, playlists=self._device_playlists, stores=self.profiles.for_session)
+        self.v1 = V1.Api(self.orbit, playlists=self._device_playlists, stores=self.profiles.for_session,
+                         streams=lambda: self.streams.status())
         NET.set_allow_private(lambda: bool(self.settings.get("allowLanSources")))
         self.parental = Parental(os.path.join(DATA_DIR, "parental.json"), self.sign_key)
         self._siv = None

@@ -200,6 +200,17 @@ class Server(unittest.TestCase):
         self.assertEqual((code, r["applied"]), (200, 1))
         self.assertEqual(self.req("GET", "/v1/progress/shows", headers=auth(tvs))[2]["episodes"][0]["secs"], 120)
 
+        # one stream count for TVs and browsers (tvBro's StreamRegistry): the TV checks, starts, keeps it alive
+        st = self.req("GET", "/v1/streams", headers=auth(tvs))[2]
+        self.assertEqual((st["max"], st["count"]), (1, 0))
+        tv_sid = "tv" + "a" * 30
+        self.assertEqual(self.req("POST", "/api/stream/start", {"sid": tv_sid, "label": "Living room TV", "what": "News"}, auth(tvs))[2]["ok"], True)
+        st = self.req("GET", "/v1/streams", headers=auth(tvs))[2]
+        self.assertEqual((st["count"], st["active"][0]["label"], st["active"][0]["what"]), (1, "Living room TV", "News"))
+        # another device takes the only slot: the TV's next heartbeat says it was stopped
+        self.req("POST", "/api/stream/start", {"sid": "web" + "b" * 29, "label": "Chrome", "what": "Film"}, auth(alex))
+        self.assertIn("stopped", self.req("POST", "/api/stream/heartbeat", {"sid": tv_sid}, auth(tvs))[2])
+
         # and it can be signed out from Alex's devices list
         dev = next(s for s in self.req("GET", "/v1/sessions", headers=auth(alex))[2]["sessions"] if s["device"] == "Living room TV")
         self.assertEqual(self.req("POST", "/v1/sessions/revoke", {"id": dev["id"]}, auth(alex))[0], 200)
