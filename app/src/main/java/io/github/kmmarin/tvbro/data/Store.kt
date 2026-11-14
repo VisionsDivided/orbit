@@ -82,6 +82,11 @@ class Store(private val ctx: Context) {
     var startLast: Boolean
         get() = sp.getBoolean("startLast", true)
         set(v) = sp.edit { putBoolean("startLast", v) }
+    /** Orbit: live channels as HLS (.m3u8) instead of MPEG-TS (.ts); off by default. */
+    var liveHls: Boolean
+        get() = sp.getBoolean("liveHls", false)
+        set(v) = sp.edit { putBoolean("liveHls", v) }
+
     var bufferSec: Int
         get() = sp.getInt("bufferSec", 15)
         set(v) = sp.edit { putInt("bufferSec", v) }

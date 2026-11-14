@@ -68,6 +68,9 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
     var epgShiftMin by mutableIntStateOf(store.epgShiftMin)
     var startLast by mutableStateOf(store.startLast); private set
     var bufferSec by mutableIntStateOf(store.bufferSec)
+    /** Orbit: live channels as HLS instead of MPEG-TS (some providers deliver HLS far more steadily). */
+    var liveHls by mutableStateOf(store.liveHls.also { io.github.kmmarin.tvbro.ui.LivePlayer.preferHls = it }); private set
+    fun changeLiveHls(on: Boolean) { liveHls = on; store.liveHls = on; io.github.kmmarin.tvbro.ui.LivePlayer.preferHls = on }
     var external by mutableStateOf(store.external); private set
     var previewOn by mutableStateOf(store.previewOn); private set
     var previewMuted by mutableStateOf(store.previewMuted); private set

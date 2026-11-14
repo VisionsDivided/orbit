@@ -40,6 +40,8 @@ object LivePlayer {
     var users = 0
     /** Players built so far in this process (the debug log shows it: more than one live stream must never exist). */
     var built = 0
+    /** Orbit: play Xtream live channels as HLS instead of MPEG-TS (Settings > Playback > Live stream format). */
+    @Volatile var preferHls = false
 }
 
 /** Live connections open right now (the live player's data sources between open and close). */
@@ -79,7 +81,8 @@ suspend fun liveLoad(exo: ExoPlayer, url: String, label: String = "") {
         exo.stop()
         kotlinx.coroutines.withTimeoutOrNull(3000) { while (LiveConns.open > 0) kotlinx.coroutines.delay(20) }
     }
-    exo.setMediaItem(androidx.media3.common.MediaItem.fromUri(url)); exo.prepare(); exo.playWhenReady = true
+    val playUrl = if (LivePlayer.preferHls) io.github.kmmarin.tvbro.data.LiveFormat.toHls(url) else url
+    exo.setMediaItem(androidx.media3.common.MediaItem.fromUri(playUrl)); exo.prepare(); exo.playWhenReady = true
 }
 
 /** The one live-TV player, shared by full screen and the TV preview (and by every activity instance). */

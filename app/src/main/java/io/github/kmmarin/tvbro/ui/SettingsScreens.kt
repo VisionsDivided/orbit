@@ -216,6 +216,7 @@ private fun LazyListScope.playback(m: AppModel) {
         SettingRow("Default audio delay (per channel override in the player bar)", "%+d ms".format(v),
             { v = (v - 50).coerceAtLeast(-1000); m.store.audioDelayDefault = v }, { v = (v + 50).coerceAtMost(1000); m.store.audioDelayDefault = v }) { v = 0; m.store.audioDelayDefault = 0 }
     }
+    item { SettingRow("Live stream format", if (m.liveHls) "HLS (.m3u8): steadier with some providers" else "MPEG-TS (.ts, default)") { m.changeLiveHls(!m.liveHls) } }   // Orbit
     item { SettingRow("Maximum simultaneous streams", "${m.maxStreams}", { m.changeMaxStreams(m.maxStreams - 1) }, { m.changeMaxStreams(m.maxStreams + 1) }) { m.changeMaxStreams(m.maxStreams % 3 + 1) } }
     note("Keep this at or below what your provider account allows. A running recording holds one stream: with the limit reached the live preview stays off and tvBro warns before playing another channel.")
     item { SettingRow("Autoplay next episode", if (m.autoplayNext) "On (Up next card, 10 s countdown)" else "Off") { m.changeAutoplayNext(!m.autoplayNext) } }
