@@ -34,6 +34,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -59,7 +60,8 @@ enum class NavTab(val label: String) { HOME("Home"), MOVIES("Movies"), SHOWS("Sh
  * right. 120 px high, no background (the page's top scrim keeps it legible).
  *
  * Focus: entering the bar (Up from the page) lands on the active item ([currentFocus]); Down runs [onDown] (the shell
- * focuses the item the user was on in the page) and, when that returns false, moves to the nearest item below. Items are not
+ * moves focus into the page, checking `stillInBar` after each try) and, when focus is still in the bar, moves to the
+ * nearest item below. Items are not
  * remembered as places in the page ([LocalInRail]).
  */
 @OptIn(ExperimentalComposeUiApi::class)
@@ -67,13 +69,21 @@ enum class NavTab(val label: String) { HOME("Home"), MOVIES("Movies"), SHOWS("Sh
 fun TopBar(
     active: NavTab?, onTab: (NavTab) -> Unit, onSearch: () -> Unit, onAvatar: () -> Unit,
     profileName: String, currentFocus: SafeFocus, modifier: Modifier = Modifier,
-    searchActive: Boolean = false, settingsActive: Boolean = false, onDown: () -> Boolean = { false },
+    searchActive: Boolean = false, settingsActive: Boolean = false, onDown: (stillInBar: () -> Boolean) -> Unit = {},
 ) {
+    // whether focus is still in the bar: a focus request cannot report failure, so Down checks where focus went
+    val inBar = remember { booleanArrayOf(false) }
     CompositionLocalProvider(LocalInRail provides true) {
         Row(
             modifier.fillMaxWidth().height(O5Space.TopBar).padding(horizontal = O5Space.Side)
-                // Down: straight back to the page item (a focusProperties exit redirect did not move focus there)
-                .onPreviewKeyEvent { e -> e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown && onDown() }
+                // Down: into the page by the shell's rules (a focusProperties exit redirect did not move focus there);
+                // when focus is still in the bar after that, the normal search for the nearest item below
+                .onPreviewKeyEvent { e ->
+                    if (e.type != KeyEventType.KeyDown || e.key != Key.DirectionDown) return@onPreviewKeyEvent false
+                    onDown { inBar[0] }
+                    !inBar[0]
+                }
+                .onFocusChanged { inBar[0] = it.hasFocus }
                 .focusProperties {
                     enter = { currentFocus.target() }
                     exit = { d -> if (d == FocusDirection.Up) FocusRequester.Cancel else FocusRequester.Default }

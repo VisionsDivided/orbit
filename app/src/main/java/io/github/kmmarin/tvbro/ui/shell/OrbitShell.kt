@@ -8,6 +8,8 @@ import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -18,6 +20,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.runtime.CompositionLocalProvider
+import io.github.kmmarin.tvbro.ui.orbit5.LocalShellEntry
+import io.github.kmmarin.tvbro.ui.orbit5.ShellEntry
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
@@ -117,24 +124,67 @@ fun ShellFrame(
 ) {
     val barFocus = remember { SafeFocus() }
     val scope = rememberCoroutineScope()
-    val fm = LocalFocusManager.current
+    val entry = remember { ShellEntry() }
+    val sectionFr = remember { FocusRequester() }
+    val sectionFocused = remember { booleanArrayOf(false) }
     Box(Modifier.fillMaxSize().background(O5.Bg)) {
         // the section; leaving it upwards always lands on the top bar's current item (not the nearest one)
-        Box(
-            Modifier.fillMaxSize()
-                .focusProperties { exit = { d -> if (d == FocusDirection.Up) barFocus.target() else FocusRequester.Default } }
-                .focusGroup().testTag("section"),
-            content = section,
-        )
-        // OK on an item: its section opens and focus moves into it once it is there
-        val enter: () -> Unit = { scope.launch { delay(300); runCatching { fm.moveFocus(FocusDirection.Down) } } }
+        CompositionLocalProvider(LocalShellEntry provides entry) {
+            Box(
+                Modifier.fillMaxSize()
+                    .onFocusChanged { sectionFocused[0] = it.hasFocus }
+                    .focusRequester(sectionFr)
+                    .focusProperties { exit = { d -> if (d == FocusDirection.Up) barFocus.target() else FocusRequester.Default } }
+                    .focusGroup().testTag("section"),
+                content = section,
+            )
+        }
+        // the focus rescue (MainActivity) moves into the page this way instead of to the first item, the top bar
+        androidx.compose.runtime.DisposableEffect(entry) {
+            val f = { enterSection(entry, sectionFr) { !sectionFocused[0] } }
+            ShellFocus.enter = f
+            onDispose { if (ShellFocus.enter === f) ShellFocus.enter = null }
+        }
+        // OK on an item: its section opens and focus moves into it once it is there (pages load their rows a moment
+        // later, so a few tries)
+        val enter: () -> Unit = {
+            scope.launch {
+                repeat(12) { delay(if (it == 0) 300 else 150); if (sectionFocused[0] || enterSection(entry, sectionFr) { !sectionFocused[0] }) return@launch }
+            }
+        }
         TopBar(
             active = active, onTab = { t -> onTab(t); enter() }, onSearch = { onSearch(); enter() }, onAvatar = onAvatar,
             profileName = profileName, currentFocus = barFocus, searchActive = searchActive, settingsActive = settingsActive,
-            onDown = { FocusMemory.restoreContent() },
+            onDown = { stillInBar -> enterSection(entry, sectionFr, stillInBar) },
         )
-        if (legend) ColorKeyLegend(Modifier.align(Alignment.BottomStart).padding(start = O5Space.Side, bottom = 28.dp))
+        if (legend && io.github.kmmarin.tvbro.ui.orbit5.ColorKeys.labels.isNotEmpty()) {
+            // a footer the page scrolls under: the next row's heading fades out instead of showing through the legend
+            Box(
+                Modifier.align(Alignment.BottomStart).fillMaxWidth().height(LegendFooter)
+                    .background(androidx.compose.ui.graphics.Brush.verticalGradient(0f to O5.Bg.copy(alpha = 0f), 0.2f to O5.Bg.copy(alpha = 0.95f), 1f to O5.Bg.copy(alpha = 0.97f)))
+                    .testTag("legend-footer"),
+            )
+            ColorKeyLegend(Modifier.align(Alignment.BottomStart).padding(start = O5Space.Side, bottom = 28.dp))
+        }
     }
+}
+
+/**
+ * Moves focus from the top bar into the page: the item last focused there, else the page's registered way in (the
+ * sub-menu's active pill, then the hero's primary button: [ShellEntry]), else its first focusable item. A focus
+ * request cannot report failure, so each try is checked with [notThereYet]. True when focus is in the page.
+ */
+/** Height of the footer band behind the colour-key legend; pages keep their last focusable content above it. */
+val LegendFooter = 108.dp
+
+/** The shell on screen: moves focus into its page (true when it got there); null when no shell is shown. */
+object ShellFocus { var enter: (() -> Boolean)? = null }
+
+internal fun enterSection(entry: ShellEntry, sectionFr: FocusRequester, notThereYet: () -> Boolean): Boolean {
+    if (FocusMemory.restoreContent() && !notThereYet()) return true
+    for (t in entry.targets()) if (t.request() && !notThereYet()) return true
+    runCatching { sectionFr.requestFocus() }
+    return !notThereYet()
 }
 
 /**

@@ -43,8 +43,12 @@ fun O5Button(
     focus: SafeFocus? = null, onFocus: (() -> Unit)? = null, onClick: () -> Unit,
 ) {
     val fg = if (primary) O5.Bg else Color.White
+    // a primary button (the hero's Play) is a way into the page from the top bar
+    val own = androidx.compose.runtime.remember { SafeFocus() }
+    val f = focus ?: if (primary) own else null
+    if (primary) RegisterShellEntry(f!!, ShellEntry.HERO)
     Row(
-        modifier.o5Focus(O5Shape.Button, 12.dp, focus = focus, onFocus = onFocus, onClick = onClick)
+        modifier.o5Focus(O5Shape.Button, 12.dp, focus = f, onFocus = onFocus, onClick = onClick)
             .background(if (primary) Color.White else O5.SecondaryButton, O5Shape.Button)
             .padding(horizontal = if (compact) 36.dp else 40.dp, vertical = if (compact) 18.dp else 20.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp),

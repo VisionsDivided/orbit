@@ -55,9 +55,18 @@ still full-screen legacy screens.
 
 - **Up** from the top of a section lands on the top bar's **current** item, not the nearest one. This is the section
   group's `exit`. Sections don't have to do anything, but must not swallow Up at their top edge.
-- **Down** from the bar returns to the item last focused in the page (`FocusMemory.restoreContent()`). Any item
-  using `o5Focus` or the legacy `tvFocus` takes part. Items inside the bar don't count (`LocalInRail`).
-- **OK** on a tab opens its section (`openTab`), then focus moves down into it after 300 ms.
+- **Down** from the bar (`enterSection` in OrbitShell.kt) tries these in order:
+  1. The item last focused in the page (`FocusMemory.restoreContent()`). Any `o5Focus` or `tvFocus` item counts;
+     items in the bar don't (`LocalInRail`).
+  2. The page's registered ways in (`ShellEntry`): first the sub-menu's active pill, then a primary `O5Button` such
+     as the hero's Play. Both register themselves; other items can call `RegisterShellEntry`.
+  3. The page's first focusable item.
+
+  A focus request cannot report failure, so each step checks that focus really left the bar. If it is still there,
+  the normal search for the nearest item below runs. The focus rescue in MainActivity takes the same path
+  (`ShellFocus.enter`) before falling back to the first item anywhere.
+- **OK** on a tab opens its section (`openTab`). Focus then moves into it by the same rules, retried for about 2 s
+  while the page loads.
 - **Back**: from any section to Home. On Home with focus in the rows, Back goes up to the hero; on the hero it
   leaves the app. Screens that open on top (detail, guide, player) still handle Back themselves.
 - Use `SafeFocus` + `o5Focus(focus = …)` for items the screen requests focus on, never a bare `FocusRequester` on a
@@ -75,7 +84,9 @@ ColorKeyActions(
 Call it in the screen's composition; the lambdas may read the focused item. The newest registration wins, and it
 is removed when the screen leaves. MainActivity hands `KEYCODE_PROG_RED / GREEN / YELLOW / BLUE` to
 `ColorKeys.dispatch` (not while a menu, dialog or stream prompt is open). A key with no action keeps its old meaning
-(yellow toggles My list for the focused item). Inside the shell the legend is drawn at bottom left automatically.
+(yellow toggles My list for the focused item). Inside the shell the legend is drawn at bottom left automatically. It sits on a footer band
+(`LegendFooter`, 108 px, fading to the background) that the page scrolls under, so a peeking row heading doesn't
+show through. Keep focusable content and captions above y ≈ 970.
 Full-screen screens (guide, player) place `ColorKeyLegend(hints = listOf("OK" to "Watch"))` themselves. Don't show
 a legend on Who's watching.
 

@@ -105,7 +105,7 @@ fun ColorKeyLegend(modifier: Modifier = Modifier, hints: List<Pair<String, Strin
     val labels = ColorKeys.labels
     if (labels.isEmpty() && hints.isEmpty()) return
     Row(
-        modifier.background(O5.ScrimPanel, O5Shape.Pill).border(1.dp, Color(0x1AFFFFFF), O5Shape.Pill).padding(horizontal = 26.dp, vertical = 11.dp),
+        modifier.background(O5.LegendPanel, O5Shape.Pill).border(1.dp, Color(0x1AFFFFFF), O5Shape.Pill).padding(horizontal = 26.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(30.dp),
     ) {
         for (k in ColorKey.values()) {

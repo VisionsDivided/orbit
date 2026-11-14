@@ -165,7 +165,7 @@ class DesignShotsTest {
                     O5Button("Play", icon = Icons.Filled.PlayArrow, primary = true) {}
                     O5Button("More info", icon = Icons.Filled.Info) {}
                 }
-                O5Row("Continue watching · films and shows", Modifier.padding(top = 650.dp)) {
+                O5Row("Continue watching · films and shows", Modifier.padding(top = 630.dp)) {
                     items(listOf("Fathom Station" to "S2 E4 · Ballast", "Wildglass" to "1h 02m left", "The Quiet Bureau" to "S1 E6", "Glass Harbor" to "41 min left", "Low Tide Republic" to "S1 E2")) { (t, m) ->
                         LandscapeCard(null, CardInfo(t, m, progress = 0.45f)) {}
                     }
@@ -459,6 +459,14 @@ class DesignShotsTest {
                 SettingsFrame(0, {}, preview = { PickerPreview(PickerStyle.ORBIT, listOf("Dani", "Maya", "Leo", "Guest")) }) {
                     profileRows(PickerStyle.ORBIT, {}, true, {}, linked = true, current = "Dani", onSwitch = {}, onLink = {})
                 }
+            }
+        }
+    }
+
+    @Test fun settingsAbout() = shot("settings-about") {
+        OrbitCanvas {
+            ShellFrame(active = null, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani", settingsActive = true, legend = false) {
+                SettingsFrame(6, {}) { io.github.kmmarin.tvbro.ui.aboutForTest(this) }
             }
         }
     }

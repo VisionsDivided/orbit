@@ -66,6 +66,7 @@ fun SubMenuRow(
 ) {
     if (io.github.kmmarin.tvbro.ui.shell.LocalIsPhone.current) { PhoneSubMenu(tabs, selected, onSelect, modifier); return }
     val sel = remember { SafeFocus() }
+    RegisterShellEntry(sel, ShellEntry.SUB_MENU)   // Down from the top bar on a first visit lands here
     val wide = browse != null && selected == browseTab
     Row(
         modifier.then(if (wide) Modifier.fillMaxWidth() else Modifier).padding(start = O5Space.Side, end = O5Space.Side)
