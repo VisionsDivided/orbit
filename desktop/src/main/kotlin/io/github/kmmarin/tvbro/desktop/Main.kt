@@ -84,7 +84,7 @@ fun main(args: Array<String>) {
         val ws = rememberWindowState(size = androidx.compose.ui.unit.DpSize(1280.dp, 760.dp))
         LaunchedEffect(app.fullscreen) { ws.placement = if (app.fullscreen) WindowPlacement.Fullscreen else WindowPlacement.Floating }
         // An arrow or Enter that reached no focused item (the focused one went away): focus returns where it was.
-        Window(onCloseRequest = { app.shutdown(); exitApplication() }, state = ws, title = "tvBro", icon = AppIcon, onKeyEvent = { e ->
+        Window(onCloseRequest = { app.shutdown(); exitApplication() }, state = ws, title = "Orbit", icon = AppIcon, onKeyEvent = { e ->
             if (e.type != KeyEventType.KeyDown || app.videoSetup || app.homeHasFocus || app.full || app.overlayOpen) false
             else if (e.key in listOf(Key.DirectionUp, Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight, Key.Enter)) { app.refocus(); true }
             else false

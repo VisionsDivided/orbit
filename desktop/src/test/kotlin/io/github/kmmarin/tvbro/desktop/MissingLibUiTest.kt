@@ -18,13 +18,13 @@ class MissingLibUiTest {
         val calls = mutableListOf<String>()
         var note = ""
         rule.setContent {
-            MissingLibScreen(Os.WINDOWS, "C:\\Apps\\tvBro", "libmpv-2.dll was not found next to tvBro.exe or on PATH", note,
+            MissingLibScreen(Os.WINDOWS, "C:\\Apps\\Orbit", "libmpv-2.dll was not found next to Orbit.exe or on PATH", note,
                 onChoose = { calls += "choose" }, onRetry = { calls += "retry" }, onDocs = { calls += "docs" }, onSkip = { calls += "skip" })
         }
         rule.onNodeWithText("Video library missing").assertExists()
         rule.onNodeWithText("libmpv-2.dll was not found", substring = true).assertExists()
         rule.onNodeWithText("lgpl", substring = true).assertExists()
-        rule.onNodeWithText("next to tvBro.exe (in C:\\Apps\\tvBro)", substring = true).assertExists()
+        rule.onNodeWithText("next to Orbit.exe (in C:\\Apps\\Orbit)", substring = true).assertExists()
         rule.onNodeWithText("never downloads", substring = true).assertExists()
         rule.onNodeWithText("Installation guide:", substring = true).assertExists()
         for (b in listOf("Choose file…", "Check again", "Open INSTALL.md", "Continue without video")) rule.onNodeWithText(b).assertExists()

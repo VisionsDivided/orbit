@@ -124,7 +124,7 @@ data class MpvLoad(val lib: MpvLib?, val error: String?, val from: String?)
 
 /**
  * Where libmpv is looked for and why it could not be loaded. tvBro does not ship libmpv (the usual Windows builds are
- * GPL): the user's own copy is used, from a file they chose, next to tvBro.exe, or wherever the OS finds it. On macOS
+ * GPL): the user's own copy is used, from a file they chose, next to Orbit.exe, or wherever the OS finds it. On macOS
  * also inside the app bundle (Contents/Frameworks, a lib/ folder) and where Homebrew and MacPorts install it.
  */
 object MpvLocate {
@@ -186,7 +186,7 @@ object MpvLocate {
             }
         }
         val none = when (os) {
-            Os.WINDOWS -> "$WIN_DLL was not found next to tvBro.exe or on PATH"
+            Os.WINDOWS -> "$WIN_DLL was not found next to Orbit.exe or on PATH"
             Os.MAC -> "libmpv was not found (macOS: brew install mpv)"
             Os.LINUX -> "libmpv was not found (Debian / Raspberry Pi OS: sudo apt install libmpv2)"
         }

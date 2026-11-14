@@ -32,15 +32,15 @@ data class Rec(
 object RecPlan {
     /** Scheduled recordings that should be running at [now]. */
     fun toStart(recs: List<Rec>, now: Long): List<Rec> = recs.filter { it.status == "scheduled" && it.startMs <= now && (it.endMs == 0L || it.endMs > now) }
-    /** Scheduled recordings whose whole slot passed while tvBro was not running. */
+    /** Scheduled recordings whose whole slot passed while Orbit was not running. */
     fun missed(recs: List<Rec>, now: Long): List<Rec> = recs.filter { it.status == "scheduled" && it.endMs in 1..now }
     /** Running recordings that reached their end. */
     fun toStop(recs: List<Rec>, now: Long): List<Rec> = recs.filter { it.status == "recording" && it.endMs in 1..now }
 
     /** After a restart nothing is running: a "recording" item keeps what it wrote (done) or failed. */
     fun recover(r: Rec, fileBytes: Long): Rec = if (r.status != "recording") r
-        else if (fileBytes > 0) r.copy(status = "done", bytes = fileBytes, note = "Stopped early: tvBro was closed")
-        else r.copy(status = "failed", note = "tvBro was closed before anything was written")
+        else if (fileBytes > 0) r.copy(status = "done", bytes = fileBytes, note = "Stopped early: Orbit was closed")
+        else r.copy(status = "failed", note = "Orbit was closed before anything was written")
 
     /** Start times of [progs] already covered by a (not failed) recording of channel [chKey]. */
     fun covered(recs: List<Rec>, chKey: String, progs: List<Programme>): Set<Long> =
@@ -164,7 +164,7 @@ class Recorder(private val app: AppState) {
     /** Starts and stops recordings on time; called every few seconds and after every change. */
     fun tick() {
         val now = System.currentTimeMillis()
-        for (r in RecPlan.missed(items, now)) update(r.id) { it.copy(status = "failed", note = "Missed: tvBro was not running") }
+        for (r in RecPlan.missed(items, now)) update(r.id) { it.copy(status = "failed", note = "Missed: Orbit was not running") }
         for (r in RecPlan.toStop(items, now)) finish(r.id, "")
         for (r in RecPlan.toStart(items, now)) start(r)
         // a recorder whose stream ended early (network drop) is restarted into a new file until the end time
@@ -259,7 +259,7 @@ class Recorder(private val app: AppState) {
         }
     }
     /** Stops every recorder (app exit); the files keep what was written. */
-    fun shutdown() { for (id in running.keys.toList()) finish(id, "Stopped early: tvBro was closed") }
+    fun shutdown() { for (id in running.keys.toList()) finish(id, "Stopped early: Orbit was closed") }
 
     /** Address mpv plays for a finished recording. */
     fun playUrl(r: Rec): String = if (r.file.startsWith("smb://")) { SmbBridge.cfg = { app.settings.smb }; SmbBridge.url(r.file) } else r.file

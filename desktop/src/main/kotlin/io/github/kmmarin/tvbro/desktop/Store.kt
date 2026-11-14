@@ -21,7 +21,12 @@ import javax.crypto.spec.SecretKeySpec
 /** Where the app keeps its files on each OS (pure, so every OS's layout is testable anywhere). */
 data class AppDirs(val config: File, val cache: File, val logs: File, val recordings: File) {
     companion object {
-        /** The folder name. Windows and macOS: "tvBro"; Linux: "tvbro" (XDG style). One place to change for a rename. */
+        /**
+         * The folder name. Windows and macOS: "tvBro"; Linux: "tvbro" (XDG style). Deliberately still "tvBro" although the app
+         * is called Orbit (Orbit.exe, Orbit.app): settings, sources, the Orbit session, secrets and recordings of existing
+         * installs live here, and the secrets key is tied to it (DPAPI file here, macOS Keychain service [MacKeychain.SERVICE]).
+         * Do not rename without migrating the old folder first (AppDirsTest pins it).
+         */
         const val NAME = "tvBro"
 
         fun of(os: Os, home: String, env: (String) -> String?): AppDirs = when (os) {

@@ -38,7 +38,7 @@ object BackupFile {
     fun export(s: Settings, rules: List<SeriesRule>, watch: WatchData, now: Long = System.currentTimeMillis()): String =
         Json2.json.encodeToString(DesktopBackup.serializer(), DesktopBackup(
             createdAt = now,
-            note = "tvBro desktop backup: favourites, resume points, reminders, settings, channel layout, locks, guide mapping, series recordings. No logins or PINs.",
+            note = "Orbit desktop backup: favourites, resume points, reminders, settings, channel layout, locks, guide mapping, series recordings. No logins or PINs.",
             settings = s.copy(lastUi = "", resume = emptyMap(), prefs = s.prefs.copy(pinHash = ""), smb = s.smb.copy(user = "", domain = "")),
             series = rules, watch = watch,
         ))
@@ -51,14 +51,14 @@ object BackupFile {
 
     /** Reads and checks a whole backup. Throws [BadBackup] (with a reason to show) when anything is wrong. */
     fun check(text: String): DesktopBackup {
-        need(text.length <= MAX_BYTES, "the file is too large for a tvBro backup")
-        val o = try { Json.parseToJsonElement(text) as? JsonObject } catch (e: Exception) { null } ?: throw BadBackup("not a tvBro backup (not a JSON object)")
+        need(text.length <= MAX_BYTES, "the file is too large for an Orbit backup")
+        val o = try { Json.parseToJsonElement(text) as? JsonObject } catch (e: Exception) { null } ?: throw BadBackup("not an Orbit backup (not a JSON object)")
         val fmt = (o["format"] as? JsonPrimitive)?.contentOrNull
-        need(fmt == null || fmt == FORMAT, if (fmt == "tvbro-web-backup") "a backup of the web app: restore it in tvBro web" else "not a tvBro desktop backup (format)")
+        need(fmt == null || fmt == FORMAT, if (fmt == "tvbro-web-backup") "a backup of the web app: restore it in Orbit web" else "not an Orbit desktop backup (format)")
         val ver = (o["version"] as? JsonPrimitive)?.intOrNull
-        need(ver != null && ver >= 1, "not a tvBro backup (version)")
-        need(ver!! <= VERSION, "made by a newer tvBro: update this one first")
-        need(o["settings"] is JsonObject, "not a tvBro backup (no settings)")
+        need(ver != null && ver >= 1, "not an Orbit backup (version)")
+        need(ver!! <= VERSION, "made by a newer Orbit: update this one first")
+        need(o["settings"] is JsonObject, "not an Orbit backup (no settings)")
         val b = try { Json2.json.decodeFromJsonElement(DesktopBackup.serializer(), o) } catch (e: Exception) {
             throw BadBackup("damaged backup (${e.message?.lineSequence()?.firstOrNull()?.take(120) ?: e.javaClass.simpleName})")
         }

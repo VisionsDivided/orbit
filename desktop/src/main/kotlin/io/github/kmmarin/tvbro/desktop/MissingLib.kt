@@ -23,10 +23,10 @@ object MissingLibText {
     const val TITLE = "Video library missing"
 
     fun intro(os: Os) = if (os == Os.WINDOWS)
-        "tvBro plays video with libmpv, a separate library that is not included in the tvBro download (the common " +
-            "Windows builds of it are GPL-licensed; tvBro is Apache-2.0). Add your own copy once and tvBro remembers it. " +
-            "tvBro never downloads it for you."
-    else "tvBro plays video with libmpv, the system's mpv library. It is not part of the tvBro download. tvBro never installs it for you."
+        "Orbit plays video with libmpv, a separate library that is not included in the Orbit download (the common " +
+            "Windows builds of it are GPL-licensed; Orbit is Apache-2.0). Add your own copy once and Orbit remembers it. " +
+            "Orbit never downloads it for you."
+    else "Orbit plays video with libmpv, the system's mpv library. It is not part of the Orbit download. Orbit never installs it for you."
 
     fun steps(os: Os, appDir: String?): List<String> = if (os == Os.WINDOWS) listOf(
         "In your web browser, open the releases page of a Windows libmpv build: github.com/zhongfly/mpv-winbuild/releases " +
@@ -36,12 +36,12 @@ object MissingLibText {
             "there is one) and ends in .7z. Not the i686 (32-bit) or aarch64 one. The \"x86_64-v3\" packages need a CPU " +
             "with AVX2; plain \"x86_64\" runs on every 64-bit PC.",
         "Open the .7z with 7-Zip and take out the one file libmpv-2.dll.",
-        "Put libmpv-2.dll next to tvBro.exe" + (appDir?.let { " (in $it)" } ?: "") + ", or in any folder you like and " +
-            "press \"Choose file…\" to point tvBro at it.",
+        "Put libmpv-2.dll next to Orbit.exe" + (appDir?.let { " (in $it)" } ?: "") + ", or in any folder you like and " +
+            "press \"Choose file…\" to point Orbit at it.",
         "Press \"Check again\".",
     ) else if (os == Os.MAC) listOf(
         "Install mpv with Homebrew (brew.sh): open Terminal and run brew install mpv. MacPorts works too: sudo port install mpv.",
-        "Press \"Check again\". tvBro looks in /opt/homebrew/lib (Apple Silicon), /usr/local/lib (Intel) and " +
+        "Press \"Check again\". Orbit looks in /opt/homebrew/lib (Apple Silicon), /usr/local/lib (Intel) and " +
             "/opt/local/lib (MacPorts); a libmpv.2.dylib elsewhere can be picked with \"Choose file…\".",
     ) else listOf(
         "Install the library: sudo apt install libmpv2 (Debian 12 / Raspberry Pi OS bookworm).",
@@ -95,7 +95,7 @@ fun MissingLibScreen(
                 Btn("Continue without video", onClick = onSkip)
             }
             val doc = MissingLibText.installDoc(appDir)
-            T("Installation guide: " + (doc?.absolutePath ?: "INSTALL.md in the tvBro folder"), 12, Theme.dim, maxLines = 2)
+            T("Installation guide: " + (doc?.absolutePath ?: "INSTALL.md in the Orbit folder"), 12, Theme.dim, maxLines = 2)
         }
     }
 }
@@ -111,6 +111,6 @@ fun pickLibmpv(): File? {
 
 /** Opens INSTALL.md with the system's viewer; returns a message when that is not possible. */
 fun openInstallDoc(): String? {
-    val f = MissingLibText.installDoc(MpvLoader.appDir) ?: return "INSTALL.md was not found next to tvBro"
+    val f = MissingLibText.installDoc(MpvLoader.appDir) ?: return "INSTALL.md was not found next to Orbit"
     return try { java.awt.Desktop.getDesktop().open(f); null } catch (e: Exception) { "Could not open it here; open ${f.absolutePath} in a text editor" }
 }

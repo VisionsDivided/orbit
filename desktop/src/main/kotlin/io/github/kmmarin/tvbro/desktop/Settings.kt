@@ -243,7 +243,7 @@ private fun SourcesPage(app: AppState) {
     val eh = listOf(6, 12, 24, 48); val ch = listOf(12, 24, 48, 168)
     Row2("Guide refresh", "every ${app.settings.epgHours} h") { app.update { it.copy(epgHours = eh[(eh.indexOf(it.epgHours) + 1) % eh.size]) } }
     Row2("Channels and catalogue refresh", "every ${app.settings.catalogueHours} h") { app.update { it.copy(catalogueHours = ch[(ch.indexOf(it.catalogueHours) + 1) % ch.size]) } }
-    T("Checked every 30 minutes while tvBro runs; a failed download keeps the stored data.", 12, Theme.dim)
+    T("Checked every 30 minutes while Orbit runs; a failed download keeps the stored data.", 12, Theme.dim)
 }
 
 @Composable
@@ -269,13 +269,13 @@ private fun PlaybackPage(app: AppState) {
     Row2("Caption background", listOf("None (outline)", "Dimmed", "Box")[s.captionBg.coerceIn(0, 2)]) { app.update { it.copy(captionBg = (it.captionBg + 1) % 3) } }
     var ext by remember { mutableStateOf(s.externalPlayer.ifBlank { listOf("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe", "/usr/bin/vlc", "/usr/bin/mpv").firstOrNull { File(it).exists() } ?: "" }) }
     Field("External player (program or command, e.g. vlc)", ext, width = 560) { ext = it; app.update { x -> x.copy(externalPlayer = it.trim()) } }
-    Row2("Play with", if (s.useExternal && s.externalPlayer.isNotBlank()) "External player" else "tvBro") {
+    Row2("Play with", if (s.useExternal && s.externalPlayer.isNotBlank()) "External player" else "Orbit") {
         if (s.externalPlayer.isBlank() && ext.isNotBlank()) app.update { it.copy(externalPlayer = ext.trim()) }
         app.update { it.copy(useExternal = !it.useExternal) }
     }
     T("Caption style applies from the next video. Captions and audio language picked during an episode are kept for the whole show.", 12, Theme.dim, maxLines = 2)
     val lib = MpvLoader.lib
-    Row2("Video library", if (lib != null) "libmpv loaded (${MpvLoader.from}); your own copy, not part of tvBro" else "Missing: Enter shows how to add it") {
+    Row2("Video library", if (lib != null) "libmpv loaded (${MpvLoader.from}); your own copy, not part of Orbit" else "Missing: Enter shows how to add it") {
         if (lib == null) app.videoSetup = true
     }
 }
@@ -381,7 +381,7 @@ private fun BackupPage(app: AppState) {
         "Playlist logins, the PIN, the share login and recordings are never in it. A restore checks the whole file first and shows what is in it.", 13, Theme.dim, maxLines = 4)
     val scope = rememberCoroutineScope()
     fun pick(save: Boolean): File? {
-        val d = java.awt.FileDialog(null as java.awt.Frame?, if (save) "Save tvBro backup" else "Open tvBro backup", if (save) java.awt.FileDialog.SAVE else java.awt.FileDialog.LOAD)
+        val d = java.awt.FileDialog(null as java.awt.Frame?, if (save) "Save Orbit backup" else "Open Orbit backup", if (save) java.awt.FileDialog.SAVE else java.awt.FileDialog.LOAD)
         if (save) d.file = "tvbro-backup-${java.time.LocalDate.now()}.json"
         d.isVisible = true
         return d.file?.let { File(d.directory, it) }
@@ -419,7 +419,7 @@ private fun AboutPage(app: AppState) {
         "or click them), I info, Space pause, A audio, S subtitles, [ ] audio delay, R record, N / B next / previous episode, Y or F1 favourite, F2 record, " +
         "F3 stream format TS / HLS (live), F4 options, Esc back (live TV shrinks into the guide preview).", 13, Theme.dim, maxLines = 8)
     H("About")
-    T("tvBro desktop 0.2.0 · Apache-2.0 · video by libmpv (not included; your own copy, its own licence) · SMB by jcifs-ng (LGPL-2.1) · see NOTICE", 13, Theme.dim, maxLines = 2)
+    T("Orbit desktop 0.2.0 · based on tvBro · Apache-2.0 · video by libmpv (not included; your own copy, its own licence) · SMB by jcifs-ng (LGPL-2.1) · see NOTICE", 13, Theme.dim, maxLines = 2)
     H("Diagnostics")
     for (l in Diag.snapshot().takeLast(30)) T(l, 12, Theme.dim)
 }

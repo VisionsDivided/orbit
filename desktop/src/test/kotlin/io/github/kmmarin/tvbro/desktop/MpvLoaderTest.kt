@@ -50,7 +50,7 @@ class MpvLoaderTest {
         val app = tmp.newFolder("app").path
         val r = MpvLocate.load(MpvLocate.candidates(Os.WINDOWS, null, app), Os.WINDOWS, "x64", nothingLoads)
         assertNull(r.lib)
-        assertEquals("libmpv-2.dll was not found next to tvBro.exe or on PATH", r.error)
+        assertEquals("libmpv-2.dll was not found next to Orbit.exe or on PATH", r.error)
         assertEquals(listOf("libmpv-2", "mpv-2", "mpv"), tried) // the absent file next to the app is not even tried
     }
 
