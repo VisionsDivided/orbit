@@ -63,6 +63,10 @@ class MainActivity : ComponentActivity() {
             if (e.action == android.view.KeyEvent.ACTION_UP && !e.isCanceled) onBackPressedDispatcher.onBackPressed()
             return true
         }
+        // Colour keys: the current screen's action (ui/orbit5/ColorKeys.kt); not while a menu or dialog is open.
+        // Keys a screen does not use keep their old meaning (yellow = My list, below).
+        if (e.action == android.view.KeyEvent.ACTION_DOWN && e.repeatCount == 0 && model.menu == null && model.prompt == null &&
+            model.progMenu == null && model.orbit.streamAsk == null && io.github.kmmarin.tvbro.ui.orbit5.ColorKeys.dispatch(k)) return true
         if (e.action == android.view.KeyEvent.ACTION_DOWN && e.repeatCount == 0 &&
             (k == android.view.KeyEvent.KEYCODE_PROG_YELLOW || k == android.view.KeyEvent.KEYCODE_BOOKMARK || k == android.view.KeyEvent.KEYCODE_BUTTON_Y) && model.favShortcut()) return true
         // Nothing focused (focus was lost): the key brings focus back instead of going nowhere.
@@ -126,24 +130,28 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 Box(Modifier.fillMaxSize().background(Bg)) {
-                    when (m.screen) {
-                        Screen.LIST -> HomeScreen(m)
-                        Screen.PLAYER -> {} // drawn above the live video, below
-                        Screen.GUIDE -> GuideScreen(m)
-                        Screen.SETTINGS -> HomeScreen(m)
-                        Screen.ADD_SOURCE -> AddSourceScreen(m)
-                        Screen.GUIDE_SEARCH -> SearchScreen(m) { m.screen = Screen.GUIDE }
-                        Screen.MAPPING -> MappingScreen(m)
-                        Screen.VOD -> HomeScreen(m)
-                        Screen.RECORDINGS -> RecordingsScreen(m)
-                        Screen.EDITOR -> EditorScreen(m)
-                        Screen.ORBIT_LINK -> OrbitLinkScreen(m)
-                        Screen.DETAIL -> DetailPage(m)
-                        Screen.VODPLAY -> androidx.compose.runtime.key(m.vodPlay?.key) { VodPlayerScreen(m) }
+                    // Orbit "Who's watching?" at start: the app waits behind it (nothing plays until a profile is chosen)
+                    val waitForProfile = m.profiles.showing && m.profiles.atStart
+                    if (!waitForProfile) {
+                        when (m.screen) {
+                            // the direction-5 shell: top bar, sections, Settings panel (ui/shell/OrbitShell.kt)
+                            Screen.LIST, Screen.SETTINGS, Screen.VOD -> io.github.kmmarin.tvbro.ui.shell.OrbitShell(m)
+                            Screen.PLAYER -> {} // drawn above the live video, below
+                            Screen.GUIDE -> GuideScreen(m)
+                            Screen.ADD_SOURCE -> AddSourceScreen(m)
+                            Screen.GUIDE_SEARCH -> SearchScreen(m) { m.screen = Screen.GUIDE }
+                            Screen.MAPPING -> MappingScreen(m)
+                            Screen.RECORDINGS -> RecordingsScreen(m)
+                            Screen.EDITOR -> EditorScreen(m)
+                            Screen.ORBIT_LINK -> OrbitLinkScreen(m)
+                            Screen.DETAIL -> DetailPage(m)
+                            Screen.VODPLAY -> androidx.compose.runtime.key(m.vodPlay?.key) { VodPlayerScreen(m) }
+                        }
+                        // One live video surface: full screen or in the TV preview spot, animated between them.
+                        LiveVideo(m)
+                        if (m.screen == Screen.PLAYER) PlayerScreen(m)
                     }
-                    // One live video surface: full screen or in the TV preview spot, animated between them.
-                    LiveVideo(m)
-                    if (m.screen == Screen.PLAYER) PlayerScreen(m)
+                    if (m.profiles.showing) io.github.kmmarin.tvbro.ui.profiles.WhoIsWatching(m)
                     OrbitStreamPrompt(m)   // Orbit: every stream in use -> stop the oldest viewer?
                     ReminderPopup(m)
                     ProgMenu(m)

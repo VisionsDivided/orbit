@@ -51,6 +51,17 @@ fun LazyListScope.orbitSection(m: AppModel) {
             Text("Playlists come from the home server; My list, favourite channels and film resume points sync with your " +
                 "profile. ${o.syncStatus}", color = TextDim, fontSize = 14.sp, modifier = Modifier.padding(vertical = 3.dp))
         }
+        // Profiles (simple rows for now; the Settings restyle gives them the segmented control and toggle of the spec)
+        val pp = m.profiles
+        item { TvButton("Who's watching? Switch profile…", Modifier.padding(vertical = 4.dp)) { pp.open() } }
+        item {
+            TvButton("Profile picker style: ${pp.style.label}  (OK: ${if (pp.style == io.github.kmmarin.tvbro.orbit.PickerStyle.ORBIT) "Classic" else "Orbit"})", Modifier.padding(vertical = 4.dp)) {
+                pp.changeStyle(if (pp.style == io.github.kmmarin.tvbro.orbit.PickerStyle.ORBIT) io.github.kmmarin.tvbro.orbit.PickerStyle.CLASSIC else io.github.kmmarin.tvbro.orbit.PickerStyle.ORBIT)
+            }
+        }
+        item {
+            TvButton("Ask who's watching when Orbit starts: ${if (pp.askOnStart) "On" else "Off"}", Modifier.padding(vertical = 4.dp)) { pp.changeAskOnStart(!pp.askOnStart) }
+        }
         item { TvButton("Unlink this TV", Modifier.padding(vertical = 6.dp)) { o.unlink() } }
     }
     if (o.message.isNotEmpty()) item { Text(o.message, color = Ok, fontSize = 15.sp, modifier = Modifier.padding(vertical = 4.dp)) }

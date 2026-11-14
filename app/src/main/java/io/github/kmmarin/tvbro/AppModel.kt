@@ -21,7 +21,11 @@ import io.github.kmmarin.tvbro.ui.MenuState
 import io.github.kmmarin.tvbro.ui.PromptState
 import java.util.UUID
 
-enum class Section { SEARCH, TV, MOVIES, SHOWS, RECORDINGS, MYLIST }
+/**
+ * What the main screen shows (ui/shell/OrbitShell.kt): HOME, MOVIES, SHOWS, Live TV (TV, with RECORDINGS and MYLIST
+ * as its sub-pages), DISCOVER, and SEARCH from the top bar's search icon.
+ */
+enum class Section { SEARCH, TV, MOVIES, SHOWS, RECORDINGS, MYLIST, HOME, DISCOVER }
 
 enum class Screen { LIST, PLAYER, GUIDE, SETTINGS, ADD_SOURCE, GUIDE_SEARCH, MAPPING, VOD, DETAIL, VODPLAY, RECORDINGS, EDITOR,
     ORBIT_LINK /* Orbit: link this TV to the home server */ }
@@ -48,6 +52,10 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
     val store = Store(app)
     /** Orbit: the home-server link and TV pairing (orbit/OrbitModel.kt). */
     val orbit = io.github.kmmarin.tvbro.orbit.OrbitModel(app, viewModelScope)
+    /** Orbit: the account's profiles and the "Who's watching?" picker (orbit/OrbitProfiles.kt). */
+    val profiles = io.github.kmmarin.tvbro.orbit.OrbitProfiles(app, viewModelScope, orbit)
+    /** Home's rows: the catalog when linked, else this TV's own data (ui/home/HomeFeed.kt). */
+    val home by lazy { io.github.kmmarin.tvbro.ui.home.HomeFeed(this) }
     private val repo = Repository(app)
 
     var sources by mutableStateOf<List<Source>>(emptyList())
@@ -372,7 +380,7 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
     var groupMoved = false
     /** Where Right from the side menu goes back to (the TV screen's focused channel); null = default focus search. */
     var railRight: io.github.kmmarin.tvbro.ui.SafeFocus? = null
-    /** The side menu's current-section icon: where Left from a section's first column goes. */
+    /** The side menu's current-section icon: where Left from a section's first column goes (none since the top bar replaced the side menu). */
     var railSel: io.github.kmmarin.tvbro.ui.SafeFocus? = null
     /** Where Back from Settings goes (full screen when opened from the player's quick bar). */
     var settingsBack = Screen.LIST
@@ -923,7 +931,7 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     // ---- VOD ----
-    var section by mutableStateOf(Section.TV)
+    var section by mutableStateOf(Section.HOME)
     var focusVod by mutableStateOf<VodItem?>(null)
     /** Movies grid scroll (first visible item, offset), kept while away on a title's page. */
     var vodScroll = 0 to 0
