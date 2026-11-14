@@ -788,6 +788,40 @@ def parse_xmltv(source, resolve: Callable[[str, Optional[list]], Optional[str]],
     return names
 
 
+# --------------------------------------------------------------------------- overlapping guide entries
+
+
+def normalize_programmes(progs: list[Programme]) -> list[Programme]:
+    """One channel's programmes made drawable: providers send overlapping entries (two titles printed over each
+    other in a guide). Sorted by start, then stop (of two that start together the longer one comes last and is
+    kept); exact duplicates and entries fully inside a longer one with the same title are dropped; an entry that
+    runs into the next one ends where the next one starts; what is left with no length is dropped. Trimmed entries
+    are copies; the input is not changed. The web app does the same on its side (guide.js normalizeProgs)."""
+    ps = sorted((p for p in progs if p is not None and p.stop > p.start), key=lambda p: (p.start, p.stop))
+    kept = []
+    for i, p in enumerate(ps):
+        drop = False
+        # only entries starting at or before p can contain it, and the list is sorted by start
+        for j, o in enumerate(ps):
+            if o.start > p.start:
+                break
+            if j == i or o.title != p.title or o.stop < p.stop:
+                continue
+            drop = j < i if (o.start == p.start and o.stop == p.stop) else True
+            if drop:
+                break
+        if not drop:
+            kept.append(p)
+    out = []
+    for i, p in enumerate(kept):
+        nx = kept[i + 1] if i + 1 < len(kept) else None
+        if nx is not None and nx.start < p.stop:
+            p = Programme(p.key, p.start, nx.start, p.title, p.desc, p.sub, p.ep)
+        if p.stop > p.start:
+            out.append(p)
+    return out
+
+
 # --------------------------------------------------------------------------- now/next
 
 

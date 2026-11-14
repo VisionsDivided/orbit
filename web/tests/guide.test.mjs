@@ -118,8 +118,45 @@ test('paging chunks and merge', () => {
   const c = G.chunksFor(T0, T0 + G.WINDOW_SEC);
   assert.ok(c.length >= 1 && c.length <= 2);
   assert.ok(c[0] * G.CHUNK <= T0 && (c[c.length - 1] + 1) * G.CHUNK >= T0 + G.WINDOW_SEC);
-  const m = G.mergeProgs([[{ start: 2 }, { start: 1 }], [{ start: 2 }, { start: 3 }]]);
+  const a = { start: 1, stop: 2, title: 'A' }, b = { start: 2, stop: 3, title: 'B' }, c3 = { start: 3, stop: 4, title: 'C' };
+  const m = G.mergeProgs([[b, a], [{ ...b }, c3]]);
   assert.deepEqual(m.map((x) => x.start), [1, 2, 3]);
+});
+
+const P = (s, e, title) => ({ start: T0 + s * 60, stop: T0 + e * 60, title });
+const spans = (l) => l.map((p) => [(p.start - T0) / 60, (p.stop - T0) / 60, p.title]);
+
+test('normalizeProgs: sorted, exact duplicates dropped', () => {
+  const l = [P(60, 90, 'B'), P(0, 60, 'A'), P(60, 90, 'B'), P(0, 60, 'A')];
+  assert.deepEqual(spans(G.normalizeProgs(l)), [[0, 60, 'A'], [60, 90, 'B']]);
+});
+
+test('normalizeProgs: an entry inside a longer one with the same title is dropped', () => {
+  const l = [P(0, 300, 'NHL Hockey'), P(60, 120, 'NHL Hockey'), P(300, 360, 'Post-game')];
+  assert.deepEqual(spans(G.normalizeProgs(l)), [[0, 300, 'NHL Hockey'], [300, 360, 'Post-game']]);
+});
+
+test('normalizeProgs: overlaps are trimmed to the next start (no titles drawn over each other)', () => {
+  // the owner's case: "NHL Hockey on ..." 10:00-15:00 and "Next Game Today" inside it
+  const l = [P(0, 300, 'NHL Hockey on Arena'), P(120, 150, 'Next Game Today'), P(150, 200, 'Analysis')];
+  const out = G.normalizeProgs(l);
+  assert.deepEqual(spans(out), [[0, 120, 'NHL Hockey on Arena'], [120, 150, 'Next Game Today'], [150, 200, 'Analysis']]);
+  for (let i = 1; i < out.length; i++) assert.ok(out[i].start >= out[i - 1].stop, 'no overlap');
+  assert.equal(l[0].stop, T0 + 300 * 60, 'input not changed');
+});
+
+test('normalizeProgs: same start keeps the longer one; zero-length and broken entries go', () => {
+  const l = [P(0, 30, 'Next Game Today'), P(0, 300, 'NHL Hockey'), P(400, 400, 'Empty'), P(500, 450, 'Backwards'), null];
+  assert.deepEqual(spans(G.normalizeProgs(l)), [[0, 300, 'NHL Hockey']]);
+  assert.deepEqual(G.normalizeProgs([]), []);
+  assert.deepEqual(G.normalizeProgs(null), []);
+});
+
+test('normalizeProgs: a clean list comes back as it was', () => {
+  const l = [P(0, 30, 'A'), P(30, 90, 'B'), P(120, 150, 'C')];
+  const out = G.normalizeProgs(l);
+  assert.deepEqual(out, l);
+  assert.ok(out.every((p, i) => p === l[i]), 'same objects');
 });
 
 test('programme state: now / future / catch-up / past', () => {

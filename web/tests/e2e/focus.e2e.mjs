@@ -122,6 +122,41 @@ test('focus navigation, guide window, preview and full screen in a real browser'
     await key('ArrowDown', 3); s = await tv(); assert.equal(s.row, 3);
   });
 
+  await t.test('2b. quick tabs and the "All groups" side menu: search, pin (Red), choose, Escape', async () => {
+    let s = await tv(); const group0 = s.group, row0 = s.row;
+    assert.deepEqual(s.tabs.slice(0, 3), ['__fav', '__all', '__recent'], 'Favourites, All, Recent first');
+    assert.equal(s.tabs[s.tabs.length - 1], '__menu', '"All groups" last');
+    await toRow0(); await key('ArrowUp'); s = await tv(); assert.equal(s.zone, 'groups');
+    await key('ArrowRight', s.tabs.length); s = await tv(); assert.equal(s.tabs[s.gi], '__menu');
+    assert.equal(s.group, group0, 'moving onto "All groups" does not change the group');
+    await key('Enter'); s = await tv(); assert.ok(s.menuOpen, 'OK opens the side menu');
+    assert.ok(await page.evaluate(() => document.activeElement && document.activeElement.classList.contains('gm-q')), 'typing goes to the search field');
+    await page.keyboard.type('sport'); await sleep(900);
+    const labels = await page.evaluate(() => [...document.querySelectorAll('.gm-row')].map((r) => r.className.includes('gm-chan') ? 'chan' : r.textContent));
+    assert.ok(labels.some((l) => l.startsWith('Sport')), 'the group is found: ' + labels.join(' | '));
+    assert.ok(labels.includes('chan'), 'and channels whose name matches');
+    await key('ArrowDown'); s = await tv(); assert.ok(s.menuFocus >= 0);
+    await page.evaluate(() => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'ColorF0Red', bubbles: true, cancelable: true })));
+    await sleep(200); s = await tv(); assert.deepEqual(s.pins, ['Sport'], 'Red pins the focused group');
+    await key('Enter'); s = await tv();
+    assert.ok(!s.menuOpen, 'choosing a group closes the menu'); assert.equal(s.zone, 'label');
+    assert.ok(s.tabs.includes(s.group) && s.tabs.indexOf(s.group) === 3, 'the pinned group is a tab after Recent');
+    const saved = await page.evaluate(async () => (await (await fetch('/api/state')).json()).prefs.liveGroupsPinned);
+    assert.deepEqual(saved, ['Sport'], 'saved in the profile prefs (liveGroupsPinned)');
+    // Escape closes the menu and leaves the focus on "All groups"
+    await toRow0(); await key('ArrowUp'); s = await tv(); await key('ArrowRight', s.tabs.length); await key('Enter');
+    s = await tv(); assert.ok(s.menuOpen);
+    assert.ok(await page.evaluate(() => { const r = document.querySelector('.gm-row.kf'); return !!(r && r.classList.contains('cur') && r.querySelector('.gm-pin.on')); }), 'the menu opens on the group shown now');
+    await page.evaluate(() => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'ColorF0Red', bubbles: true, cancelable: true })));
+    await sleep(200); s = await tv(); assert.deepEqual(s.pins, [], 'Red again unpins');
+    await key('Escape'); s = await tv(); assert.ok(!s.menuOpen, 'Escape closes'); assert.equal(s.zone, 'groups'); assert.equal(s.tabs[s.gi], '__menu');
+    // back to where the guide was
+    const i0 = s.tabs.indexOf(group0); assert.ok(i0 >= 0);
+    await key('ArrowLeft', s.gi - i0); await key('Enter'); await sleep(600);
+    s = await tv(); assert.equal(s.group, group0);
+    await key('ArrowDown', row0); await key('ArrowRight');
+  });
+
   await t.test('3. moving focus does not change the preview; Enter switches it; Enter again goes full screen', async () => {
     let s = await tv(); const cur = s.current;
     await page.waitForFunction((k) => document.querySelector('.tv2').tvState().previewKey === k, cur, { timeout: 10000 });

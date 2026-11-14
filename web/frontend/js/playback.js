@@ -9,6 +9,7 @@ import { uiLoad, uiSave } from './uistate.js';
 import { prefs, setPref } from './prefs.js';
 import { pickLastChannel } from './resume.js';
 import { ensureUnlocked, withUnlock } from './parental.js';
+import { addRecent, RECENT_PREF } from './livegroups.js';
 
 // playing: the current channel (full screen, or what the TV-screen preview plays); list: () => channels
 // for ch up/down; the guide group / row it came from. Moving focus in the guide never changes it.
@@ -26,6 +27,9 @@ function rememberLast(ch) {
   uiSave({ playing: slim(ch), playingGroup: state.groupId, playingAt: at });
   const old = prefs().lastChannel;
   if (!old || old.key !== ch.key || at - (old.at || 0) > 60000) setPref('lastChannel', { ...slim(ch), group: ch.group, groupId: state.groupId, at });
+  // Live TV's "Recent" tab: the last channels watched, per profile (most recent first)
+  const rec = prefs()[RECENT_PREF];
+  if (!Array.isArray(rec) || !rec[0] || rec[0].key !== ch.key) setPref(RECENT_PREF, addRecent(rec, ch));
 }
 /** At start (after the server state is loaded): resume the last channel. Returns it (or null). */
 export function resumeLastChannel() {
