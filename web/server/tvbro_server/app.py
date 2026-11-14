@@ -329,7 +329,7 @@ class Provider:
         p = self.store.get_provider()
         if not p or p.get("kind") != "xtream":
             return None
-        return p["server"], p["user"], p["pass"]
+        return NET.lower_host(p["server"]), p["user"], p["pass"]      # lower-case host: see net.lower_host
 
     def allowed_hosts(self) -> set[str]:
         hosts = set()
@@ -1030,7 +1030,7 @@ class App:
         for prov in self.sources.enabled():
             p = prov.store.get_provider() or {}
             out.append({"id": prov.sid, "name": prov.name, "kind": p.get("kind") or "",
-                        "server": p.get("server") or "", "user": p.get("user") or "", "pass": p.get("pass") or "",
+                        "server": NET.lower_host(p.get("server") or ""), "user": p.get("user") or "", "pass": p.get("pass") or "",
                         "url": p.get("url") or "", "epgUrl": p.get("epgUrl") or ""})
         return out
 

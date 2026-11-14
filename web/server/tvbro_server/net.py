@@ -179,6 +179,7 @@ class _RedirectHandler(urllib.request.HTTPRedirectHandler):
     max_redirections = 6
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        newurl = lower_host(newurl)
         check_url(newurl)                    # the address is checked again when it connects
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -194,9 +195,26 @@ def _build():
 _OPENER = _build()
 
 
+def lower_host(url: str) -> str:
+    """The URL with its host name in lower case (path, query and login unchanged). Host names are
+    case-insensitive, but Python sends the TLS SNI name as typed, and some HTTPS servers fail the
+    handshake ("tlsv1 alert internal error") when it has capitals, e.g. a provider address typed
+    with a capital first letter on a phone. Android's HTTP stack lowercases it, so TVs worked."""
+    try:
+        p = urllib.parse.urlsplit(url)
+    except ValueError:
+        return url
+    at = p.netloc.rfind("@")
+    user, hostport = (p.netloc[:at + 1], p.netloc[at + 1:]) if at >= 0 else ("", p.netloc)
+    if hostport == hostport.lower():
+        return url
+    return urllib.parse.urlunsplit((p.scheme, user + hostport.lower(), p.path, p.query, p.fragment))
+
+
 def open_url(url: str, timeout: float = 30, headers: Optional[dict] = None):
     """urlopen for provider / playlist / image URLs, with the rules above. Raises Blocked
     (or a URLError wrapping it), urllib.error.HTTPError, or other URLErrors."""
+    url = lower_host(url)
     check_url(url)
     req = urllib.request.Request(url, headers={"User-Agent": UA, **(headers or {})})
     return _OPENER.open(req, timeout=timeout)
