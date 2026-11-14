@@ -156,8 +156,7 @@ object FocusMemory {
     fun latest(): SafeFocus? = recent.firstOrNull()
 
     /** The newest remembered item outside the side menu still composed (Right from the side menu). */
-    fun restoreContent(): Boolean = content.firstOrNull { it.attachedNow }?.request() == true
-}
+    fun restoreContent(): Boolean = content.firstOrNull { it.attachedNow }?.request() == true}
 
 /**
  * For a pop-up layer (menu, dialog, programme pop-up): when it closes, focus goes back to the item that was focused
@@ -233,6 +232,18 @@ object Logos {
     private val gate = Semaphore(4)
     private val failed = HashSet<String>()
     @Volatile var dir: java.io.File? = null
+    /**
+     * Extra headers for an image address (Orbit: the session cookie for the home server's own `/img` and
+     * `/v1/media/image` addresses, set by AppModel); null for any other address. Such requests never follow redirects.
+     */
+    @Volatile var auth: ((String) -> Map<String, String>?)? = null
+    private val noRedirect by lazy { Net.client.newBuilder().followRedirects(false).followSslRedirects(false).build() }
+
+    private fun fetch(url: String): ByteArray? {
+        val h = auth?.invoke(url)
+        val req = if (h == null) Net.request(url) else Net.request(url).newBuilder().apply { h.forEach { (k, v) -> header(k, v) } }.build()
+        return (if (h == null) Net.client else noRedirect).newCall(req).execute().use { r -> if (!r.isSuccessful) null else r.body?.bytes() }
+    }
 
     private fun diskFile(url: String) = dir?.let { java.io.File(it, Integer.toHexString(url.hashCode()) + "_" + url.length) }
 
@@ -250,9 +261,7 @@ object Logos {
             withContext(Dispatchers.IO) {
                 try {
                     val df = diskFile(url)
-                    val bytes = (if (df != null && df.exists()) df.readBytes() else null) ?: (Net.client.newCall(Net.request(url)).execute().use { r ->
-                        if (!r.isSuccessful) null else r.body?.bytes()
-                    }?.also { b -> if (df != null && b.size < 2_000_000) { df.parentFile?.mkdirs(); df.writeBytes(b); if (Math.random() < 0.02) trim(df.parentFile!!) } })
+                    val bytes = (if (df != null && df.exists()) df.readBytes() else null) ?: (fetch(url)?.also { b -> if (df != null && b.size < 2_000_000) { df.parentFile?.mkdirs(); df.writeBytes(b); if (Math.random() < 0.02) trim(df.parentFile!!) } })
                         ?: run { failed += url; return@withContext null }
                     val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)

@@ -9,6 +9,7 @@ Orbit is a private media app built on tvBro (see the note at the top of the main
 | [phase1-plan.md](phase1-plan.md) | Phase 1 work, acceptance tests, and the Phase 2 buffering / stream-limit test designs |
 | [risks.md](risks.md) | Risk register |
 | [MACOS.md](MACOS.md) | Desktop app on macOS: status, MacBook steps, video spike plan, risks |
+| [TV-UI.md](TV-UI.md) | Android TV redesign (direction 5): design system, top-bar shell, Home, Who's watching?, where follow-ups build |
 
 ## Progress
 

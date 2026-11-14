@@ -68,6 +68,8 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
     private val syncLock = Mutex()
 
     var link by mutableStateOf<OrbitLink?>(null); private set
+    /** The stored link has been read at start ([link] null now means: not linked). */
+    var loaded by mutableStateOf(false); private set
     var pairing by mutableStateOf<Pairing?>(null); private set
     var message by mutableStateOf(""); private set
     /** The server ended this TV's session (signed out from another device, or the account was disabled). */
@@ -95,7 +97,7 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
         scope.launch(Dispatchers.IO) {
             if (store.wipePending) forget(signedOutByServer = false)     // an unlink the app was closed during
             val l = store.load()
-            withContext(Dispatchers.Main) { link = l }
+            withContext(Dispatchers.Main) { link = l; loaded = true }
             if (l != null && check(l)) startSyncLoop()
         }
         // a change to My list on the TV goes to the server shortly after (and pulls the other side's changes)
@@ -445,6 +447,32 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
     }
 
     fun clearMessage() { message = "" }
+
+    /**
+     * Who's watching?: this TV continues as profile [id] (of the same account). The current profile's changes are
+     * sent first; then everything the old profile brought onto the TV goes (My list, favourites, recently watched,
+     * resume points, show progress, as on unlink, the playlists stay) and the new profile's state is synced in.
+     * Returns an error text, or null when switched. Call from a coroutine on the main thread.
+     */
+    suspend fun switchProfile(id: String): String? {
+        val l = link ?: return "This TV is not linked to Orbit"
+        withContext(Dispatchers.IO) { runCatching { syncState() } }
+        val me = try {
+            withContext(Dispatchers.IO) { api.postJson(l, "/v1/profiles/select", JsonObject(mapOf("id" to JsonPrimitive(id)))) }
+        } catch (e: Exception) { return describe(e) }
+        val nl = OrbitApi.linkFrom(l.server, l.session, (me["csrf"] as? JsonPrimitive)?.content ?: l.csrf, me)
+        syncLock.withLock {
+            if (link !== l) return "This TV was unlinked meanwhile"
+            store.save(nl)
+            store.listBase = emptySet()
+            cached = null; legacy = false
+            host?.clearAccountData()
+            WatchDb.get(app).clearAll()
+            link = nl
+        }
+        withContext(Dispatchers.IO) { syncState() }
+        return null
+    }
 
     private fun describe(e: Exception): String = when (e) {
         is OrbitError -> when (e.code) {

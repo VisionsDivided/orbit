@@ -79,7 +79,21 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT, private val userAgent
         /** What the TV's QR code opens: the web app's "Link a TV" dialog with the code filled in. */
         fun approveUrl(server: String, code: String) = "$server/#pair:$code"
 
-        internal fun linkFrom(server: String, session: String, csrf: String, me: JsonObject): OrbitLink {
+        /** "/img?…" from the catalog -> "<server>/img?…" (absolute addresses stay as they are). */
+        fun absolute(server: String, url: String?): String? = when {
+            url.isNullOrBlank() -> null
+            url.startsWith("/") -> server + url
+            else -> url
+        }
+
+        /**
+         * The session cookie for an image on the home server itself (the catalog's `/img` and `/v1/media/image`
+         * addresses need a signed-in session); null for any other address, so the cookie never goes elsewhere.
+         */
+        fun imageHeaders(link: OrbitLink?, url: String): Map<String, String>? =
+            if (link != null && url.startsWith(link.server + "/")) mapOf("Cookie" to "$COOKIE=${link.session}") else null
+
+        fun linkFrom(server: String, session: String, csrf: String, me: JsonObject): OrbitLink {
             val acc = me["account"]?.jsonObject
             val prof = (me["profile"] as? JsonObject)
             return OrbitLink(
@@ -308,6 +322,13 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT, private val userAgent
             call(link.server, "/v1/progress/episodes", Json.encodeToString(JsonObject.serializer(), body), link)
         }
     }
+
+    /** A signed-in GET of [path] (catalog, profiles: CatalogApi.kt, OrbitProfiles.kt). Errors as [OrbitError]. */
+    fun getJson(link: OrbitLink, path: String): JsonObject = call(link.server, path, null, link)
+
+    /** A signed-in POST of [body] to [path]. */
+    fun postJson(link: OrbitLink, path: String, body: JsonObject): JsonObject =
+        call(link.server, path, Json.encodeToString(JsonObject.serializer(), body), link)
 
     /** This TV's profile state on the server: My list and resume points (see docs/orbit/API-v1.md, step 4). */
     fun state(link: OrbitLink): JsonObject = call(link.server, "/api/state", null, link)
