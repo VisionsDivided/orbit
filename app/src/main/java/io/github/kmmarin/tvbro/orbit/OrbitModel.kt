@@ -53,10 +53,10 @@ interface OrbitHost {
 
 /**
  * Every stream is in use: each active stream, and the answer: the id of the stream to stop, "" = stop the oldest
- * viewer (servers without stream ids), null = cancel.
+ * viewer (servers without stream ids), null = cancel. [want]: what this TV wants to play ("Vista Cinema").
  */
 data class StreamAsk(val max: Int, val streams: List<io.github.kmmarin.tvbro.data.StreamChoice.Row>,
-                     val answer: kotlinx.coroutines.CompletableDeferred<String?>)
+                     val answer: kotlinx.coroutines.CompletableDeferred<String?>, val want: String = "")
 
 /**
  * Orbit state for the TV app: the home-server link, the pairing screen and sync (playlists, My list, film resume
@@ -298,9 +298,9 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
                 if (!mine && st.count >= st.max) {
                     if (!ask) return false
                     val rows = io.github.kmmarin.tvbro.data.StreamChoice.rows(st.active.map { u ->
-                        io.github.kmmarin.tvbro.data.StreamChoice.Use(u.id, u.label, u.profile, u.what, u.recording, u.device)
+                        io.github.kmmarin.tvbro.data.StreamChoice.Use(u.id, u.label, u.profile, u.what, u.recording, u.device, u.since)
                     })
-                    val q = StreamAsk(st.max, rows, kotlinx.coroutines.CompletableDeferred())
+                    val q = StreamAsk(st.max, rows, kotlinx.coroutines.CompletableDeferred(), what)
                     withContext(Dispatchers.Main) { streamAsk = q }
                     replace = (try { q.answer.await() } finally { withContext(Dispatchers.Main) { if (streamAsk === q) streamAsk = null } })
                         ?: return false

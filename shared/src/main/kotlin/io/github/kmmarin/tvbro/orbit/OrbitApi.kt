@@ -234,9 +234,9 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT, private val userAgent
     }
 
     /** Who uses the provider's streams now (tvBro's stream count, shared by TVs, browsers and recordings). */
-    /** [id]: the stream's public id, to name it in [streamStart] (empty from servers before 2026-11-14). */
+    /** [id]: the stream's public id, to name it in [streamStart] (empty from servers before 2026-11-14); [since]: start, epoch s. */
     data class StreamUse(val sid: String, val label: String, val what: String, val recording: Boolean,
-                         val id: String = "", val profile: String = "", val device: String = "")
+                         val id: String = "", val profile: String = "", val device: String = "", val since: Long = 0)
     data class StreamStatus(val max: Int, val count: Int, val active: List<StreamUse>)
 
     fun streams(link: OrbitLink): StreamStatus = parseStreams(call(link.server, "/v1/streams", null, link))
@@ -245,7 +245,7 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT, private val userAgent
         val act = (j["active"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { e ->
             val o = e as? JsonObject ?: return@mapNotNull null
             StreamUse(o.str("sid") ?: "", o.str("label") ?: "", o.str("what") ?: "", (o["recording"] as? JsonPrimitive)?.booleanOrNull ?: false,
-                o.str("id") ?: "", o.str("profile") ?: "", o.str("device") ?: "")
+                o.str("id") ?: "", o.str("profile") ?: "", o.str("device") ?: "", (o["since"] as? JsonPrimitive)?.longOrNull ?: 0L)
         }
         return StreamStatus((j["max"] as? JsonPrimitive)?.intOrNull ?: 1, (j["count"] as? JsonPrimitive)?.intOrNull ?: act.size, act)
     }

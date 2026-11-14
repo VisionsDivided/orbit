@@ -9,12 +9,15 @@ package io.github.kmmarin.tvbro.data
  * device label, then by a number. Recordings are listed but cannot be stopped from here.
  */
 object StreamChoice {
-    /** One active stream as the home server describes it (/v1/streams); [device]: its name, "" when not named. */
+    /**
+     * One active stream as the home server describes it (/v1/streams); [device]: its name, "" when not named;
+     * [since]: when it started (epoch seconds, 0 = unknown).
+     */
     data class Use(val id: String, val label: String, val profile: String, val what: String, val recording: Boolean,
-                   val device: String = "")
+                   val device: String = "", val since: Long = 0)
 
     /** A line of the prompt: [stoppable] streams get a button. */
-    data class Row(val id: String, val name: String, val what: String, val recording: Boolean) {
+    data class Row(val id: String, val name: String, val what: String, val recording: Boolean, val since: Long = 0) {
         val stoppable: Boolean get() = !recording && id.isNotEmpty()
         val button: String get() = "Stop ${name.take(40)} and watch"
     }
@@ -40,7 +43,7 @@ object StreamChoice {
         return list.mapIndexed { i, u ->
             val n = names[i]
             val name = if (!u.recording && names.count { it == n } > 1) "$n (${seen.merge(n, 1, Int::plus)})" else n
-            Row(u.id, name, u.what.trim(), u.recording)
+            Row(u.id, name, u.what.trim(), u.recording, u.since)
         }
     }
 }
