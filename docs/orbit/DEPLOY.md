@@ -87,6 +87,32 @@ If the proxy's address is not listed, everything still works, but every client l
 throttle for all of them, and the proxy's address on the "Link a TV" screen. Only list proxies you run: a trusted
 address can claim to forward for anyone. Session cookies get `Secure` when a trusted proxy says the page was https.
 
+## Hidden provider logins: TV video flows through the server
+
+By default linked TVs never receive the IPTV provider's login (API-v1.md, "Hidden provider logins"). They get
+facade addresses on this server (`http://<lan-address>:8750/xt/<playlist>/...`) and a login of their own, and the
+server relays everything from the provider: catalogue, guide and **every byte of video**.
+
+- **Bandwidth.** Each stream a TV watches now crosses the server's network twice (provider to server, server to
+  TV). An HD channel is roughly 3 to 8 Mbit/s, 4K 15 to 25 Mbit/s; three TVs at once need about three times that in
+  each direction on the server's link, plus the provider leg on the internet connection, as before. A VM with a
+  virtual NIC on a busy or 100 Mbit/s host link, or a server on Wi-Fi, is where this shows first.
+- **CPU and memory.** A relay is a copy loop in its own thread, 64 KiB at a time: a few percent of one core per
+  stream on a small VM, no transcoding. Catalogue answers are read whole before they are passed on (a large VOD list
+  can be tens of MB in memory for a moment, per TV syncing at that moment).
+- **Connections.** The provider sees the server's address for every stream, not the TV's. The provider's connection
+  limit is unchanged (one connection per stream either way). The server handles up to 256 connections at once.
+- **Names.** TVs use the same address for the facade as for the API, so whatever they link with must be in
+  `TVBRO_ALLOWED_HOSTS` (it already is when linking works). The TV app allows plain http to the server.
+- **Switching off.** Settings > Security > "Provider login on linked TVs" > "Sent to TVs", or
+  `ORBIT_HIDE_PROVIDER_LOGIN: "0"` in the compose file (which then overrides the setting; `"1"` pins it on). TVs
+  switch at their next playlist sync (within 30 minutes, or when the app starts). Unlinking a TV, signing it out from
+  another device or disabling its account ends its facade login at once, including a stream it is playing.
+- **A provider on the LAN** (e.g. a tvheadend box) needs "Playlists and streams on your local network" allowed, as
+  for browsers: the relay follows the same address rules (`net.py`).
+- The container's nginx proxies `/xt/` without buffering (`infra/docker/nginx.conf`); a TLS proxy in front needs
+  `proxy_buffering off` and long timeouts too (see above). Logs show facade addresses as `/xt/<id>/<kind>/-/-/…`.
+
 ## Rules
 
 - LAN only: publish the port on the LAN address, never on the internet. Outside the house, use Tailscale.
