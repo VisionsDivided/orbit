@@ -29,7 +29,7 @@ Y favourite, Esc back (live TV shrinks into the TV screen's preview, keeps playi
 
 Data: Windows `%APPDATA%\tvBro` (settings, sources, watch state, recordings list) and `%LOCALAPPDATA%\tvBro\cache`;
 Linux `~/.config/tvbro`, `~/.cache/tvbro`; macOS `~/Library/Application Support/tvBro`, `~/Library/Caches/tvBro`,
-log `~/Library/Logs/tvBro/tvbro.log` (all in `AppDirs`, `Store.kt`). Tests and the self-test can redirect them with `-Dtvbro.config=<dir>`
+log `~/Library/Logs/tvBro/tvbro.log` (all in `AppDirs`, `Store.kt`; the folders keep the tvBro name after the rename to Orbit so upgrades keep settings, the Orbit session and recordings). Tests and the self-test can redirect them with `-Dtvbro.config=<dir>`
 and `-Dtvbro.cache=<dir>`.
 
 ## Security
@@ -57,7 +57,7 @@ gradlew :desktop:piLibs -Ptarget=linux-arm64  (Pi classpath with linux-arm64 Ski
 ./gradlew :desktop:packageDmg                 (macOS host only: unsigned Orbit.app in a DMG)
 ```
 
-Windows zip: `gradlew :desktop:windowsZip` writes `out/tvbro-windows.zip` (app image + `NOTICE`, `LICENSE`,
+Windows zip: `gradlew :desktop:windowsZip` writes `out/orbit-windows-x64.zip` (app image + `NOTICE`, `LICENSE`,
 `INSTALL.md`, `THIRD_PARTY.md`). **libmpv is not bundled** (the usual Windows builds are GPL, tvBro is
 Apache-2.0): the task leaves out any `*mpv*.dll` / `libmpv*` and fails if one ends up in the zip.
 
@@ -66,7 +66,7 @@ Pi tarball: `python desktop/packaging/pack_pi.py desktop/build/pi/lib <OpenJDK17
 `libmpv2` package).
 
 libmpv (`Mpv.kt`: `MpvLocate`, `MpvLoader`) is looked for in this order: the file the user chose
-(`libmpv-path.txt` in the config folder), `libmpv-2.dll` next to `tvBro.exe`, then the OS search (`PATH`;
+(`libmpv-path.txt` in the config folder), `libmpv-2.dll` next to `Orbit.exe`, then the OS search (`PATH`;
 Linux: `libmpv.so.2`); macOS: `Orbit.app/Contents/Frameworks`, `Contents/MacOS/lib`, Homebrew (`/opt/homebrew/lib`,
 `/usr/local/lib`), MacPorts (`/opt/local/lib`), then dyld. Files are checked before loading (PE / ELF / Mach-O
 header incl. universal binaries, processor) and must export
@@ -75,7 +75,7 @@ file…, Check again, INSTALL.md, Continue without video). `--render-missing <pn
 
 ## Run
 
-- Windows: unzip `tvbro-windows.zip`, add your own `libmpv-2.dll` (see [docs/INSTALL.md](../docs/INSTALL.md);
+- Windows: unzip `orbit-windows-x64.zip`, add your own `libmpv-2.dll` (see [docs/INSTALL.md](../docs/INSTALL.md);
   prefer an LGPL build), run `tvBro\tvBro.exe`. Add an Xtream or M3U source in Settings.
 - Pi: needs libmpv first (`sudo apt install libmpv2`; not installed on the test Pi yet). Then
   `tar xzf tvbro-pi-arm64.tar.gz && tvbro/tvbro.sh` from the desktop session. The launcher uses XWayland

@@ -1,7 +1,7 @@
 # Copyright 2026 The tvBro authors
 # SPDX-License-Identifier: Apache-2.0
 # Builds and publishes a GitHub Release for a version tag vX.Y.Z that is on main:
-#   tvbro-X.Y.Z.apk + tvbro.apk (signed universal APK, same file), tvbro-windows-x64.zip,
+#   tvbro-X.Y.Z.apk + tvbro.apk (signed universal APK, same file), orbit-windows-x64.zip,
 #   tvbro-linux-arm64.tar.gz, SHA256SUMS.txt.
 # Nothing is built or published unless the whole CI workflow (tests and security scans) passes for the tag.
 # Signing uses repository secrets: TVBRO_KEYSTORE_BASE64, TVBRO_KEYSTORE_PASSWORD, TVBRO_KEY_ALIAS, TVBRO_KEY_PASSWORD.
@@ -92,16 +92,16 @@ jobs:
       - name: Zip (without libmpv, see docs/THIRD_PARTY.md)
         shell: pwsh
         run: |
-          $app = "desktop/build/compose/binaries/main/app/tvBro"
+          $app = "desktop/build/compose/binaries/main/app/Orbit"
           Copy-Item LICENSE, NOTICE $app
           @"
-          tvBro for Windows plays video with libmpv, which is not included (different license).
+          Orbit for Windows plays video with libmpv, which is not included (different license).
           Download mpv-dev-x86_64-<date>.7z from https://github.com/shinchiro/mpv-winbuild-cmake/releases,
-          open it with 7-Zip and copy libmpv-2.dll into this folder, next to tvBro.exe.
+          open it with 7-Zip and copy libmpv-2.dll into this folder, next to Orbit.exe.
           Full guide: https://github.com/${{ github.repository }}/blob/main/docs/INSTALL.md
           "@ | Set-Content -Encoding utf8 "$app/README-libmpv.txt"
           New-Item -ItemType Directory -Force dist | Out-Null
-          Compress-Archive -Path $app -DestinationPath dist/tvbro-windows-x64.zip
+          Compress-Archive -Path $app -DestinationPath dist/orbit-windows-x64.zip
       - uses: actions/upload-artifact@v4
         with:
           name: windows
