@@ -1,6 +1,10 @@
 // Copyright 2026 The tvBro authors. SPDX-License-Identifier: Apache-2.0
 // Browser test of focus / remote-key navigation on every screen, the guide's "never the past" rule,
 // the preview that does not follow focus, and leaving full screen with the same <video> playing.
+// The shell is Orbit direction 5: a top bar (Home · Movies · Shows · Live TV · Discover, then search and the
+// avatar). Left / Right move along the bar, Down (or OK on the lit item) enters the screen, Up at the top of a
+// screen (or Left at its left edge, Escape) comes back to the bar. My list, Recordings and Settings are in the
+// avatar's menu.
 //
 // No real provider: a mock M3U + XMLTV (now-12h .. now+24h) and an ffmpeg-made HLS clip are served by
 // a local HTTP server; the real backend (web/server) runs against it on a free port with a temp data
@@ -36,22 +40,35 @@ test('focus navigation, guide window, preview and full screen in a real browser'
 
   const tv = () => page.evaluate(() => { const r = document.querySelector('.tv2'); return r && r.tvState ? r.tvState() : null; });
   const key = async (k, n = 1) => { for (let i = 0; i < n; i++) { await page.keyboard.press(k); await sleep(60); } await sleep(120); };
-  const active = () => page.evaluate(() => { const a = document.activeElement; return a ? { tag: a.tagName, cls: a.className, text: (a.textContent || '').trim().slice(0, 40), screen: a.dataset ? a.dataset.screen : null, inMain: !!a.closest('#main'), id: a.dataset && (a.dataset.fk || '') } : null; });
-  /** Exactly one focus indicator is visible (DOM focus on a nav item or in a screen, or the guide's own). */
+  const active = () => page.evaluate(() => { const a = document.activeElement; return a ? { tag: a.tagName, cls: a.className, text: (a.textContent || '').trim().slice(0, 40), screen: a.dataset ? a.dataset.screen : null, inMain: !!a.closest('#main'), inBar: !!a.closest('#topbar, #tabbar'), avatar: a.classList.contains('tb-avatar'), id: a.dataset && (a.dataset.fk || '') } : null; });
+  /** Exactly one focus indicator is visible (DOM focus in the top bar or in a screen, or the guide's own). */
   const focusVisible = () => page.evaluate(() => {
     const a = document.activeElement, vis = (el) => { const cs = getComputedStyle(el); return (cs.boxShadow && cs.boxShadow !== 'none') || (cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0); };
-    if (a && a !== document.body && a.closest('#nav, #main, .modal, #player-layer')) {
-      if (a.closest('.tv2')) { /* the guide uses its own marks */ } else return vis(a) ? 'dom' : 'dom-invisible:' + a.className;
+    if (a && a !== document.body && a.closest('#topbar, #main, .modal, #player-layer')) {
+      if (a.closest('.tv2')) { /* the guide uses its own marks */ } else { const pic = a.querySelector(':scope > .pic'); return vis(a) || (pic && vis(pic)) ? 'dom' : 'dom-invisible:' + a.className; }   // cards ring their picture
     }
     const marks = document.querySelectorAll('.gitem.kf, .g-row.lf .g-label, .g-blk.foc');
     return marks.length === 1 ? 'guide' : 'guide-marks:' + marks.length;
   });
-  /** Walk the side menu (focus already in it) to a screen's item with Up / Down. */
+  /** Walk the top bar (focus already in it) to a screen's item ('avatar' for the avatar) with Left / Right. */
   const gotoNav = async (screen) => {
     for (let i = 0; i < 12; i++) {
-      const d = await page.evaluate((s) => { const it = [...document.querySelectorAll('.nav-item')]; return it.findIndex((x) => x.dataset.screen === s) - it.indexOf(document.activeElement); }, screen);
-      if (d === 0) return; await key(d > 0 ? 'ArrowDown' : 'ArrowUp');
+      const d = await page.evaluate((s) => {
+        const it = [...document.querySelectorAll('#topbar #nav .nav-item, #topbar .tb-btn')];
+        return it.findIndex((x) => (s === 'avatar' ? x.classList.contains('tb-avatar') : x.dataset.screen === s)) - it.indexOf(document.activeElement);
+      }, screen);
+      if (d === 0) return; await key(d > 0 ? 'ArrowRight' : 'ArrowLeft');
     }
+  };
+  /** Put the focus on the lit top bar item (a test that failed may have left it in a screen). */
+  const toBar = () => page.evaluate(() => { document.querySelectorAll('.modal-back').forEach((x) => x.remove()); const b = document.querySelector('#topbar .nav-item.active') || document.querySelector('#topbar .nav-item'); b.focus(); });
+  /** Open a screen from the avatar's menu (focus in the top bar); the focus comes back to the avatar. */
+  const viaAvatar = async (label) => {
+    await gotoNav('avatar'); await key('Enter');
+    await page.waitForSelector('.modal .menu-item', { timeout: 5000 });
+    const i = await page.$$eval('.modal .menu-item', (b, l) => b.findIndex((x) => x.textContent.includes(l)), label);
+    assert.ok(i >= 0, 'avatar menu has ' + label);
+    await key('ArrowDown', i); await key('Enter'); await sleep(600);
   };
   const assertFocus = async (msg) => { const f = await focusVisible(); assert.ok(f === 'dom' || f === 'guide', `${msg}: focus not visible (${f})`); };
 
@@ -81,14 +98,16 @@ test('focus navigation, guide window, preview and full screen in a real browser'
     await page.click('.ruler-btns .rb:first-child'); s = await tv(); assert.equal(s.winStart, Math.floor(now / 1800) * 1800);
   });
 
-  await t.test('2. Left: channel name > groups > side menu; Right comes back the same way, focus restored', async () => {
+  await t.test('2. Left: channel name > groups > top bar; Down comes back the same way, focus restored', async () => {
     let s = await tv(); const row = s.row;
     await key('ArrowLeft'); s = await tv(); assert.equal(s.zone, 'groups'); await assertFocus('groups');
     const sel = await page.evaluate(() => document.querySelector('.gitem.kf').classList.contains('sel'));
     assert.ok(sel, 'entering the groups column focuses the selected group');
-    await key('ArrowLeft'); let a = await active(); assert.equal(a.screen, 'live', 'Left from groups goes to the side menu (TV item)'); await assertFocus('nav');
-    await key('ArrowLeft'); a = await active(); assert.equal(a.screen, 'live', 'Left in the side menu stays (no jump)');
-    await key('ArrowRight'); s = await tv(); assert.equal(s.zone, 'groups', 'Right from the side menu returns to the groups column');
+    await key('ArrowLeft'); let a = await active(); assert.equal(a.screen, 'live', 'Left from groups goes to the top bar (Live TV)'); await assertFocus('top bar');
+    await key('ArrowLeft'); a = await active(); assert.equal(a.screen, 'series', 'Left in the top bar moves along it');
+    await key('ArrowRight'); a = await active(); assert.equal(a.screen, 'live', 'and Right back (the screen is not changed by moving)');
+    assert.equal(await page.evaluate(() => location.hash), '#live');
+    await key('ArrowDown'); s = await tv(); assert.equal(s.zone, 'groups', 'Down from the top bar returns to the groups column');
     await key('ArrowRight'); s = await tv(); assert.equal(s.zone, 'label'); assert.equal(s.row, row, 'back on the same channel row');
     await key('ArrowRight'); s = await tv(); assert.equal(s.zone, 'grid');
     // Up / Down at the ends do not trap or jump
@@ -170,71 +189,82 @@ test('focus navigation, guide window, preview and full screen in a real browser'
     assert.ok(n > 5, 'past programmes listed');
     await key('Escape'); assert.equal(await page.$('.modal-back'), null);
     s = await tv(); assert.equal(s.zone, before.zone);
-    // Escape on the screen: guide > groups > side menu
+    // Escape on the screen: guide > groups > top bar
     await key('Escape'); s = await tv(); assert.equal(s.zone, 'groups');
     await key('Escape'); const a = await active(); assert.equal(a.screen, 'live');
   });
 
-  await t.test('6. every other screen: arrows reach items, Left goes to the side menu, Right restores the item, Escape closes', async () => {
-    for (const screen of ['movies', 'series', 'mylist', 'search', 'recordings', 'settings']) {
-      // walk the side menu down to the screen
-      for (let i = 0; i < 10; i++) { const a = await active(); if (a.screen === screen) break; await key('ArrowDown'); }
-      let a = await active(); assert.equal(a.screen, screen, 'side menu reaches ' + screen); await assertFocus('nav ' + screen);
-      await key('ArrowRight'); await sleep(600);       // opens the screen
-      a = await active(); assert.equal(a.screen, screen, 'opening keeps the focus in the side menu');
-      await key('ArrowRight');                        // into the screen
+  await t.test('6. every other screen: arrows reach items, Up / Left go to the top bar, Down restores the item, Escape closes', async () => {
+    // from the bar: Movies, Shows, Discover, Search; from the avatar's menu: My list, Recordings, Settings
+    const screens = [['movies'], ['series'], ['discover'], ['search'], ['mylist', 'My list'], ['recordings', 'Recordings'], ['settings', 'Settings']];
+    for (const [screen, menuLabel] of screens) {
+      let a = await active();
+      if (!a.inBar) await toBar();
+      if (menuLabel) {
+        await viaAvatar(menuLabel);
+        await page.waitForFunction((s) => location.hash.replace('#', '').split(':')[0] === s, screen, { timeout: 5000 });
+        a = await active(); assert.ok(a.inBar, screen + ': after the menu the focus is back in the top bar'); await assertFocus('bar ' + screen);
+      } else {
+        await gotoNav(screen);
+        a = await active(); assert.equal(a.screen, screen, 'top bar reaches ' + screen); await assertFocus('bar ' + screen);
+        await key('Enter'); await sleep(600);          // opens the screen
+        a = await active(); assert.equal(a.screen, screen, 'opening keeps the focus in the top bar');
+      }
+      await key('ArrowDown'); await sleep(300);        // into the screen
       a = await active();
       const hasItems = await page.evaluate(() => [...document.querySelectorAll('#main .focusable')].some((e) => e.offsetParent !== null));
-      if (!hasItems) { assert.ok(a.screen === screen || !a.inMain, screen + ': nothing to focus, no trap'); continue; }
-      assert.ok(a.inMain, screen + ': Right enters the screen'); await assertFocus(screen);
+      if (!hasItems) { assert.ok(!a.inMain || a.inBar, screen + ': nothing to focus, no trap'); continue; }
+      if (screen === 'search' && a.tag === 'INPUT') { await key('ArrowDown'); a = await active(); }
+      assert.ok(a.inMain, screen + ': Down enters the screen'); await assertFocus(screen);
       // move around: focus always visible, never lost
       for (const k of ['ArrowDown', 'ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowDown']) {
         await key(k); a = await active();
-        if (screen === 'settings' && a.tag === 'SELECT') {
+        if (a.tag === 'SELECT') {
           const v0 = await page.evaluate(() => document.activeElement.value);
           await key('ArrowDown');
           const after = await page.evaluate(() => ({ tag: document.activeElement.tagName, value: document.activeElement.tagName === 'SELECT' ? document.activeElement.value : null }));
           assert.ok(after.tag !== 'SELECT' || after.value === v0, 'Down on a select moves on and does not change its value');
           a = await active();
         }
-        assert.ok(a.inMain || a.screen, `${screen} ${k}: focus lost`); await assertFocus(`${screen} ${k}`);
+        assert.ok(a.inMain || a.inBar, `${screen} ${k}: focus lost`); await assertFocus(`${screen} ${k}`);
       }
       if (!a.inMain) continue;
-      // Left until the side menu; the item focused just before it is the one Right must bring back
+      // Up until the top bar; the item focused just before it is the one Down must bring back
       const markHere = () => page.evaluate(() => { document.querySelectorAll('[data-e2e]').forEach((x) => delete x.dataset.e2e); const e = document.activeElement; if (e && e.closest('#main')) e.dataset.e2e = 'here'; });
-      for (let i = 0; i < 12; i++) { a = await active(); if (!a.inMain) break; await markHere(); await key('ArrowLeft'); }
-      a = await active(); assert.equal(a.screen, screen, screen + ': Left ends in the side menu');
-      await key('ArrowRight');
+      for (let i = 0; i < 25; i++) { a = await active(); if (!a.inMain) break; await markHere(); await key('ArrowUp'); }
+      a = await active(); assert.ok(a.inBar, screen + ': Up ends in the top bar');
+      await key('ArrowDown');
       const back = await page.evaluate(() => document.activeElement && document.activeElement.dataset.e2e === 'here');
-      // a text field may legitimately be left through Left at the caret start; the restored item is the last one focused
-      const last = await page.evaluate(() => document.activeElement && document.activeElement.closest('#main') ? true : false);
-      assert.ok(last, screen + ': Right returns into the screen');
-      assert.ok(back || screen === 'search', screen + ': Right restores the last focused item');
-      await key('Escape'); a = await active(); assert.equal(a.screen, screen, screen + ': Escape goes to the side menu');
+      const inMain = await page.evaluate(() => !!(document.activeElement && document.activeElement.closest('#main')));
+      assert.ok(inMain, screen + ': Down returns into the screen');
+      // a text field may legitimately be left through Up; the restored item is the last one focused
+      assert.ok(back || screen === 'search', screen + ': Down restores the last focused item');
+      await key('Escape'); a = await active(); assert.ok(a.inBar, screen + ': Escape goes to the top bar');
     }
   });
 
-  await t.test('6b. Movies and Shows: Enter opens the page, Escape comes back to the same tile; arrows in the grid', async () => {
+  await t.test('6b. Movies and Shows Browse: Enter opens the page, Escape comes back to the same card; arrows in the grid', async () => {
     for (const screen of ['movies', 'series']) {
-      await gotoNav(screen);
-      let a = await active(); assert.equal(a.screen, screen);
-      await key('ArrowRight'); await sleep(800); await key('ArrowRight');
-      try { await page.waitForFunction(() => document.querySelectorAll('#main .tile').length > 1, null, { timeout: 10000 }); }
-      catch (e) { throw new Error(screen + ': no tiles: ' + JSON.stringify(await page.evaluate(() => ({ hash: location.hash, ae: document.activeElement && document.activeElement.outerHTML.slice(0, 120), main: document.querySelector('#main').innerText.slice(0, 300) }))) + '\n' + logs.join('\n')); }
+      await page.evaluate((s) => { location.hash = s + ':browse'; }, screen);
+      try { await page.waitForFunction(() => document.querySelectorAll('#main .grid5 .card5').length > 1, null, { timeout: 15000 }); }
+      catch (e) { throw new Error(screen + ': no cards: ' + JSON.stringify(await page.evaluate(() => ({ hash: location.hash, main: document.querySelector('#main').innerText.slice(0, 300) }))) + '\n' + logs.join('\n')); }
+      await toBar();
+      let a = await active(); assert.equal(a.screen, screen, screen + ': lit in the top bar');
+      await key('ArrowDown');
       a = await active(); assert.ok(a.inMain, screen + ': focus in the screen');
-      // walk to a tile (chips are above the grid)
-      for (let i = 0; i < 4; i++) { const isTile = await page.evaluate(() => document.activeElement.classList.contains('tile') && !document.activeElement.closest('.cw-row')); if (isTile) break; await key('ArrowDown'); }
+      // walk down from the sub-menu row to a card of the grid
+      for (let i = 0; i < 4; i++) { const isCard = await page.evaluate(() => !!document.activeElement.closest('.grid5 .card5')); if (isCard) break; await key('ArrowDown'); }
       await key('ArrowRight');
-      const id = await page.evaluate(() => document.activeElement.dataset.id);
-      assert.ok(id, screen + ': a tile has the focus'); await assertFocus(screen + ' tile');
+      const id = await page.evaluate(() => document.activeElement.closest('.grid5') && document.activeElement.dataset.key);
+      assert.ok(id, screen + ': a card has the focus'); await assertFocus(screen + ' card');
       await key('Enter'); await page.waitForFunction(() => location.hash.startsWith('#detail:'), null, { timeout: 5000 });
       await page.waitForFunction(() => document.activeElement && document.activeElement.closest('#main'), null, { timeout: 10000 });
       await assertFocus(screen + ' page');
       await key('ArrowDown'); await assertFocus(screen + ' page Down');
       await key('Escape'); await page.waitForFunction(() => !location.hash.startsWith('#detail:'), null, { timeout: 5000 });
-      await page.waitForFunction((id) => document.activeElement && document.activeElement.dataset.id === id, id, { timeout: 10000 });
-      await assertFocus(screen + ' back on the tile');
-      await key('Escape'); a = await active(); assert.equal(a.screen, screen);
+      await page.waitForFunction((id) => document.activeElement && document.activeElement.dataset.key === id, id, { timeout: 10000 });
+      await assertFocus(screen + ' back on the card');
+      await key('Escape'); a = await active(); assert.ok(a.inBar, screen + ': Escape goes to the top bar');
     }
   });
 
@@ -264,10 +294,9 @@ test('focus navigation, guide window, preview and full screen in a real browser'
   });
 
   await t.test('7. back on TV: the guide restores its place; no page errors', async () => {
-    for (let i = 0; i < 10; i++) { const a = await active(); if (a.screen === 'live') break; await key('ArrowUp'); }
-    await key('ArrowRight'); await sleep(800);
+    await toBar(); await gotoNav('live'); await key('Enter'); await sleep(800);
     await page.waitForFunction(() => document.querySelector('.tv2') && document.querySelector('.tv2').tvState, null, { timeout: 10000 });
-    await key('ArrowRight');
+    await key('ArrowDown');
     const s = await tv(); assert.ok(['groups', 'label', 'grid'].includes(s.zone)); await assertFocus('TV again');
     assert.equal(s.winStart, Math.floor(Date.now() / 1000 / 1800) * 1800);
     assert.deepEqual(errors, [], 'page errors: ' + errors.join('\n'));

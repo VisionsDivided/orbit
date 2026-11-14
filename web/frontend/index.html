@@ -5,28 +5,71 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#05060c">
   <title>Orbit</title>
   <link rel="icon" type="image/png" href="brand/favicon.png">
   <link rel="apple-touch-icon" href="brand/apple-touch-icon.png">
   <link rel="stylesheet" href="css/style.css?v=__V__">
+  <link rel="stylesheet" href="css/orbit.css?v=__V__">
   <!-- Players are vendored locally (LAN-only, no external CDN at runtime). -->
   <script defer src="vendor/hls.min.js"></script>
   <script defer src="vendor/mpegts.min.js"></script>
 </head>
 <body>
+  <!-- icon sprite (direction 5 line icons; stroke = currentColor) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+    <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></symbol>
+    <symbol id="i-tv" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M8 2l4 4 4-4"/></symbol>
+    <symbol id="i-live" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19 5a10 10 0 0 1 0 14M5 19A10 10 0 0 1 5 5"/></symbol>
+    <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-starO" viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+    <symbol id="i-req" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-restart" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M10 6l-6 6 6 6M4 12h16"/></symbol>
+    <symbol id="i-dots" viewBox="0 0 24 24"><path d="M5 12h.01M12 12h.01M19 12h.01" stroke-width="3.2"/></symbol>
+    <symbol id="i-rec" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+  </defs></svg>
+  <!-- the colour-matched cinematic backdrop: two layers that cross-fade (backdrop.js) -->
+  <div id="scene" aria-hidden="true"><div class="bgl on"><div class="mesh"></div><div class="bgart"></div></div><div class="bgl"><div class="mesh"></div><div class="bgart"></div></div><div class="vig"></div></div>
   <div id="app">
-    <nav id="nav" aria-label="Main">
-      <div class="brand"><img src="brand/orbit-nav.webp" alt="Orbit" class="brand-img"></div>
-      <button class="nav-item" data-screen="live" tabindex="0"><span class="ic">📺</span><span>TV</span></button>
-      <button class="nav-item" data-screen="movies" tabindex="0"><span class="ic">🎬</span><span>Movies</span></button>
-      <button class="nav-item" data-screen="series" tabindex="0"><span class="ic">📀</span><span>Shows</span></button>
-      <button class="nav-item" data-screen="mylist" tabindex="0"><span class="ic">★</span><span>My list</span></button>
-      <button class="nav-item" data-screen="search" tabindex="0"><span class="ic">🔍</span><span>Search</span></button>
-      <button class="nav-item" data-screen="recordings" tabindex="0"><span class="ic">⏺</span><span>Recordings</span></button>
-      <div class="nav-spacer"></div>
-      <button class="nav-item" data-screen="settings" tabindex="0"><span class="ic">⚙</span><span>Settings</span></button>
-    </nav>
+    <header id="topbar">
+      <a class="tb-logo" href="#home" tabindex="-1" aria-label="Orbit home"><img src="brand/orbit-horiz.webp" alt="Orbit" class="tb-wordmark"><img src="brand/orbit-nav.webp" alt="" class="tb-planet"></a>
+      <h1 class="tb-title" aria-hidden="true"></h1>
+      <nav id="nav" aria-label="Main">
+        <button class="nav-item" data-screen="home" type="button">Home</button>
+        <button class="nav-item" data-screen="movies" type="button">Movies</button>
+        <button class="nav-item" data-screen="series" type="button">Shows</button>
+        <button class="nav-item" data-screen="live" type="button">Live TV</button>
+        <button class="nav-item" data-screen="discover" type="button">Discover</button>
+      </nav>
+      <div class="tb-rt">
+        <button class="tb-btn tb-search" data-screen="search" type="button" aria-label="Search"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg></button>
+        <span class="tb-clock" aria-hidden="true"></span>
+        <button class="tb-btn tb-avatar av" type="button" aria-label="Profile and settings" aria-haspopup="menu">?</button>
+      </div>
+    </header>
     <main id="main" aria-live="polite"><div class="loading">Loading…</div></main>
+    <nav id="tabbar" aria-label="Main">
+      <button class="nav-item" data-screen="home" type="button"><svg class="ic" aria-hidden="true"><use href="#i-home"/></svg><span>Home</span></button>
+      <button class="nav-item" data-screen="movies" type="button"><svg class="ic" aria-hidden="true"><use href="#i-film"/></svg><span>Movies</span></button>
+      <button class="nav-item" data-screen="series" type="button"><svg class="ic" aria-hidden="true"><use href="#i-tv"/></svg><span>Shows</span></button>
+      <button class="nav-item" data-screen="live" type="button"><svg class="ic" aria-hidden="true"><use href="#i-live"/></svg><span>Live</span></button>
+      <button class="nav-item" data-screen="discover" type="button"><svg class="ic" aria-hidden="true"><use href="#i-compass"/></svg><span>Discover</span></button>
+    </nav>
   </div>
   <div id="player-layer" hidden></div>
   <div id="toast" role="status"></div>
