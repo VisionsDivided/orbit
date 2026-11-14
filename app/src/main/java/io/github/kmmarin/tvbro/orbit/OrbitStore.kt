@@ -29,7 +29,8 @@ class OrbitStore(private val ctx: Context) {
         val server = p.getString("server", null) ?: return null
         val session = p.getString("session", null) ?: return null
         OrbitLink(server, session, p.getString("csrf", "") ?: "", p.getString("account", "") ?: "",
-            p.getString("username", "") ?: "", p.getString("profile", "") ?: "", p.getBoolean("kids", false))
+            p.getString("username", "") ?: "", p.getString("profile", "") ?: "", p.getBoolean("kids", false),
+            p.getString("deviceName", "") ?: "")
     } catch (e: Exception) { null }
 
     fun save(l: OrbitLink) {
@@ -37,14 +38,14 @@ class OrbitStore(private val ctx: Context) {
             prefs?.edit {
                 putString("server", l.server); putString("session", l.session); putString("csrf", l.csrf)
                 putString("account", l.account); putString("username", l.username); putString("profile", l.profile)
-                putBoolean("kids", l.kids); putString("lastServer", l.server)
+                putBoolean("kids", l.kids); putString("deviceName", l.deviceName); putString("lastServer", l.server)
             }
         } catch (e: Exception) { Diag.log("Orbit: encrypted write failed (${e.javaClass.simpleName})") }
     }
 
     /** Forget the session, the sync base and this TV's stream id (the last server address stays, to link again quickly). */
     fun clear() {
-        try { prefs?.edit { listOf("server", "session", "csrf", "account", "username", "profile", "kids", "listBase", "streamSid").forEach { remove(it) } } } catch (e: Exception) { }
+        try { prefs?.edit { listOf("server", "session", "csrf", "account", "username", "profile", "kids", "deviceName", "listBase", "streamSid").forEach { remove(it) } } } catch (e: Exception) { }
         sid = null
     }
 

@@ -21,6 +21,9 @@ services:
       # only with a TLS reverse proxy in front (DEPLOY.md): loopback (the container's own nginx) plus the proxy's
       # address as nginx sees it. Leave it out otherwise.
       # ORBIT_TRUSTED_PROXIES: "127.0.0.1/32,::1/128,192.0.2.2/32"
+      # linked TVs never get the IPTV login and play through this server (the default; DEPLOY.md). Set it to pin the
+      # choice here instead of in Settings: "1" hidden, "0" TVs get the login and play from the provider directly.
+      # ORBIT_HIDE_PROVIDER_LOGIN: "1"
     volumes:
       - /srv/orbit/data:/data
     secrets:

@@ -379,7 +379,7 @@ is never changed, so syncs keep every edit.
 | `GET /api/session` · `POST /api/auth/login {password}` · `POST /api/auth/logout` · `POST /api/auth/require {enabled, password?, current?}` · `POST /api/auth/password {current, password}` · `POST /api/auth/viewer {password}` | session: `{auth: ok\|login, role, csrf, required, signedIn, kind, sources, viewerPassword}` (no password required: a new browser gets its session cookie here); login needs `X-TvBro: 1`; wrong passwords 403, then 429 `{retryAfter}`; require / password / viewer: admin |
 | `GET /api/sync/status` | `{playlists:[{id, name, kind, enabled, channels:{…job, channels, groups}, epg:{…job, channelsWithGuide, channels, programmes, from, to}, vod:{…job, movies, series, supported}, search:{…job, channels, vod, titles, programmes}}], settings:{epgHours, channelsHours, vodHours, maxStreams, allowLanSources, ctid, rec…}, account:{max_connections, active_cons, status, exp_date, is_trial}, streams:{max, count, active:[{sid, label, what, since, idleSec}]}, time}` where `job = {state: idle/starting/downloading/parsing/saving, running, progress:{bytes,total,programmes,…}, startedAt, lastOk, lastDurationSec, lastError:{at,msg}, failures, nextAt (the retry time while failing), intervalHours}` |
 | `POST /api/sync/{epg,channels,vod,all}` | starts the job(s); returns the status above |
-| `POST /api/settings` | `{epgHours?, channelsHours?, vodHours?, maxStreams?, allowLanSources?, ctid?, rec…}` → status (admin) |
+| `POST /api/settings` | `{epgHours?, channelsHours?, vodHours?, maxStreams?, allowLanSources?, hideProviderLogin? (Orbit), ctid?, rec…}` → status (admin) |
 | `GET /api/state` | `{mylist:[…], resume:{key:{secs,dur,at,done?,meta}}, reminders:[…], history:[{q,at}], prefs:{…}}` |
 | `POST /api/state/<scope>` | `{op:"put"|"del"|"clear", key, value}` (scopes: mylist, resume, reminders, history, prefs) |
 | `GET /api/play?kind=live&key=…` / `kind=movie|episode&id=…&ext=…` | `{url}` signed `/stream` / `/vodstream` URL (24 h); the client appends `&sid=` |
@@ -408,7 +408,7 @@ is never changed, so syncs keep every edit.
 | `GET /api/layout` · `POST /api/layout {op, …}` | `group.create {name}`, `group.rename {id, name}`, `group.hide {id, hidden}`, `group.move {id, dir}`, `group.delete {id}`, `channel.rename {key, name}`, `channel.hide {key, hidden}`, `channel.move {group, key, dir}`, `channel.add/remove {group, key}`, `reset` |
 
 ## Tests
-`node --test web/tests/guide.test.mjs web/tests/vod.test.mjs web/tests/reminders.test.mjs web/tests/playfmt.test.mjs web/tests/resume.test.mjs web/tests/livefix.test.mjs`
+`node --test web/tests/guide.test.mjs web/tests/vod.test.mjs web/tests/reminders.test.mjs web/tests/playfmt.test.mjs web/tests/resume.test.mjs web/tests/livefix.test.mjs web/tests/streamprompt.test.mjs web/tests/signout.test.mjs`
 and `python -m unittest discover -s web/tests` (security attack cases in `test_security.py`: `file:` / `gopher:` /
 `ftp:` / `data:` / `concat:` sources and streams, loopback, 169.254.169.254, 10.x / 172.16.x / 192.168.x / 100.64.x,
 redirects to them, DNS rebinding, ffmpeg protocol whitelist, CSRF without token / wrong origin / text/plain,

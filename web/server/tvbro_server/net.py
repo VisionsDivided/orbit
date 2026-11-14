@@ -79,6 +79,29 @@ def private_host_here(host: str, port: int):
         _scoped_hosts.reset(token)
 
 
+_in_scope: contextvars.ContextVar = contextvars.ContextVar("tvbro_private_scope", default=False)
+
+
+@contextlib.contextmanager
+def private_hosts_scope(hosts=()):
+    """Like ``private_host_here`` for several (host, port) pairs, and ``allow_here`` may add more inside the block
+    (a sign-in that discovers its server's address on the way). Everything is gone when the block ends."""
+    token = _scoped_hosts.set(_scoped_hosts.get() | {(str(h).lower().strip("[]"), int(p)) for h, p in hosts})
+    flag = _in_scope.set(True)
+    try:
+        yield
+    finally:
+        _in_scope.reset(flag)
+        _scoped_hosts.reset(token)
+
+
+def allow_here(host: str, port: int) -> None:
+    """Inside ``private_hosts_scope`` only: allow one more (host, port) for the rest of that block."""
+    if not _in_scope.get():
+        raise RuntimeError("allow_here outside private_hosts_scope")
+    _scoped_hosts.set(_scoped_hosts.get() | {(str(host).lower().strip("[]"), int(port))})
+
+
 def _host_listed(host: str, port: int) -> bool:
     try:
         key = (str(host).lower().strip("[]"), int(port))

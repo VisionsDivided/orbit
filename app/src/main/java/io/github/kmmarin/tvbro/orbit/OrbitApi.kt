@@ -22,6 +22,8 @@ import java.util.concurrent.TimeUnit
 data class OrbitLink(
     val server: String, val session: String, val csrf: String,
     val account: String, val username: String, val profile: String, val kids: Boolean,
+    /** The name the household gave this TV ("Kitchen"; "" = not named, from servers before 2026-11-14 too). */
+    val deviceName: String = "",
 )
 
 data class PairStart(val pairId: String, val code: String, val expires: Long, val interval: Int)
@@ -75,6 +77,7 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT) {
                 server, session, csrf,
                 account = acc?.str("displayName") ?: "", username = acc?.str("username") ?: "",
                 profile = prof?.str("name") ?: "", kids = (prof?.get("kids") as? JsonPrimitive)?.booleanOrNull ?: false,
+                deviceName = me.str("deviceName") ?: "",
             )
         }
 
@@ -125,6 +128,15 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT) {
         if (e.code == 401) null else throw e
     }
 
+    /**
+     * Names this TV ("Kitchen"): shown in the stream-limit prompt on other devices and in the device lists. Returns the
+     * name as the server stored it. 400 (OrbitError) for a name it refuses, 404 from a server without the route.
+     */
+    fun setName(link: OrbitLink, name: String): String {
+        val j = call(link.server, "/v1/device/name", Json.encodeToString(JsonObject.serializer(), JsonObject(mapOf("name" to JsonPrimitive(name)))), link)
+        return j.str("name") ?: name
+    }
+
     fun logout(link: OrbitLink) {
         runCatching { call(link.server, "/v1/auth/logout", "{}", link) }
     }
@@ -146,7 +158,7 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT) {
     /** Who uses the provider's streams now (tvBro's stream count, shared by TVs, browsers and recordings). */
     /** [id]: the stream's public id, to name it in [streamStart] (empty from servers before 2026-11-14). */
     data class StreamUse(val sid: String, val label: String, val what: String, val recording: Boolean,
-                         val id: String = "", val profile: String = "")
+                         val id: String = "", val profile: String = "", val device: String = "")
     data class StreamStatus(val max: Int, val count: Int, val active: List<StreamUse>)
 
     fun streams(link: OrbitLink): StreamStatus = parseStreams(call(link.server, "/v1/streams", null, link))
@@ -155,7 +167,7 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT) {
         val act = (j["active"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { e ->
             val o = e as? JsonObject ?: return@mapNotNull null
             StreamUse(o.str("sid") ?: "", o.str("label") ?: "", o.str("what") ?: "", (o["recording"] as? JsonPrimitive)?.booleanOrNull ?: false,
-                o.str("id") ?: "", o.str("profile") ?: "")
+                o.str("id") ?: "", o.str("profile") ?: "", o.str("device") ?: "")
         }
         return StreamStatus((j["max"] as? JsonPrimitive)?.intOrNull ?: 1, (j["count"] as? JsonPrimitive)?.intOrNull ?: act.size, act)
     }

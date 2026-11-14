@@ -252,6 +252,19 @@ class Server(unittest.TestCase):
         r = self.req("POST", "/api/stream/start", {"sid": tv_sid, "label": "Living room TV", "what": "News", "replace": web["id"]}, auth(tvs))[2]
         self.assertEqual((r["ok"], r["replaced"]), (True, 1))
         self.assertIn("stopped", self.req("POST", "/api/stream/heartbeat", {"sid": "web" + "b" * 29}, auth(alex))[2])
+        # the stream is called by its profile until the TV has a name, then by that name
+        self.assertEqual(self.req("GET", "/v1/streams", headers=auth(tvs))[2]["active"][0]["name"], "Kids")
+        self.assertEqual(self.req("POST", "/v1/device/name", {"name": "<b>"}, auth(tvs))[0], 400)
+        self.assertEqual(self.req("POST", "/v1/device/name", {"name": "  Kitchen  "}, auth(tvs))[2], {"ok": True, "name": "Kitchen"})
+        self.req("POST", "/api/stream/start", {"sid": tv_sid, "label": "Living room TV", "what": "News"}, auth(tvs))
+        a = self.req("GET", "/v1/streams", headers=auth(tvs))[2]["active"][0]
+        self.assertEqual((a["device"], a["name"], a["profile"]), ("Kitchen", "Kitchen", "Kids"))
+        # the owner lists and renames linked TVs; Sam (a member) sees none of Alex's
+        devs = self.req("GET", "/v1/devices", headers=auth(alex))[2]["devices"]
+        self.assertEqual([(d["name"], d["device"], d["profile"]) for d in devs], [("Kitchen", "Living room TV", "Kids")])
+        self.assertEqual(self.req("GET", "/v1/devices", headers=auth(sam))[2], {"devices": []})
+        self.assertEqual(self.req("POST", "/v1/devices/rename", {"id": devs[0]["id"], "name": "Den"}, auth(sam))[0], 404)
+        self.assertEqual(self.req("POST", "/v1/devices/rename", {"id": devs[0]["id"], "name": "Den"}, auth(alex))[2]["name"], "Den")
 
         # and it can be signed out from Alex's devices list
         dev = next(s for s in self.req("GET", "/v1/sessions", headers=auth(alex))[2]["sessions"] if s["device"] == "Living room TV")

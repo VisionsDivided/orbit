@@ -76,6 +76,12 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
     var signedOut by mutableStateOf(false); private set
     /** Set when a pairing has just finished, so the pairing screen can close itself. */
     var justLinked by mutableStateOf(false)
+    /** Right after linking: the pairing screen offers to name this TV ("Kitchen") before it closes; skipping is fine. */
+    var nameStep by mutableStateOf(false)
+    /** The last "Name this TV" result for the screen showing the field ("" = nothing to say). */
+    var nameMessage by mutableStateOf(""); private set
+    /** What the name field offers before anything is typed: the TV's model. */
+    val defaultName: String = io.github.kmmarin.tvbro.data.DeviceName.default(android.os.Build.MODEL)
     /** Last sync result for Settings ("Synced 21:04" / an error). */
     var syncStatus by mutableStateOf(""); private set
     val lastServer: String get() = store.lastServer
@@ -248,7 +254,7 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
             loop?.cancel(); loop = null
             beat?.cancel(); beat = null
             synchronized(holders) { holders.clear() }
-            link = null; signedOut = signedOutByServer
+            link = null; signedOut = signedOutByServer; nameStep = false
         }
         syncLock.withLock {                       // after any sync still running, so nothing it fetched comes back
             cached = null; legacy = false
@@ -292,7 +298,7 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
                 if (!mine && st.count >= st.max) {
                     if (!ask) return false
                     val rows = io.github.kmmarin.tvbro.data.StreamChoice.rows(st.active.map { u ->
-                        io.github.kmmarin.tvbro.data.StreamChoice.Use(u.id, u.label, u.profile, u.what, u.recording)
+                        io.github.kmmarin.tvbro.data.StreamChoice.Use(u.id, u.label, u.profile, u.what, u.recording, u.device)
                     })
                     val q = StreamAsk(st.max, rows, kotlinx.coroutines.CompletableDeferred())
                     withContext(Dispatchers.Main) { streamAsk = q }
@@ -377,7 +383,7 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
                         store.listBase = emptySet()
                         cached = null; legacy = false
                         withContext(Dispatchers.Main) {
-                            link = r.link; signedOut = false; pairing = null; justLinked = true
+                            link = r.link; signedOut = false; pairing = null; nameMessage = ""; nameStep = true; justLinked = true
                             message = "Linked: ${r.link.account}, profile ${r.link.profile}"
                         }
                         startSyncLoop()
@@ -391,6 +397,39 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
             }
         }
     }
+
+    /**
+     * Names this TV on the home server ("Kitchen"): other devices then see it by that name in the stream-limit prompt
+     * and the device lists. [done] runs on the main thread once the server took it.
+     */
+    fun saveName(input: String, done: () -> Unit = {}) {
+        val l = link ?: return
+        val name = io.github.kmmarin.tvbro.data.DeviceName.clean(input)
+        if (name == null) { nameMessage = "Use ${io.github.kmmarin.tvbro.data.DeviceName.HELP}."; return }
+        nameMessage = "Saving…"
+        scope.launch(Dispatchers.IO) {
+            var ok = false
+            val msg = try {
+                val saved = api.setName(l, name)
+                withContext(Dispatchers.Main) {
+                    val cur = link
+                    if (cur != null && cur.session == l.session) { val now = cur.copy(deviceName = saved); store.save(now); link = now }
+                }
+                ok = true
+                "This TV is now called $saved"
+            } catch (e: OrbitError) {
+                if (e.code == 404) "The home server is too old to name TVs; update Orbit on the server" else e.message ?: "Not saved (${e.code})"
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) { describe(e) }
+            withContext(Dispatchers.Main) {
+                nameMessage = msg
+                if (ok) done()
+            }
+        }
+    }
+
+    fun clearNameMessage() { nameMessage = "" }
 
     fun cancelPairing() {
         job?.cancel(); job = null

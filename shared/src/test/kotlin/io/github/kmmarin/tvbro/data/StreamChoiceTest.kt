@@ -8,8 +8,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StreamChoiceTest {
-    private fun u(id: String, label: String, profile: String = "", what: String = "", rec: Boolean = false) =
-        StreamChoice.Use(id, label, profile, what, rec)
+    private fun u(id: String, label: String, profile: String = "", what: String = "", rec: Boolean = false, device: String = "") =
+        StreamChoice.Use(id, label, profile, what, rec, device)
+
+    @Test fun theDeviceNameComesFirstThenTheProfileThenTheLabel() {
+        val r = StreamChoice.rows(listOf(u("a", "TV (Model)", "Kids", "News", device = "Kitchen"),
+            u("b", "TV (Other)", "Dad"), u("c", "Chrome on Mac"), u("d", "TV", "Mum", device = "  ")))
+        assertEquals(listOf("Kitchen", "Dad", "Chrome on Mac", "Mum"), r.map { it.name })
+        assertEquals("Stop Kitchen and watch", r[0].button)
+    }
+
+    @Test fun twoDevicesWithTheSameNameAreToldApart() {
+        val r = StreamChoice.rows(listOf(u("a", "TV (A)", "Dad", device = "Kitchen"), u("b", "TV (B)", "Mum", device = "Kitchen"),
+            u("c", "TV", device = "Den"), u("d", "TV", device = "Den")))
+        assertEquals(listOf("Kitchen on TV (A)", "Kitchen on TV (B)", "Den on TV (1)", "Den on TV (2)"), r.map { it.name })
+    }
 
     @Test fun profileNamesTheStreamElseTheDevice() {
         val r = StreamChoice.rows(listOf(u("a", "TV (Model)", "Kitchen", "News"), u("b", "Chrome on Windows", "", "Film")))

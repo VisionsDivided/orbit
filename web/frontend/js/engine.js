@@ -159,7 +159,7 @@ export class PreviewPlayer {
       this.docked = false; this.video.muted = this.wantMuted !== false;
       this.key = c.key;
       const done = () => { if (this.pending === c.key) this.pending = null; };
-      if ((await beginStream('Preview · ' + c.name)) === false) { if (this.key === c.key) this.key = null; done(); return; }
+      if ((await beginStream('Preview · ' + c.name, { ask: false })) !== true) { if (this.key === c.key) this.key = null; done(); return; }
       if (this.key !== c.key) return;
       if (typeof url === 'function') this.urlFor = (k) => url(k);
       let u; try { u = await (typeof url === 'function' ? url(c.key) : url); } catch (e) { done(); if (e && e.locked) this.onNotice('🔒 Locked'); return; }

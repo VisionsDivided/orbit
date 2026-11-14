@@ -62,7 +62,8 @@ review before merging.
 ./gradlew :desktop:test                             # desktop, including headless Compose UI tests
 python -m unittest discover -s web/tests          # web server (needs: pip install cryptography)
 node --test web/tests/guide.test.mjs web/tests/vod.test.mjs web/tests/reminders.test.mjs \
-  web/tests/playfmt.test.mjs web/tests/resume.test.mjs web/tests/livefix.test.mjs   # web frontend logic
+  web/tests/playfmt.test.mjs web/tests/resume.test.mjs web/tests/livefix.test.mjs \
+  web/tests/streamprompt.test.mjs web/tests/signout.test.mjs   # web frontend logic
 python tools/check_private.py                       # personal-data scan of tracked files
 ```
 

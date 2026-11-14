@@ -43,6 +43,7 @@ fun LazyListScope.orbitSection(m: AppModel) {
             Text("Signed in as ${l.account} (${l.username}), profile ${l.profile}${if (l.kids) " (kids)" else ""}",
                 color = TextMain, fontSize = 17.sp, modifier = Modifier.padding(vertical = 3.dp))
         }
+        item { NameThisTv(m) }
         item {
             Text("Change the profile or sign this TV out from Orbit on a phone or computer (Settings ▸ Accounts ▸ Your devices), " +
                 "or unlink it here.", color = TextDim, fontSize = 14.sp, modifier = Modifier.padding(vertical = 3.dp))
@@ -67,6 +68,50 @@ fun LazyListScope.orbitSection(m: AppModel) {
     if (o.message.isNotEmpty()) item { Text(o.message, color = Ok, fontSize = 15.sp, modifier = Modifier.padding(vertical = 4.dp)) }
 }
 
+/**
+ * Settings ▸ Home server ▸ Name this TV: the name other devices see in the stream-limit prompt ("Stop Kitchen and
+ * watch") and in the device lists. Empty until named; the field then offers the TV's model.
+ */
+@Composable
+private fun NameThisTv(m: AppModel) {
+    val o = m.orbit
+    val l = o.link ?: return
+    var name by remember(l.deviceName) { mutableStateOf(l.deviceName.ifEmpty { o.defaultName }) }
+    DisposableEffect(Unit) { onDispose { o.clearNameMessage() } }
+    Column(Modifier.padding(vertical = 6.dp)) {
+        Text("Name this TV" + if (l.deviceName.isEmpty()) " (not named yet)" else ": ${l.deviceName}", color = TextMain, fontSize = 17.sp)
+        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            TvField("Shown on your other devices, e.g. Kitchen or Bedroom", name, { name = it.take(io.github.kmmarin.tvbro.data.DeviceName.MAX + 8) },
+                modifier = Modifier.weight(1f))
+            TvButton("Save name") { o.saveName(name) }
+        }
+        if (o.nameMessage.isNotEmpty()) Text(o.nameMessage, color = Ok, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp))
+    }
+}
+
+/** Right after linking: name this TV (or skip; the field offers the TV's model). */
+@Composable
+private fun OrbitNameStep(m: AppModel, close: () -> Unit) {
+    val o = m.orbit
+    var name by remember { mutableStateOf(o.link?.deviceName?.ifEmpty { null } ?: o.defaultName) }
+    val fieldFr = remember { FocusRequester() }
+    LaunchedEffect(Unit) { delay(250); runCatching { fieldFr.requestFocus() } }
+    val finish = { o.nameStep = false; o.clearNameMessage(); close() }
+    BackHandler { finish() }
+    Column(Modifier.fillMaxSize().background(Bg).padding(40.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Linked. Name this TV?", color = Accent, fontSize = 28.sp)
+        Text("Give it the name of its room, like Kitchen or Bedroom. When every stream is in use, other devices offer " +
+            "\"Stop Kitchen and watch\" by this name. You can change it later in Settings ▸ Home server.", color = TextMain, fontSize = 17.sp)
+        TvField("Name (${io.github.kmmarin.tvbro.data.DeviceName.HELP})", name, { name = it.take(io.github.kmmarin.tvbro.data.DeviceName.MAX + 8) },
+            requester = fieldFr, modifier = Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            TvButton("Save") { o.saveName(name) { finish() } }
+            TvButton("Skip") { finish() }
+        }
+        if (o.nameMessage.isNotEmpty()) Text(o.nameMessage, color = Accent, fontSize = 16.sp)
+    }
+}
+
 /** Link this TV: enter the home server's address once, then approve the code on a phone or computer. */
 @Composable
 fun OrbitLinkScreen(m: AppModel) {
@@ -76,8 +121,10 @@ fun OrbitLinkScreen(m: AppModel) {
     // Add source; opened from Settings -> Settings
     val firstRun = remember { m.sources.isEmpty() }
     val back = { if (!firstRun) Screen.SETTINGS else if (m.sources.isEmpty()) Screen.ADD_SOURCE else Screen.LIST }
+    // linked: the name step first (it closes the screen when saved or skipped)
+    LaunchedEffect(o.justLinked) { if (o.justLinked) { o.justLinked = false; if (!o.nameStep) m.screen = back() } }
+    if (o.nameStep && o.link != null) { OrbitNameStep(m) { m.screen = back() }; return }
     BackHandler { o.cancelPairing(); m.screen = back() }
-    LaunchedEffect(o.justLinked) { if (o.justLinked) { o.justLinked = false; m.screen = back() } }
     val p = o.pairing
     if (p == null) {
         var server by remember { mutableStateOf(o.lastServer.ifEmpty { "http://" }) }

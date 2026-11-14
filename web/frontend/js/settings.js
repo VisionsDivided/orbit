@@ -253,6 +253,11 @@ export function settingsScreen(main, nav, ctx) {
           try { await api.authViewer(''); viewerPw = false; render(); toast('Viewer password removed'); } catch (e) { toast(e.message); }
         } }, 'Remove') : null) : null,
       admin ? row('Playlists and streams on your local network', select(S.allowLanSources ? 'on' : 'off', [['off', 'Blocked (safer)'], ['on', 'Allowed']], (v) => save({ allowLanSources: v === 'on' }))) : null,
+      // Orbit: linked TVs play through this server with logins of their own (orbit/facade.py)
+      admin && !shared ? row('Provider login on linked TVs', S.hideProviderLoginForced
+        ? (S.hideProviderLogin !== false ? 'Hidden (set on the server)' : 'Sent to TVs (set on the server)')
+        : select(S.hideProviderLogin !== false ? 'on' : 'off', [['on', 'Hidden: TVs play through this server'], ['off', 'Sent to TVs: they play from the provider']], (v) => save({ hideProviderLogin: v === 'on' }))) : null,
+      admin && !shared ? h('div', { class: 'hint' }, 'Hidden: linked TVs never receive the IPTV login; their video passes through this server (its network carries every stream). TVs pick up a change within half an hour.') : null,
       admin ? row('Container id (for the share steps)', S.ctid ? String(S.ctid) : 'Not set',
         h('button', { class: 'btn secondary focusable', 'data-k': 'ctid', onclick: () => {
           const v = window.prompt('Proxmox container id of tvBro (pct list), empty to clear', S.ctid || ''); if (v === null) return;

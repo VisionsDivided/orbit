@@ -6,6 +6,7 @@
 import { api } from './api.js';
 import { h } from './util.js';
 import { orbitLoad, showAccountSignIn } from './orbit.js';
+import { forgetAccountHere } from './signout.js';
 
 let shown = false;
 
@@ -15,7 +16,8 @@ export async function showSignIn() {
   shown = true;
   // Orbit: a server with accounts asks for a username and password instead of the shared password
   const { status } = await orbitLoad();
-  if (status && status.accounts) { showAccountSignIn(); return; }
+  // (signed out here or from another device: what this browser cached for the last account goes first)
+  if (status && status.accounts) { await forgetAccountHere(); showAccountSignIn(); return; }
   const pw = h('input', { type: 'password', class: 'focusable signin-input', autocomplete: 'current-password', 'aria-label': 'Password', maxlength: '200' });
   const msg = h('div', { class: 'hint signin-msg', role: 'status' });
   const btn = h('button', { class: 'btn focusable', type: 'submit' }, 'Sign in');

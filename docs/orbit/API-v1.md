@@ -28,8 +28,13 @@ It is written so another implementation (for example Rust) could replace the ser
 ## Objects
 - `Account`: `{"id", "username", "displayName", "role": "owner"|"admin"|"member", "disabled": bool, "created"}`
 - `Profile`: `{"id", "name", "kids": bool, "created"}`
-- `Session`: `{"id", "device", "created", "lastSeen", "current": bool}`
-- `Me`: `{"account": Account, "profiles": [Profile], "profile": Profile|null, "csrf"}`
+- `Session`: `{"id", "device", "name", "kind": "web"|"tv", "created", "lastSeen", "current": bool}`. `device` is the label
+  the client sent at sign-in ("Chrome on Windows", "TV (Model)"); `name` the name the household gave it ("Kitchen"),
+  `""` while it has none.
+- `Me`: `{"account": Account, "profiles": [Profile], "profile": Profile|null, "csrf", "deviceName"}`. `deviceName` is
+  the calling device's own `name` (`""` when not named).
+- `Device` (a linked TV): `{"id", "name", "device", "created", "lastSeen", "current": bool, "account": {"id",
+  "displayName"}, "profile": "<profile name>", "canUnlink": bool}`. `id` is the same as the `Session` id.
 
 ## Endpoints
 
@@ -39,7 +44,7 @@ It is written so another implementation (for example Rust) could replace the ser
 | GET | `/v1/status` | anyone (public) | → `{"accounts": bool, "setup": bool}`. `setup` is true while the first owner can be created. |
 | POST | `/v1/setup` | anyone, only while no account exists | `{"token", "username", "password", "displayName"?}` → `Me` + session cookie. `token` is the one-time setup token from the server's data folder (`orbit-setup-token`). |
 | POST | `/v1/auth/login` | anyone | `{"username", "password", "device"?}` → `Me` + session cookie. Wrong username or password: 403, the same message either way. Throttled like tvBro's login. |
-| POST | `/v1/auth/logout` | signed in | `{}` → `{"ok": true}`, session ends, cookie cleared. |
+| POST | `/v1/auth/logout` | signed in | `{}` → `{"ok": true}`, session ends, cookie cleared. The web app then removes what the browser cached for the account and profile (localStorage `tvbro.ui`, `tvbro.reminders`; sessionStorage `tvbro.parental`, `tvbro.sid`; no IndexedDB is used), and does the same whenever it shows the sign-in page because the server ended its session, so the next person starts clean. |
 | GET | `/v1/me` | signed in | → `Me` |
 | GET | `/v1/profiles` | signed in | → `{"profiles": [Profile]}` (own account only) |
 | POST | `/v1/profiles` | signed in | `{"name", "kids"?}` → `Profile` (at most 8 per account) |
@@ -66,6 +71,22 @@ filled in. Pairings live 10 minutes in memory; an approved session that is never
 appears under "Your devices" and can be signed out there; the TV notices on its next request (401) and offers to
 link again.
 
+### Device names and linked TVs
+
+| Method | Path | Who | Body → Answer |
+|---|---|---|---|
+| POST | `/v1/device/name` | signed in (the device itself: a TV after linking or from Settings ▸ Home server ▸ Name this TV) | `{"name"}` → `{"ok": true, "name"}` (the name as stored). |
+| GET | `/v1/devices` | signed in | → `{"devices": [Device]}`: linked TVs (sessions of kind `tv`), newest first. Owner and admins get the household's; members their own account's. |
+| POST | `/v1/devices/rename` | signed in | `{"id", "name"}` → `Device`. Owner and admins may rename any linked TV; members only their own account's (others answer 404). |
+| POST | `/v1/devices/unlink` | signed in | `{"id"}` → `{"ok": true}`: the TV's session ends (it removes the account's data on its next request). Your own account's TVs; the owner any; admins also members' (never the owner's or another admin's: 403). Unknown ids, browser sessions and (for members) other accounts' TVs answer 404. |
+
+Names (`orbit.db` migration 004, column `account_sessions.name`): 1 to 32 characters, letters (any language), digits,
+spaces and `' - . _ ( ) & + #`; leading and trailing spaces are dropped and runs of spaces become one; anything else
+(control characters, quotes, `<`, emoji) is 400. A name belongs to the session, so linking a TV again starts unnamed.
+Right after linking, the TV offers to name itself (the field offers its model, e.g. "SHIELD Android TV"); the step can
+be skipped. The web app lists linked TVs for the owner and admins under Settings ▸ Accounts ▸ Linked TVs, with Rename
+and Unlink.
+
 The server checks the `Host` header, so the address the TV uses (for example `192.0.2.10:8750`) must be listed in
 `TVBRO_ALLOWED_HOSTS`.
 
@@ -79,13 +100,56 @@ with a note that its address must be added to `TVBRO_ALLOWED_HOSTS`.
 
 | Method | Path | Who | Body → Answer |
 |---|---|---|---|
-| GET | `/v1/device/playlists` | a **linked TV** session of any account (owner, admin or member); 403 for browser sign-ins | → `{"playlists": [{"id", "name", "kind": "xtream"\|"m3u", "server", "user", "pass", "url", "epgUrl"}]}`: the household's enabled playlists with their logins, so the TV plays directly from the provider. Ids are the server's (`p0`, `p1` …), so channel and VOD keys are the same on every device. |
+| GET | `/v1/device/playlists` | a **linked TV** session of any account (owner, admin or member); 403 for browser sign-ins | → `{"playlists": [{"id", "name", "kind": "xtream"\|"m3u", "server", "user", "pass", "url", "epgUrl"}]}`: the household's enabled playlists. With **hidden provider logins** (the default, below) every address and login points at this server's Xtream facade; with it off, they are the provider's own, so the TV plays directly from the provider. Ids are the server's (`p0`, `p1` …), so channel and VOD keys are the same on every device. |
 
 Sessions have a kind (`orbit.db` migration 002): `web` for a browser sign-in, `tv` for a device linked with a pairing
 code. Every linked TV gets the playlists, whatever its account's role: every household TV can watch IPTV.
-The flip side is that any account can read the provider logins by linking a device with its own approval, so only
-give accounts to people the household trusts with them. Browser sessions never get them (`session_kind` must be
-`tv`). The TV keeps the playlists encrypted. When it is unlinked, signed out from another device, or linked to
+Browser sessions never get them (`session_kind` must be `tv`). With hidden logins off, any account can read the
+provider logins by linking a device with its own approval, so only give accounts to people the household trusts with
+them. The TV keeps the playlists encrypted.
+
+### Hidden provider logins: the Xtream facade
+
+On by default. `ORBIT_HIDE_PROVIDER_LOGIN=1` / `0` decides it on the server; otherwise the owner's setting
+(Settings > Security, "Provider login on linked TVs"; `POST /api/settings {"hideProviderLogin": bool}`). The status
+answer's `settings` carry `hideProviderLogin` (as it applies) and `hideProviderLoginForced` (the environment decides).
+TVs pick up a change at their next playlist sync (every 30 minutes, and at start).
+
+With it on, `/v1/device/playlists` answers, for each playlist:
+
+- **Xtream**: `{"server": "<origin>/xt/<id>", "user": "tv<16 hex>", "pass": "<32 hex>", "url": "", "epgUrl": ""}`.
+- **M3U**: `{"url": "<origin>/xt/<id>/get.php?username=…&password=…", "epgUrl": "<origin>/xt/<id>/xmltv.php?…&n=0,…"}`
+  (one guide address per configured one; empty when none is set), `server` / `user` / `pass` empty.
+
+`<origin>` is the scheme and `Host` the TV used for this request. The user is the TV session's public id, the
+password an HMAC of the session with the server key, so both stay the same for as long as the TV stays linked (the
+TV's playlist list does not change between syncs). They stop working at once when the session ends: unlinked,
+signed out from another device (`/v1/sessions/revoke`), account disabled or password reset, or expiry. Rotating the
+server key changes every password; TVs get the new one at their next playlist sync. A TV app that predates the
+facade just sees an Xtream server and works unchanged.
+
+Facade routes (Host check as everywhere; no cookie, the device login is in the address; wrong or dead logins get
+401 `{"user_info": {"auth": 0}, "error"}`, unknown playlists 404):
+
+| Path under `/xt/<id>/` | Does |
+|---|---|
+| `player_api.php?username&password[&action&…]` | the provider's answer for the same action and parameters (Xtream only). `user_info.username` / `password` become the device's, `server_info` names this server, and any value that carries the provider login in an address is replaced by a sealed `s/` address. Other answers pass through unchanged. gzip when the TV accepts it. |
+| `xmltv.php?username&password[&n=i]` | the guide, streamed through: Xtream's own `xmltv.php`, or the M3U playlist's i-th guide address. |
+| `get.php?username&password` | the M3U playlist (for Xtream: the provider's `get.php`), rewritten: every stream line, the `url-tvg` / `x-tvg-url` guide addresses and absolute `catchup-source` templates point here. Logos stay as they are. |
+| `live\|movie\|series\|timeshift/<user>/<pass>/<rest>` | relayed from the provider's same path with the real login (Xtream only). |
+| `s/<user>/<pass>/<token>[.ext]` | a sealed provider address (HLS segment, M3U stream, guide); a query string the TV adds (catch-up "append") is passed on. |
+| `t/<user>/<pass>/<token>[.ext]?v0=…&v1=…` | a sealed catch-up template; its placeholders were handed to the TV in order as `v0`, `v1` …, so it fills them in as usual. |
+
+Relaying: bytes are piped through 64 KiB at a time as they arrive (no buffering beyond one chunk; a TV that stops
+reading stops the provider read too), `Range` / `Content-Range` / `Accept-Ranges` pass through for films, the
+provider's redirects are followed by the server, the TV's `User-Agent` is passed on, and an answer without a length
+(live) closes the connection when it ends. An HLS playlist is rewritten so every segment, key and variant comes
+through `s/`. Tokens are AES-SIV sealed with the server key (`App.seal`), so the TV can replay them but never read
+the provider address inside. A running relay stops within a few chunks once its TV's session ends. Images (logos,
+posters) still load straight from wherever the catalogue names them, unless that address carries the login.
+
+Nothing logs a provider address or a device login: request lines show `/xt/<id>/<kind>/-/-/…` (the container's nginx
+log too), errors the exception type only. When it is unlinked, signed out from another device, or linked to
 another account, it removes everything the account brought: session and CSRF token, the server's playlists, My
 list and favourites, film resume points, episode marks and show progress, recently watched and search history, so
 the next account starts clean (data from before the first link was merged into that account then and goes too; it
@@ -101,19 +165,29 @@ has a random stream session id (`sid`, 32+ characters) that it keeps to itself.
 
 | Method | Path | Who | Body → Answer |
 |---|---|---|---|
-| GET | `/v1/streams` | signed in | → `{"max", "count", "active": [StreamUse]}`, oldest first. Only streams active in the last 20 seconds count. |
+| GET | `/v1/streams` | signed in | → `{"max", "count", "active": [StreamUse], "relays": [Relay]}`, oldest first. Only streams active in the last 20 seconds count. |
 | POST | `/api/stream/start` | signed in | `{"sid", "label", "what", "replace"?}` → `{"ok": true, "replaced": n}`. Takes a slot; when every slot is taken, another viewer is stopped: the stream whose `id` is `replace`, or else the oldest. `{"ok": false, "stopped": "recording"}` when every slot is held by a recording. `{"ok": false, "changed": true, "streams": {...}}` (the `/v1/streams` answer) when `replace` names a stream that has ended or is a recording and no slot is free: nothing was stopped; ask again with the new list. When the chosen stream has ended and a slot is free, the start simply goes ahead. |
 | POST | `/api/stream/heartbeat` | signed in | `{"sid"}` every ~10 s → `{"ok": true}`, or `{"stopped": "replaced"\|"recording"}` once another device took the slot. |
 | POST | `/api/stream/stop` | signed in | `{"sid"}` → `{"ok": true}`: the slot is free again. |
 
-- `StreamUse`: `{"id", "sid", "label", "what", "profile", "since", "idleSec", "recording": bool}`. `id` is a public
+- `StreamUse`: `{"id", "sid", "label", "what", "profile", "device", "name", "since", "idleSec", "recording": bool}`. `id` is a public
   id of the stream (a hash of its `sid`, 12 hex characters) to pass as `replace`; knowing it does not let anyone send
   that device's heartbeats. `sid` is the first 6 characters of the session id (kept for older clients to recognise
   their own stream). `label` is the device as the client named it ("Chrome on Windows", "TV (…)"), `profile` the
-  Orbit profile that started it (empty in tvBro mode and for recordings), `what` what is playing.
-- The TV lists every active stream when the limit is full and offers one "Stop <name> and watch" per viewer
-  (recordings are listed but cannot be chosen), plus Cancel. The web app still stops the oldest without asking
-  (it never had a prompt).
+  Orbit profile that started it (empty in tvBro mode and for recordings), `device` the name the household gave the
+  device ("Kitchen", see "Device names" above; empty when not named), `what` what is playing. `name` is what to call
+  the stream: `device`, else `profile`, else `label` ("Recording" for a recording). The device name is read when the
+  stream starts, so a rename shows from the device's next start.
+- `Relay`: `{"device", "playlist", "what", "since", "idleSec"}`, one per linked TV pulling media through the facade
+  (open relay, or media bytes in the last 20 seconds). This is exact, since every byte passes the server, but it is
+  informational: `count` and the slot rules above are unchanged (the TV still takes its slot with `/api/stream/start`).
+  `what` is the last stream named in an address (`live 101`, `movie 7`); empty for M3U and HLS segments.
+- The TV and the web player list every active stream when the limit is full and offer one "Stop <name> and watch"
+  per viewer (recordings are listed but cannot be chosen), plus Cancel. Names: `device`, else `profile`, else `label`;
+  two equal names get the label added ("Kitchen on TV (Model)"), then a number (shared/.../StreamChoice.kt and
+  web/frontend/js/streamprompt.js). Cancel starts nothing (the web player closes). The small live preview never
+  stops anyone: when every stream is in use it stays off. In tvBro mode (no `/v1/streams`) the web app still stops
+  the oldest without asking.
 
 ## Show progress for devices (step 7b)
 
@@ -157,7 +231,9 @@ Objects:
 - `Library`: `{"id", "title", "kind": "movie"|"series"|"other", "conn", "source", "serverName"}`
 - `Item`: `{"id", "conn", "source": "plex"|"jellyfin", "kind": "movie"|"series"|"season"|"episode", "title", "year", "overview",
   "poster", "backdrop", "runtime", "rating", "guids": {"tmdb", "imdb", "tvdb"}, "progress": {"secs", "dur", "watched"},
-  "seriesId", "season", "episode"}`. Times in seconds; missing values are `null`. `poster` / `backdrop` are
+  "seriesId", "season", "episode", "genres": [..], "added", "released", "colors", "lastViewed"}`. Times in seconds; missing values are `null`.
+  `genres`, `added` (Unix seconds), `released` (`"YYYY-MM-DD"`), `colors` (Plex UltraBlur, see the catalogue) and
+  `lastViewed` (Unix seconds) were added for the catalogue (Phase 5). `poster` / `backdrop` are
   `/v1/media/image?...` URLs on this server (or `null`). Ids are the media server's, opaque; they are only meaningful
   together with `conn`.
 
@@ -191,7 +267,9 @@ cache it) and fetch a fresh one for each playback.
 **Local network.** The server reaches each linked server's exact `host:port` even when "local network sources" is
 off (`net.set_private_hosts`); loopback and link-local addresses stay refused. Only an owner or admin can link a
 server at a new local address; a member can link their own user on a server the household already linked (or
-any public address). Jellyfin uses one `DeviceId` per link (Jellyfin ends older tokens of a device that signs in
+any public address). While an owner or admin signs in, the new address is allowed only for that sign-in's own
+requests (start, each poll, the password sign-in: `net.private_hosts_scope`, per request thread), never in the
+server-wide list, until the link is saved; a Plex server found during the sign-in is added the same way. Jellyfin uses one `DeviceId` per link (Jellyfin ends older tokens of a device that signs in
 again); Plex gets the same per-link `X-Plex-Client-Identifier` and stores each server's own access token.
 
 ## What belongs to a profile (step 4)
@@ -266,3 +344,76 @@ How it works:
 - **Privacy note:** `poster` and `backdrop` are full `https://image.tmdb.org/t/p/...` URLs, so clients load artwork
   straight from TMDB's public image CDN (no key, but TMDB sees the client's address and which artwork it loads). A
   later option can proxy them through the server's image cache.
+
+## Catalogue: Home, Movies and Shows (Phase 5)
+
+The redesign's Home, Movies and Shows screens. Server code: `web/server/orbit/catalog.py` (indexes, rows, routes)
+and `web/server/orbit/franchise.py` (IPTV film collections). All routes are `GET`, signed in, and answer for the
+**session's profile** (409 `"no profile selected"` without one).
+
+Sources: the household's IPTV films and series (the playlists' VOD catalogues, as the web app already loads and
+stores them), the signed-in **account's** Plex / Jellyfin libraries (`/v1/media` connections; every profile of the
+account sees the same media-server user), and the profile's My list, film resume points and show progress.
+
+`Item`:
+`{"key", "kind": "movie"|"show", "title", "year", "poster", "backdrop", "rating", "genres": [..], "source": "iptv"|"plex"|"jellyfin",
+"added", "released", "colors": [c1, c2]|null, "progress": {"secs", "dur"}|null, "id", "conn", "locked", "next"?}`
+
+- `key`: the My list / resume key. IPTV: `m|p0|7` (film), `s|p0|7` (show), as the TV and web already use.
+  Plex / Jellyfin: `m|<connection id>|<item id>`, `s|<connection id>|<item id>` (the middle part is a `/v1/media`
+  connection id instead of a playlist id `p<N>`). Put an Item in My list with exactly this key.
+- `id`: the item's own id: the IPTV VOD id of `/api/vod/*` and `/v1/progress` (`7`, or `p1~7` for other playlists),
+  or the media server's item id. `conn`: the media connection id (Plex / Jellyfin), else `null`. Play IPTV with `id`,
+  Plex / Jellyfin with `POST /v1/media/playback {"conn", "id"}`.
+- `title`: a trailing `(YYYY)` is dropped. `year`: integer or null. `rating`: 0–10 (one decimal) or null.
+  `added`: Unix seconds (the provider's `added` / series `last_modified`, Plex `addedAt`, Jellyfin `DateCreated`)
+  or null. `released`: `"YYYY-MM-DD"` when known, else null (sorting falls back to `year`).
+- `poster` / `backdrop`: IPTV artwork comes as the server's signed `/img?...` URLs (like the rest of the web API);
+  Plex / Jellyfin as `/v1/media/image?...`. IPTV films have no backdrop; IPTV series often do.
+- `colors`: the two backdrop colours (`"#rrggbb"`) for the colour-matched background, from Plex's
+  `UltraBlurColors` (top-left, bottom-right) when the server sends them; otherwise `null` and clients compute
+  them from the image (Palette on Android, canvas on web).
+- `progress`: a film's resume point (the profile's resume scope, or Plex / Jellyfin's own); a show's next episode
+  (`secs` is where that episode stopped, 0 if not started). `null` otherwise.
+- `next` (shows only): `{"id", "season", "num", "title"}` of the next episode to watch, or null.
+- `locked`: true for an IPTV item in a VOD category locked with the parental PIN (playing still asks for it).
+
+| Path | Query → Answer |
+|---|---|
+| `/v1/catalog/home` | → `{"hero": [Item], "rows": [Row]}`: rows `continue` (films with a resume point and shows with a next episode, newest first), `mylist`, `recent`, `released`, up to two `genre:<name>`, `unwatched`. Films and shows mixed. |
+| `/v1/catalog/movies/recommended`, `/v1/catalog/shows/recommended` | → `{"hero": [Item], "rows": [Row]}`: rows `continue`, `recent` (Recently added), `released` (Recently released), up to three `genre:<name>` ("Top in Drama"), `unwatched` (Top unwatched). |
+| `/v1/catalog/movies/browse`, `/v1/catalog/shows/browse` | `?source=all\|local\|iptv` (also `plex`, `jellyfin`; default `all`) `&genre=` (a name from `genres`, case-insensitive) `&sort=added\|released\|title\|rating` (default `added`) `&offset=` (default 0) `&limit=` (1–200, default 60) → `{"total", "genres": [..], "items": [Item]}`. `total` counts every match; `genres` lists the genres of the kind and source (before the genre filter), A to Z. 400 for an unknown source or sort, or limit / offset out of range. |
+| `/v1/catalog/movies/collections`, `/v1/catalog/shows/collections` | → `{"collections": [Collection]}`, A to Z |
+| `/v1/catalog/collections/{id}` | → `{"collection": Collection, "items": [Item]}` in release order. 404 when the id is unknown *for you* (another account's Plex collection, or one a kids profile may not see). |
+
+- `Row`: `{"id", "title", "items": [Item]}`, at most 24 items. Rows without items are left out. Ids: `continue`,
+  `mylist`, `recent`, `released`, `genre:<genre in lower case>`, `unwatched`.
+- `hero`: up to 6 Items for the cinematic header: recently added ones with a backdrop, best rated first.
+- `Collection`: `{"id", "name", "count", "poster", "backdrop", "colors", "source", "kind": "movie"|"show"}`. Artwork
+  is the collection's own (Plex / Jellyfin, TMDb) or that of its first item. Ids are opaque (`[A-Za-z0-9._-]`).
+
+How rows are chosen:
+- **Recently added**: newest `added` first (items without one are left out). **Recently released**: newest `released`
+  / `year` first.
+- **Top in <genre>**: best rated items of a genre. The genres are the profile's most watched ones (genres of films it
+  has watched or started and shows it has watched episodes of), filled up with the largest genres of the catalogue;
+  a genre needs at least 3 rated items.
+- **Top unwatched**: best rated items the profile has not watched or started.
+- **Collections**: Plex collections and Jellyfin box sets as the server has them. IPTV films are grouped by a shared
+  TMDb collection when the provider sends TMDb ids and Seerr is set up (Seerr's movie details carry the
+  collection; looked up in the background, one film at a time, and kept in `catalog-tmdb.json` in the data folder:
+  ids and names only). Other IPTV films are grouped by title, conservatively: `<Base> and the …` (3+ titles),
+  `<Base>: …`, numbered sequels (`<Base> 2`, `II`, `Part 2`, `Vol. 2`) and the film titled `<Base>` itself; the base
+  needs two significant words (one is enough only for a numbered series with both a 2 and a 3), and a group needs
+  2+ different titles. IPTV shows are not grouped.
+
+Kids profiles: IPTV items in VOD categories locked with the parental PIN are **left out** of every answer (rows,
+hero, browse totals and genres, collections) while a PIN is set. Other profiles get them with `"locked": true`.
+Plex and Jellyfin apply their own user's restrictions; the catalogue adds no filter for them.
+
+Speed: the server keeps an index of the IPTV catalogue (every sort order, per-genre top lists, collections) and
+rebuilds it in the background within a minute of a playlist refresh. An account's Plex / Jellyfin libraries are
+fetched in the background (again after 10 minutes; "continue watching" after 1 minute); the first request of an
+account waits up to 3 seconds for them, later ones never wait. Answers are cached per profile for 30 seconds,
+keyed by the profile state's revision, so a change to My list or a resume point shows at once. With 20 000 titles
+a warm request takes a few milliseconds (`test_orbit_catalog.Benchmark`).
