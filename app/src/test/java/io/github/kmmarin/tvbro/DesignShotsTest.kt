@@ -229,14 +229,15 @@ class DesignShotsTest {
     }
 
     @Composable
-    private fun guideGrid(modifier: Modifier) {
+    private fun guideGrid(modifier: Modifier, list: List<Channel> = channels, metrics: io.github.kmmarin.tvbro.ui.live.EpgMetrics = io.github.kmmarin.tvbro.ui.live.EpgMetrics(),
+                          focus: Boolean = true) {
         keyboardMode()
         val win = remember { EpgWindow(now) }
-        val nowFocus = remember { NowFocus().apply { pending = "k1" } } // the mockup's focus: the programme on now
+        val nowFocus = remember { NowFocus().apply { if (focus) pending = "k1" } } // the mockup's focus: the programme on now
         EpgGrid(
-            channels, { c -> progs[c.key] ?: emptyArray() }, now, win, rememberLazyListState(), { "k1" }, remember { SafeFocus() }, nowFocus,
+            list, { c -> progs[c.key] ?: moreProgs[c.key] ?: emptyArray() }, now, win, rememberLazyListState(), { "k1" }, remember { SafeFocus() }, nowFocus,
             EpgActions({ _, _ -> }, { _, _ -> }, {}, { _, _ -> }, { false }, { c -> marks[c.key] ?: RowMarks() }, { c, pr -> c.key == "k4" && pr.title == "Meridian Debate" }),
-            modifier,
+            modifier, metrics,
         )
     }
 
@@ -249,17 +250,89 @@ class DesignShotsTest {
         ColorKeyActions(red = KeyAction("Favourite") {}, green = KeyAction("Record") {}, yellow = KeyAction("Format: TS / HLS") {}, blue = KeyAction("Channel options") {})
     }
 
-    @Test fun liveChannels() = shot("live-channels") {
+    // ---- Live TV rework (owner feedback 2026-11-14): compact header, quick tabs, side menu of ~200 groups ----
+
+    /** About 200 groups like the owner's provider (fictional): folders by the text before " | ". */
+    private val manyGroups: List<String> = buildList {
+        add("Ambiance | Channels"); add("Sports | NHL Teams"); add("Sports | NHL Hockey"); add("Kids"); add("UK | News")
+        for (n in listOf("NFL Replays", "NBA Pass", "MLB Extra", "Soccer Europe", "Soccer Americas", "Tennis", "Golf", "Motorsport", "Boxing & MMA", "Cricket",
+            "Rugby", "Cycling", "Darts", "Snooker", "Athletics", "Winter Sports", "Esports", "Horse Racing", "Sailing", "College", "PPV Events", "Fishing")) add("Sports | $n")
+        for (i in 1..17) add("UK | Regional $i")
+        for (i in 1..31) add("US | Network $i")
+        for (c in listOf("FR", "DE", "ES", "IT", "NL", "PT", "PL", "SE", "NO", "DK")) for (i in 1..12) add("$c | Channels $i")
+        add("Music"); add("24/7 Movies")
+    }
+
+    private val moreChannels = channels + listOf(
+        ch("k8", "Arcadia Hockey Night", 120, "Sports | NHL Hockey"), ch("k9", "NHL Centre Ice 1", 121, "Sports | NHL Teams"),
+        ch("k10", "Meridian Weather", 105, "UK | News"), ch("k11", "Harbor Classic", 130, "24/7 Movies"),
+    )
+
+    /** Guide data as providers send it: overlapping and duplicated entries, cleaned by the same rules as the app (EpgIndex.tidy). */
+    private val moreProgs: Map<String, Array<Programme>> = mapOf(
+        "k8" to arrayOf(p(-30, 150, "NHL Hockey on Arcadia"), p(-30, 150, "Next Game Today"), p(-30, 150, "NHL Hockey on Arcadia"), p(150, 210, "Post-game"), p(160, 180, "Post-game")),
+        "k9" to arrayOf(p(-15, 45, "Centre Ice Tonight"), p(30, 120, "Harbor City v Northgate"), p(120, 180, "Highlights")),
+        "k10" to arrayOf(p(-10, 20, "Forecast"), p(20, 50, "Forecast"), p(50, 110, "Weekend Outlook")),
+        "k11" to arrayOf(p(-40, 80, "Copper Sky"), p(80, 200, "The Long Meridian")),
+    ).mapValues { io.github.kmmarin.tvbro.data.EpgIndex.tidy(it.value) }
+
+    private val quickTabs = io.github.kmmarin.tvbro.data.LiveGroups.quickTabs(listOf("Favourites", "All channels", "Recent"),
+        listOf("Sports | NHL Teams", "UK | News"), manyGroups.toSet() + listOf("Favourites", "All channels"), "Favourites", "ALL")
+
+    private fun quickLabel(g: String) = when (g) { "Favourites" -> "★ Favourites"; "ALL" -> "All groups ☰"; else -> g }
+
+    @Composable
+    private fun liveCompactPage(focusGrid: Boolean, menu: (@Composable () -> Unit)? = null) {
         OrbitCanvas {
             guideKeys()
             ShellFrame(active = NavTab.LIVE, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani") {
+                val l = io.github.kmmarin.tvbro.ui.ChannelsLayout
                 BackdropStill(null, MeshColors(Color(0xFFB8741A), Color(0xFFFFE2B0)), Modifier.fillMaxSize(), dim = true)
                 SubMenuRow(listOf("Channels", "Guide", "Recordings", "My list"), 0, {}, Modifier.padding(top = 118.dp))
-                LiveInfo(info, Modifier.padding(start = 96.dp, top = 190.dp).width(1080.dp))
-                Box(Modifier.align(Alignment.TopEnd).padding(end = 96.dp, top = 178.dp).size(500.dp, 281.dp).background(Color.Black, RoundedCornerShape(12.dp)))
-                GroupTabs(groups, "Favourites", { if (it == "Favourites") "★ Favourites" else it }, remember { SafeFocus() }, rememberLazyListState(),
-                    {}, {}, {}, { false }, Modifier.padding(top = 478.dp))
-                guideGrid(Modifier.padding(start = 96.dp, end = 96.dp, top = 538.dp, bottom = 92.dp).fillMaxSize())
+                io.github.kmmarin.tvbro.ui.live.LiveInfoBar(
+                    info.copy(fav = true, desc = "A lighthouse keeper's daughter follows a ninth light out to sea, where the charts end and the old stories begin."),
+                    onFav = {}, Modifier.padding(start = 96.dp, top = l.InfoTop, end = 96.dp + l.PreviewW + 40.dp))
+                Box(Modifier.align(Alignment.TopEnd).padding(end = 96.dp, top = l.PreviewTop).size(l.PreviewW, l.PreviewH).background(Color.Black, RoundedCornerShape(12.dp))) {
+                    Image(art().asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                }
+                GroupTabs(quickTabs, "Favourites", ::quickLabel, remember { SafeFocus() }, rememberLazyListState(),
+                    {}, {}, {}, { false }, Modifier.padding(top = l.TabsTop, end = 96.dp + l.PreviewW + 24.dp))
+                guideGrid(Modifier.padding(start = 96.dp, end = 96.dp, top = l.GridTop, bottom = 92.dp).fillMaxSize(), moreChannels.sortedBy { it.number }, l.metrics, focusGrid)
+                menu?.invoke()
+            }
+        }
+    }
+
+    @Test fun liveCompact() = shot("live-compact") { liveCompactPage(focusGrid = true) }
+
+    @Composable
+    private fun sideMenu(query: String, expanded: Set<String>) {
+        ColorKeyActions(red = KeyAction("Pin / unpin group") {})
+        val state = remember { io.github.kmmarin.tvbro.ui.live.GroupMenuState().apply { this.expanded = expanded; this.query = query } }
+        val names = moreChannels.map { it.name }
+        val rows = if (query.isBlank()) io.github.kmmarin.tvbro.data.LiveGroups.rows(io.github.kmmarin.tvbro.data.LiveGroups.fold(manyGroups), expanded)
+            else io.github.kmmarin.tvbro.data.LiveGroups.search(query, manyGroups, names)
+        io.github.kmmarin.tvbro.ui.live.GroupMenuView(
+            query, {}, rows, { moreChannels.getOrNull(it) }, setOf("Sports | NHL Teams", "UK | News"), "Favourites", { it }, manyGroups.size, state,
+            io.github.kmmarin.tvbro.ui.live.GroupMenuActions({}, {}, {}, {}, {}, {}, {}), top = 120.dp,
+        )
+    }
+
+    @Test fun liveSideMenu() = shot("live-sidemenu") { liveCompactPage(focusGrid = false) { sideMenu("", setOf("Sports")) } }
+
+    @Test fun liveSideMenuSearch() = shot("live-sidemenu-search") { liveCompactPage(focusGrid = false) { sideMenu("hockey", emptySet()) } }
+
+    @Config(sdk = [34], qualifiers = "w412dp-h915dp-port-xxhdpi")
+    @Test fun phoneLiveGroups() = shot("phone-live-groups") {
+        PhoneFrame(active = NavTab.LIVE, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani", title = "Live TV") {
+            val ins = io.github.kmmarin.tvbro.ui.shell.LocalPhoneInsets.current
+            val state = remember { io.github.kmmarin.tvbro.ui.live.GroupMenuState().apply { expanded = setOf("Sports") } }
+            Box(Modifier.fillMaxSize().padding(top = ins.top, bottom = ins.bottom)) {
+                io.github.kmmarin.tvbro.ui.live.GroupMenuView(
+                    "", {}, io.github.kmmarin.tvbro.data.LiveGroups.rows(io.github.kmmarin.tvbro.data.LiveGroups.fold(manyGroups), state.expanded), { null },
+                    setOf("Sports | NHL Teams"), "Sports | NHL Teams", { it }, manyGroups.size, state,
+                    io.github.kmmarin.tvbro.ui.live.GroupMenuActions({}, {}, {}, {}, {}, {}, {}), phone = true,
+                )
             }
         }
     }

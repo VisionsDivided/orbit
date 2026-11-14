@@ -156,8 +156,15 @@ class Store(private val ctx: Context) {
     /** Orbit unlink: recently watched, their title snapshots, the last channel / group / screen and search history. */
     fun clearViewingHistory() {
         vp.edit { remove("recent"); remove("snaps") }
-        sp.edit { remove("lastKey"); remove("lastGroup"); remove("lastUi"); remove("searchHistory") }
+        sp.edit { remove("lastKey"); remove("lastGroup"); remove("lastUi"); remove("searchHistory"); remove("recentCh") }
     }
+    /** Live TV's Recent tab: the channels watched last, newest first. */
+    fun recentChannels(): List<String> = (sp.getString("recentCh", "") ?: "").split('\n').filter { it.isNotEmpty() }
+    fun saveRecentChannels(keys: List<String>) = sp.edit { putString("recentCh", keys.joinToString("\n")) }
+    /** Live TV's pinned groups of a profile ("" = this TV unlinked) as JSON, and whether they changed since the last sync. */
+    fun groupPins(profile: String): String? = sp.getString("pins|$profile", null)
+    fun groupPinsDirty(profile: String): Boolean = sp.getBoolean("pinsDirty|$profile", false)
+    fun saveGroupPins(profile: String, json: String, dirty: Boolean) = sp.edit { putString("pins|$profile", json); putBoolean("pinsDirty|$profile", dirty) }
     fun recent(): List<String> =(vp.getString("recent", "") ?: "").split('\n').filter { it.isNotEmpty() }
     fun addRecent(key: String) = vp.edit { putString("recent", (listOf(key) + recent().filter { it != key }).take(30).joinToString("\n")) }
 

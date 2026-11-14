@@ -47,6 +47,11 @@ const val VOD_PAGE = 240
 
 const val GROUP_ALL = "All channels"
 const val GROUP_FAV = "Favourites"
+/** Live TV's Recent tab (the channels watched last); not a provider group. */
+const val GROUP_RECENT = "\u0001Recent"
+/** Live TV's "All groups" tab: opens the side menu, never selected as a group. */
+const val GROUP_MENU = "\u0001All groups"
+const val RECENT_CHANNELS = 20
 
 class AppModel(private val app: Application) : AndroidViewModel(app) {
     val store = Store(app)
@@ -114,6 +119,42 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
         toast("${c.name}: " + when (fmt) { ChannelFormats.HLS -> "HLS"; ChannelFormats.TS -> "MPEG-TS"; else -> "default stream format" })
         if (orbit.link != null) viewModelScope.launch(Dispatchers.IO) { orbit.syncState() }
     }
+    // Orbit: Live TV's pinned groups (quick-select tabs) per profile, synced through the profile's server prefs
+    // (key liveGroupsPinned, shared with the web app; orbit/GroupPinSync.kt)
+    private var pinCache: Pair<String, List<String>>? = null
+    private val pinRev = mutableIntStateOf(0)
+    fun groupPins(): List<String> {
+        pinRev.intValue // subscribe
+        val p = fmtProfile()
+        pinCache?.let { if (it.first == p) return it.second }
+        val raw = store.groupPins(p)
+        val l = GroupPins.fromJson(raw?.let { runCatching { kotlinx.serialization.json.Json.parseToJsonElement(it) }.getOrNull() }) ?: emptyList()
+        pinCache = p to l
+        return l
+    }
+    private fun saveGroupPins(l: List<String>, dirty: Boolean) {
+        val p = fmtProfile()
+        pinCache = p to l
+        pinRev.intValue++
+        store.saveGroupPins(p, GroupPins.toJson(l).toString(), dirty)
+    }
+    fun canPin(g: String) = g != GROUP_ALL && g != GROUP_FAV && g != GROUP_RECENT && g != GROUP_MENU
+    /** Red in the side menu: pin [g] as a quick-select tab (first), or unpin it. */
+    fun togglePin(g: String) {
+        if (!canPin(g)) return
+        val l = GroupPins.toggle(groupPins(), g)
+        saveGroupPins(l, true)
+        toast((if (g in l) "Pinned: " else "Unpinned: ") + (prefs.groupNames[g] ?: g))
+        if (orbit.link != null) viewModelScope.launch(Dispatchers.IO) { orbit.syncState() }
+    }
+
+    /** Live TV's Recent tab: channel keys, newest first. */
+    var recentCh by mutableStateOf(store.recentChannels()); private set
+    private fun noteRecent(c: Channel) {
+        val l = (listOf(c.key) + recentCh.filter { it != c.key }).take(RECENT_CHANNELS)
+        if (l != recentCh) { recentCh = l; store.saveRecentChannels(l) }
+    }
+
     /** Channels already offered "Try HLS" in this run of the app (the hint comes once per channel). */
     val stallHinted = mutableSetOf<String>()
 
@@ -202,13 +243,23 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
 
     fun groupLabel(g: String) = (prefs.groupNames[g] ?: g) + (if (g in prefs.locked) " (locked)" else "") + (if ("g|$g" in favourites) "  *" else "")
 
+    /**
+     * Live TV's quick-select tabs (owner feedback 2026-11-14): Favourites, All, Recent, the pinned groups, the chosen
+     * group when it is not pinned, then "All groups" (the side menu).
+     */
+    val liveTabs: List<String> by derivedStateOf {
+        LiveGroups.quickTabs(listOf(GROUP_FAV, GROUP_ALL, GROUP_RECENT), groupPins(), groupList.toHashSet(), group, GROUP_MENU)
+    }
+
     val filtered: List<Channel> by derivedStateOf {
         val q = query.trim().lowercase()
+        val recent = if (group == GROUP_RECENT) recentCh.withIndex().associate { it.value to it.index } else emptyMap()
         shown.filter {
-            (when (group) { GROUP_ALL -> true; GROUP_FAV -> it.key in favourites
+            (when (group) { GROUP_ALL -> true; GROUP_FAV -> it.key in favourites; GROUP_RECENT -> it.key in recent
                 else -> if (group in prefs.custom) it.key in (prefs.custom[group] ?: emptyList()) else it.group == group }) &&
                 (q.isEmpty() || it.name.lowercase().contains(q))
-        }.let { l -> if (numberMode == 1) l.mapIndexed { i, c -> c.copy(number = i + 1) } else l }
+        }.let { l -> if (group == GROUP_RECENT) l.sortedBy { recent[it.key] } else l }
+            .let { l -> if (numberMode == 1) l.mapIndexed { i, c -> c.copy(number = i + 1) } else l }
     }
 
     init {
@@ -264,7 +315,7 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
                 val gl = groupList
                 val last = store.lastGroup
                 group = when {
-                    last != null && last in gl -> last
+                    last != null && (last in gl || last == GROUP_RECENT) -> last
                     favourites.any { f -> channels.any { it.key == f } } -> GROUP_FAV
                     else -> gl.getOrNull(2 + prefs.custom.size) ?: GROUP_ALL
                 }
@@ -411,7 +462,7 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
         // parental lock, on every path (lists, guide, search, the "play" launch extra)
         if (isLocked(c)) { askPin { unlock(c); play(c) }; return }
         if (streamsFull() && activeRec(c) == null) toast("Stream limit $maxStreams: a recording is using it, the provider may refuse this channel")
-        current = c; catchup = null; store.lastKey = c.key
+        current = c; catchup = null; store.lastKey = c.key; noteRecent(c)
         if (external && launchExternal(c.url)) return
         screen = Screen.PLAYER
     }
@@ -423,7 +474,7 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
      */
     fun previewOrPlay(c: Channel) {
         if (!previewOn || streamsFull() || external || current?.key == c.key || isLocked(c)) { play(c); return }
-        current = c; catchup = null; store.lastKey = c.key
+        current = c; catchup = null; store.lastKey = c.key; noteRecent(c)
     }
 
     fun zap(delta: Int) {
@@ -432,13 +483,13 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
         if (l.isEmpty()) return
         val i = l.indexOfFirst { it.key == current?.key }
         val n = l[((if (i < 0) 0 else i) + delta).mod(l.size)]
-        current = n; catchup = null; store.lastKey = n.key
+        current = n; catchup = null; store.lastKey = n.key; noteRecent(n)
     }
 
     fun zapNumber(n: Int): Boolean {
         val c = shown.firstOrNull { it.number == n } ?: return false
         if (isLocked(c)) { play(c); return true }
-        current = c; catchup = null; store.lastKey = c.key
+        current = c; catchup = null; store.lastKey = c.key; noteRecent(c)
         return true
     }
 
@@ -449,7 +500,7 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
         if (isLocked(c)) { askPin { unlock(c); guidePlay(c, p) }; return }
         val url = if (CatchupUrl.supports(c, p.start, now)) CatchupUrl.build(c, p.start, p.stop, now) else null
         if (url == null) { toast("Catch-up not available for this programme"); return }
-        current = c; store.lastKey = c.key
+        current = c; store.lastKey = c.key; noteRecent(c)
         catchup = CatchupPlay(url, p.title)
         screen = Screen.PLAYER
     }
@@ -468,7 +519,7 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
         store.saveFavourites(favourites)
         toast(if (k in favourites) "Added to My list" else "Removed from My list")
     }
-    fun toggleFavGroup(g: String) = toggleKey("g|$g")
+    fun toggleFavGroup(g: String) { if (canPin(g)) toggleKey("g|$g") }
     fun toggleFavRec(r: Rec) = toggleKey("r|${r.id}")
 
     /** Long-press Back applies in the TV section (live preview) and the full guide, when there is a channel to show. */
@@ -653,7 +704,7 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun openGroupMenu(g: String) {
-        if (g == GROUP_ALL || g == GROUP_FAV) return
+        if (!canPin(g)) return
         val items = ArrayList<Pair<String, () -> Unit>>()
         items += (if ("g|$g" in favourites) "Remove from My list" else "Add to My list") to { toggleFavGroup(g) }
         if (g in prefs.custom) {
@@ -1430,11 +1481,14 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
         override fun describe(key: String) = orbitDescribe(key)
         override fun clearAccountData() {
             this@AppModel.favourites = emptySet(); store.saveFavourites(emptySet())
-            store.clearViewingHistory(); this@AppModel.history = emptyList()
+            store.clearViewingHistory(); this@AppModel.history = emptyList(); recentCh = emptyList()
             refreshLists()
         }
         override val channelFormats: ChannelFormats get() = this@AppModel.channelFormats()
         override fun setChannelFormats(f: ChannelFormats) = saveChannelFormats(f)
+        override val groupPins: List<String> get() = this@AppModel.groupPins()
+        override val groupPinsDirty: Boolean get() = store.groupPinsDirty(fmtProfile())
+        override fun setGroupPinsSynced(pins: List<String>) { val now = groupPins(); saveGroupPins(if (groupPinsDirty && now != pins) now else pins, groupPinsDirty && now != pins) }
         override fun stopPlayback(reason: String) {
             liveExo?.stop(); liveUrl = null; liveKey = null
             if (screen == Screen.PLAYER || screen == Screen.VODPLAY) screen = Screen.LIST

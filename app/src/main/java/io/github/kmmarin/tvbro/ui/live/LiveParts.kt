@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.kmmarin.tvbro.ui.live
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.em
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -65,6 +70,8 @@ data class LiveInfoData(
     val rec: Boolean = false,
     /** "OK: watch catch-up" and other hints under the block. */
     val hint: String? = null,
+    /** The channel is in Favourites (the info bar's Favourite button). */
+    val fav: Boolean = false,
 )
 
 /** What the info block shows for [ch] and [p] (p null: the programme on now). */
@@ -87,7 +94,7 @@ fun liveInfoOf(m: AppModel, ch: Channel?, p: Programme?, now: Long): LiveInfoDat
         episode = prog?.let { EpisodeNum.line(it.ep, it.sub) }, desc = prog?.desc,
         stream = if (LiveFormat.canHls(ch.url)) "Stream: " + LiveLogic.effectiveFormat(fmt, m.liveHls) + if (fmt == null) " · default" else " · this channel" else null,
         rec = prog != null && LiveLogic.recordingOf(RecRepo.items, ch.key, ch.name, prog) != null,
-        hint = hint,
+        hint = hint, fav = ch.key in m.favourites,
     )
 }
 
@@ -97,7 +104,7 @@ fun LiveInfo(d: LiveInfoData, modifier: Modifier = Modifier, compact: Boolean = 
     Column(modifier.widthIn(max = 1100.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             if (d.channel.isNotEmpty()) ChannelTile(d.logo, d.channel.substringAfter(" · "), 56.dp)
-            Text(d.channel, style = LiveStyle.Meta.copy(color = O5.Text), fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(d.channel, style = LiveStyle.Meta.copy(color = O5.Text), fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (d.live) LivePill()
             if (d.rec) RecMark(size = 20)
         }
@@ -121,6 +128,8 @@ fun LiveInfo(d: LiveInfoData, modifier: Modifier = Modifier, compact: Boolean = 
 
 /** A group's tab label: Favourites with its star, locked groups marked, groups in My list with a star after. */
 fun groupTabLabel(m: AppModel, g: String): String {
+    if (g == io.github.kmmarin.tvbro.GROUP_RECENT) return "Recent"
+    if (g == io.github.kmmarin.tvbro.GROUP_MENU) return "All groups ☰"
     val base = m.groupLabel(g)
     val fav = base.endsWith("  *")
     return (if (g == GROUP_FAV) "★ " else "") + base.removeSuffix("  *") + if (fav) " ★" else ""
@@ -136,6 +145,8 @@ fun groupTabLabel(m: AppModel, g: String): String {
 fun GroupTabs(
     groups: List<String>, selected: String, label: (String) -> String, selFocus: SafeFocus, state: LazyListState,
     onFocus: (String) -> Unit, onClick: (String) -> Unit, onLong: (String) -> Unit, onDown: () -> Boolean, modifier: Modifier = Modifier,
+    /** A tab steered from outside besides the selected one (the "All groups" tab, where Back from the side menu lands). */
+    extraFocus: Pair<String, SafeFocus>? = null,
 ) {
     LazyRow(
         modifier.focusProperties { enter = { selFocus.target() } }.focusGroup(), state = state,
@@ -145,7 +156,7 @@ fun GroupTabs(
             val sel = g == selected
             Box(
                 Modifier.onPreviewKeyEvent { e -> e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown && onDown() }
-                    .o5Focus(O5Shape.Pill, 30.dp, focus = if (sel) selFocus else null, scaleTo = 1.04f,
+                    .o5Focus(O5Shape.Pill, 30.dp, focus = if (sel) selFocus else extraFocus?.takeIf { it.first == g }?.second, scaleTo = 1.04f,
                         onFocus = { onFocus(g) }, onLongClick = { onLong(g) }) { onClick(g) }
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             ) {
@@ -155,5 +166,49 @@ fun GroupTabs(
                     } else Modifier)
             }
         }
+    }
+}
+
+/**
+ * The compact info header of Live TV ▸ Channels (owner feedback 2026-11-14: the full block took 40% of the screen):
+ * the channel line with LIVE and a Favourite button, a 40 px title on one line, times / progress / next / stream on
+ * one line, and a one-line description (or the catch-up hint). About 170 px high, so 8 guide rows fit at 1080p.
+ */
+@Composable
+fun LiveInfoBar(d: LiveInfoData, onFav: (() -> Unit)?, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Row(Modifier.height(44.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            if (d.channel.isNotEmpty()) ChannelTile(d.logo, d.channel.substringAfter(" · "), 40.dp)
+            Text(d.channel, style = LiveStyle.Meta.copy(color = O5.Text, fontSize = 22.sp), fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 520.dp))
+            if (d.live) LivePill()
+            if (d.rec) RecMark(size = 18)
+            if (onFav != null && d.channel.isNotEmpty()) FavButton(d.fav, onFav)
+        }
+        Text(d.title, style = LiveStyle.Title.copy(fontSize = 40.sp, letterSpacing = (-0.02).em), maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 6.dp))
+        Row(Modifier.padding(top = 4.dp).height(34.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            d.time?.let { Text(it, style = LiveStyle.Meta.copy(fontSize = 21.sp), maxLines = 1, softWrap = false) }
+            if (d.progress != null) ProgressBar(d.progress, Modifier.width(220.dp))
+            d.episode?.let { Text(it, style = LiveStyle.Meta.copy(fontSize = 21.sp), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 260.dp)) }
+            d.next?.let { Text(it, style = LiveStyle.Meta.copy(fontSize = 21.sp), color = O5.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)) }
+            d.stream?.let { Text(it, style = LiveStyle.Small.copy(fontSize = 18.sp), maxLines = 1, softWrap = false) }
+        }
+        val extra = d.hint ?: d.desc
+        Text(extra ?: "", style = LiveStyle.Small, color = if (d.hint != null) O5.Accent else O5.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 4.dp))
+    }
+}
+
+/** "☆ Favourite" / "★ Favourited" next to the channel name. */
+@Composable
+fun FavButton(fav: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.o5Focus(O5Shape.Pill, 22.dp, scaleTo = 1.05f, onClick = onClick)
+            .background(if (fav) Color(0x29FFD166) else Color(0x14FFFFFF), O5Shape.Pill)
+            .border(1.dp, if (fav) Color(0x80FFD166) else Color(0x2EFFFFFF), O5Shape.Pill)
+            .padding(horizontal = 14.dp, vertical = 5.dp),
+    ) {
+        Text(if (fav) "★ Favourited" else "☆ Favourite", color = if (fav) O5.Rating else O5.Text, fontWeight = FontWeight.Bold, fontSize = 18.sp, maxLines = 1)
     }
 }

@@ -13,7 +13,7 @@ class EpgTidyTest {
 
     @Test fun overlapsEndAtTheNextStart() {
         // the user's provider: 10:00-14:00 and 11:00-14:00, then 14:00-18:00 and 15:00-16:00
-        val r = EpgIndex.tidy(arrayOf(p(14, 18), p(11, 14), p(10, 14), p(15, 16)))
+        val r = EpgIndex.tidy(arrayOf(p(14, 18, "c"), p(11, 14, "b"), p(10, 14, "a"), p(15, 16, "d")))
         assertEquals(listOf(10L to 11L, 11L to 14L, 14L to 15L, 15L to 16L), spans(r))
     }
 

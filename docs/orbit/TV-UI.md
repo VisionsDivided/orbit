@@ -170,15 +170,24 @@ through those servers is not built on the TV yet.
 - `MoviesLogicTest`: catalog items to titles (IPTV and Plex keys), captions, counts, collection summaries.
 - `LiveLogicTest`: the yellow key's format cycle, which programme a recording marks, the stream prompt's words.
 - `DesignShotsTest` (Robolectric native graphics) renders Home, Browse, both pickers, Movies Recommended and Browse,
-  a collection, a title page, Live TV ▸ Channels (`live-channels`), the full guide (`guide`), the player overlay
+  a collection, a title page, Live TV ▸ Channels (`live-compact`), the side menu of groups (`live-sidemenu`,
+  `live-sidemenu-search`), the full guide (`guide`), the player overlay
   (`player`) and the stream prompt (`stream-prompt`) at 1920 × 1080 to
   `app/build/orbit-shots/*.png`. It is a visual check only; nothing compares the images.
 
 ## Live TV and the player
 
-- **Channels** (`TvSection`, under the bar): the focused programme (`GuideInfo`) at x 96, the live preview top right
-  (500 × 281; `LiveVideo` draws the video over it), the channel groups as tabs (focusing one shows its channels), then
-  the grid. OK on a channel or its programme on now previews it; OK on the channel in the preview opens full screen.
+- **Channels** (`TvSection`, under the bar, `ChannelsLayout`): a compact header (`GuideInfoBar`: channel line with a
+  ☆ Favourite button, 40 px title, times / progress / next on one line, one line of description), the live preview
+  top right (400 × 225; `LiveVideo` draws the video over it), the quick-select tabs, then the grid with rows of 64
+  (8+ rows at 1080p).
+- **Group tabs and side menu** (`GuideGroupTabs`, `ui/live/GroupMenu.kt`): the tabs are ★ Favourites, All channels,
+  Recent (the last 20 channels watched), the pinned groups (at most 8), the chosen group when it is not pinned, then
+  "All groups ☰". OK on that tab opens a 520 px panel: focus in the search field (OK types, letters from a remote
+  keyboard go straight in), groups folded by the text before " | " (`shared/LiveGroups`), Down into the list, Right
+  opens a folder, Left closes it, OK picks a group (or a found channel) and focus goes into its channels, Red pins /
+  unpins, Back closes. Search over groups and channels runs off the main thread. Pins are the profile pref
+  `liveGroupsPinned` (`orbit/GroupPinSync.kt`). On a phone the panel is a full-screen sheet. OK on a channel or its programme on now previews it; OK on the channel in the preview opens full screen.
 - **Guide** (`GuideScreen`, full screen): the same pieces with more rows, a "Search guide" pill and its own legend.
   It opens on the playing channel's programme on now. The preview spot shows what already plays (picture and sound);
   it starts nothing. Back returns to Live TV when it was opened from there, else to full screen.

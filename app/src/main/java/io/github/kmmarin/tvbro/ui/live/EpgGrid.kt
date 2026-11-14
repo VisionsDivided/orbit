@@ -114,7 +114,7 @@ class EpgActions(
     val recorded: (Channel, Programme) -> Boolean,
 )
 
-/** Layout of the grid in spec pixels (mockup: channel column 390, rows 80, ruler 44). */
+/** Layout of the grid in spec pixels (mockup: channel column 390, rows 80, ruler 44; Live TV ▸ Channels uses rows of 64). */
 @Immutable
 data class EpgMetrics(val labelW: Dp = 390.dp, val rowH: Dp = 80.dp, val rulerH: Dp = 44.dp)
 
@@ -200,7 +200,7 @@ private fun EpgRow(
         true
     }
     Row(Modifier.fillMaxWidth().height(metrics.rowH)) {
-        ChannelCell(ch, actions.marks(ch), numW, if (isTarget) chFocus else null, labelFr,
+        ChannelCell(ch, actions.marks(ch), numW, if (isTarget) chFocus else null, labelFr, minOf(49f, metrics.rowH.value - 15f).dp,
             Modifier.width(metrics.labelW).fillMaxHeight()
                 // Right: this row's programme on now (never a programme in another row); Left: the groups
                 .onPreviewKeyEvent { e ->
@@ -324,7 +324,7 @@ private fun Cell(
 /** The channel column: number, tile, name, then the marks (star, HLS tag, REC, catch-up). */
 @Composable
 private fun ChannelCell(
-    ch: Channel, marks: RowMarks, numW: Dp, focus: SafeFocus?, labelFr: FocusRequester, modifier: Modifier,
+    ch: Channel, marks: RowMarks, numW: Dp, focus: SafeFocus?, labelFr: FocusRequester, tile: Dp, modifier: Modifier,
     onFocus: () -> Unit, onLong: () -> Unit, onClick: () -> Unit,
 ) {
     val src = remember { MutableInteractionSource() }
@@ -342,7 +342,7 @@ private fun ChannelCell(
     ) {
         Text(ch.number.toString(), style = LiveStyle.Cell.copy(fontFeatureSettings = "tnum"), color = if (f) Color(0xFF333333) else O5.Muted,
             modifier = Modifier.width(numW), maxLines = 1, softWrap = false)
-        ChannelTile(ch.logo, ch.name, 49.dp)
+        ChannelTile(ch.logo, ch.name, tile)
         Text(ch.name, style = LiveStyle.Cell, color = if (marks.playing && !f) O5.Accent else fg, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f))
         if (marks.rec) RecMark(size = 15)

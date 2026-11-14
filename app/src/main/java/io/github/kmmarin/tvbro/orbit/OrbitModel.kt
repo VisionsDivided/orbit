@@ -49,6 +49,11 @@ interface OrbitHost {
     /** Per-channel stream formats of the linked profile (synced through its server prefs, FormatSync.kt). */
     val channelFormats: io.github.kmmarin.tvbro.data.ChannelFormats get() = io.github.kmmarin.tvbro.data.ChannelFormats()
     fun setChannelFormats(f: io.github.kmmarin.tvbro.data.ChannelFormats) {}
+    /** Live TV's pinned groups of the linked profile and whether they changed here since the last sync (GroupPinSync.kt). */
+    val groupPins: List<String> get() = emptyList()
+    val groupPinsDirty: Boolean get() = false
+    /** Store [pins] as synced: the server's copy, or the TV's own once sent (still dirty if they changed meanwhile). */
+    fun setGroupPinsSynced(pins: List<String>) {}
 }
 
 /**
@@ -195,6 +200,7 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
             for (p in eps.toServer) out.episodes += OrbitBatch.episodeItem(p, withContext(Dispatchers.Main) { h.describe(p.seriesKey) })
             if (!out.isEmpty) send(l, out)
             syncChannelFormats(api, l, h, snap.prefs)
+            syncGroupPins(api, l, h, snap.prefs)
             // what came from the server, once the TV's changes are on it
             withContext(Dispatchers.Main) {
                 if (link !== l) return@withContext                      // unlinked meanwhile: keep nothing
