@@ -7,6 +7,7 @@ import com.sun.jna.Library
 import com.sun.jna.Native
 import com.sun.jna.NativeLong
 import com.sun.jna.Pointer
+import com.sun.jna.ptr.PointerByReference
 import kotlinx.serialization.json.*
 import io.github.kmmarin.tvbro.data.Diag
 import java.io.File
@@ -27,6 +28,12 @@ interface MpvLib : Library {
     fun mpv_wakeup(h: Pointer)
     fun mpv_error_string(err: Int): String
     fun mpv_client_api_version(): NativeLong
+    // render.h (software rendering on macOS, MpvRender.kt); looked up only when called
+    fun mpv_render_context_create(res: PointerByReference, mpv: Pointer, params: Pointer): Int
+    fun mpv_render_context_set_update_callback(ctx: Pointer, callback: MpvUpdateCb?, callbackCtx: Pointer?)
+    fun mpv_render_context_update(ctx: Pointer): Long
+    fun mpv_render_context_render(ctx: Pointer, params: Pointer): Int
+    fun mpv_render_context_free(ctx: Pointer)
 }
 
 /**
@@ -262,26 +269,50 @@ object MpvHardening {
     )
 }
 
+/** How the video reaches the screen: mpv draws into a native window ([WID]), mpv renders frames into memory that
+ * Compose draws ([SW], mpv's render API in software mode, MpvRender.kt), or no picture at all ([NONE], sound only). */
+enum class VideoMode { WID, SW, NONE }
+
 /**
  * How mpv shows video on each OS, in one place. Windows: `wid` = the HWND of an AWT Canvas, vo=gpu. Linux / Pi: the
- * X11 window id, gpu-context=x11egl (AWT is X11, XWayland under labwc). macOS: not settled (docs/orbit/MACOS.md):
- * by default no embedding (sound only, nothing native is touched); TVBRO_MAC_VIDEO=wid (or -Dtvbro.macVideo=wid)
- * tries `wid` with the Canvas's native handle for the MacBook spike.
+ * X11 window id, gpu-context=x11egl (AWT is X11, XWayland under labwc). macOS: `wid` cannot embed there
+ * (docs/orbit/MACOS.md), so mpv renders frames in software (vo=libmpv, [VideoMode.SW]) and Compose draws them.
+ * TVBRO_MAC_VIDEO (or -Dtvbro.macVideo) = sw | wid | none switches it for testing: on macOS all three, on Windows
+ * `sw` tries the macOS path (testing only); Linux always uses `wid`.
  */
 object MpvVideo {
     /** "Window id" meaning: play with sound but without a video output. */
     const val NO_EMBED = -1L
+    /** "Window id" meaning: vo=libmpv with a software render context ([SwRenderer]). */
+    const val SW = -2L
 
     val macMode: String? get() = System.getProperty("tvbro.macVideo") ?: System.getenv("TVBRO_MAC_VIDEO")
 
-    /** Whether the video can be drawn into an AWT component on [os]. */
-    fun embeds(os: Os, macMode: String? = this.macMode): Boolean = os != Os.MAC || macMode == "wid"
+    fun mode(os: Os, macMode: String? = this.macMode): VideoMode = when (os) {
+        Os.MAC -> when (macMode?.trim()?.lowercase()) { "wid" -> VideoMode.WID; "none" -> VideoMode.NONE; else -> VideoMode.SW }
+        Os.WINDOWS -> if (macMode?.trim()?.lowercase() == "sw") VideoMode.SW else VideoMode.WID
+        Os.LINUX -> VideoMode.WID
+    }
+
+    /** Whether the video is drawn into an AWT component (native window) on [os]. */
+    fun embeds(os: Os, macMode: String? = this.macMode): Boolean = mode(os, macMode) == VideoMode.WID
+
+    /**
+     * The hwdec for software rendering: decoded frames must come back to memory, so the copy-back variant of the
+     * user's choice (auto-safe -> auto-copy-safe: VideoToolbox on macOS, then copied back).
+     */
+    fun swHwdec(hwdec: String): String = hwdec.split(',').joinToString(",") { h ->
+        when (val t = h.trim()) {
+            "auto-safe" -> "auto-copy-safe"; "auto" -> "auto-copy"; "no", "" -> t
+            else -> if (t.endsWith("-copy") || t.startsWith("auto-copy")) t else "$t-copy"
+        }
+    }
 
     /** mpv options for drawing into the native window [wid]; the order is the order they are set in. */
     fun options(os: Os, wid: Long): List<Pair<String, String>> = when (os) {
         Os.WINDOWS -> listOf("wid" to wid.toString(), "vo" to "gpu")
         Os.LINUX -> listOf("wid" to wid.toString(), "gpu-context" to "x11egl", "vo" to "gpu")
-        Os.MAC -> listOf("wid" to wid.toString(), "vo" to "gpu") // spike only (embeds() is false by default)
+        Os.MAC -> listOf("wid" to wid.toString(), "vo" to "gpu") // TVBRO_MAC_VIDEO=wid only (the default is sw)
     }
 
     /** Hardware decoding choices in Settings, the default first (macOS: VideoToolbox through auto-safe). */
@@ -304,7 +335,7 @@ object MpvVideo {
 data class Track(val id: String, val type: String, val title: String, val lang: String?, val selected: Boolean, val w: Int = 0, val h: Int = 0, val bitrate: Long = 0)
 
 /**
- * One mpv instance: drawing into the native window [wid], sound only ([MpvVideo.NO_EMBED]), headless (wid 0, self-test), or a [recorder] that only
+ * One mpv instance: drawing into the native window [wid], rendering frames for Compose ([MpvVideo.SW], see [sw]), sound only ([MpvVideo.NO_EMBED]), headless (wid 0, self-test), or a [recorder] that only
  * demuxes and writes `stream-record` (no decoding, no output). [onEnd] gets "eof" or "error: ..." (any thread);
  * [onLoaded] fires when a file is loaded and its tracks are known.
  */
@@ -312,16 +343,19 @@ class Mpv(private val lib: MpvLib, wid: Long, hwdec: String, recorder: Boolean =
     private var h: Pointer? = lib.mpv_create() ?: error("mpv_create failed")
     @Volatile private var alive = true
     private val events: Thread
+    /** The software renderer ([MpvVideo.SW]); null for the other outputs or when the render context failed. */
+    val sw: SwRenderer?
 
     init {
         val o = { k: String, v: String -> lib.mpv_set_option_string(h!!, k, v) }
         when {
             wid > 0 -> for ((k, v) in MpvVideo.options(Platform.os, wid)) o(k, v)
-            wid == MpvVideo.NO_EMBED -> o("vo", "null") // this OS cannot embed the video yet (macOS): sound only
+            wid == MpvVideo.SW -> o("vo", "libmpv") // frames rendered into memory, drawn by Compose (macOS)
+            wid == MpvVideo.NO_EMBED -> o("vo", "null") // no picture asked for: sound only
             else -> { o("vo", "null"); o("ao", "null") } // headless self-test or recorder
         }
         if (recorder) { o("vd-lavc-skipframe", "all"); o("vd-lavc-skipidct", "all"); o("vd-lavc-skiploopfilter", "all"); o("sid", "no"); o("network-timeout", "30") }
-        o("hwdec", hwdec)
+        o("hwdec", if (wid == MpvVideo.SW) MpvVideo.swHwdec(hwdec) else hwdec)
         System.getenv("TVBRO_MPV_LOG")?.let { o("log-file", it) } // diagnostics only; the log can contain stream URLs
         o("osc", "no"); o("input-default-bindings", "no"); o("input-vo-keyboard", "no"); o("input-cursor", "no")
         o("cursor-autohide", "no"); o("keep-open", "no"); o("idle", "yes")
@@ -331,7 +365,11 @@ class Mpv(private val lib: MpvLib, wid: Long, hwdec: String, recorder: Boolean =
         o("osd-font-size", "28"); o("osd-bar", "yes"); o("terminal", "no")
         for ((k, v) in MpvHardening.options) o(k, v)
         val r = lib.mpv_initialize(h!!)
-        if (r < 0) error("mpv_initialize: ${lib.mpv_error_string(r)}")
+        if (r < 0) { lib.mpv_terminate_destroy(h!!); h = null; error("mpv_initialize: ${lib.mpv_error_string(r)}") }
+        // the render context must exist before a file is loaded (vo=libmpv has nothing to draw into otherwise)
+        sw = if (wid != MpvVideo.SW) null else try { SwRenderer(lib, h!!) } catch (e: Throwable) {
+            Diag.log("sw video unavailable (${e.message}): sound only"); null
+        }
         events = Thread({
             while (alive) {
                 val hh = h ?: break
@@ -346,6 +384,9 @@ class Mpv(private val lib: MpvLib, wid: Long, hwdec: String, recorder: Boolean =
                         if (reason == 4) onEnd("error: ${lib.mpv_error_string(err)}") else if (reason == 0) onEnd("eof")
                     }
                     8 -> onLoaded() // MPV_EVENT_FILE_LOADED
+                    17 -> sw?.let { s -> // MPV_EVENT_VIDEO_RECONFIG: the render size follows the video's size
+                        s.video(get("dwidth")?.toIntOrNull() ?: 0, get("dheight")?.toIntOrNull() ?: 0)
+                    }
                 }
             }
         }, "mpv-events").apply { isDaemon = true; start() }
@@ -383,12 +424,16 @@ class Mpv(private val lib: MpvLib, wid: Long, hwdec: String, recorder: Boolean =
         if (ass == null) cmd("osd-overlay", id.toString(), "none", "") else cmd("osd-overlay", id.toString(), "ass-events", ass, "0", "720")
     }
 
-    /** Stops the event thread first (it must not wait on a destroyed handle), then destroys the instance. */
+    /**
+     * Stops the event thread first (it must not wait on a destroyed handle), then the software renderer (its render
+     * context must be freed before the core), then destroys the instance.
+     */
     fun destroy() {
         val hh = h ?: return
         alive = false
         lib.mpv_wakeup(hh)
         if (Thread.currentThread() !== events) events.join(2000)
+        try { sw?.stop() } catch (e: Throwable) { Diag.log("sw video stop: ${e.message}") }
         h = null
         lib.mpv_terminate_destroy(hh)
     }

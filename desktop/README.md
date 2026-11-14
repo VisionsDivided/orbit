@@ -86,6 +86,13 @@ Test options: `--m3u <file|url>` (temporary source, not saved), `--play <n>`, `-
 `--render`, loads the URL as M3U and renders the TV screen off-screen). `TVBRO_MPV_LOG=<file>` writes an mpv log
 (it can contain stream URLs). `testdata/` has a synthetic playlist of public test streams plus a generated guide.
 
+Video output: Windows and Linux draw with mpv's `wid`; macOS renders frames in software and Compose draws them
+(`MpvRender.kt`, docs/orbit/MACOS.md "Video"). `TVBRO_MAC_VIDEO=sw` tries the macOS path on Windows (testing only;
+`wid` / `none` on macOS), `TVBRO_SW_MAX=WxH` changes its 1920x1080 render cap. Headless check against a real libmpv:
+`TVBRO_TEST_LIBMPV=<libmpv-2.dll or libmpv.2.dylib> ./gradlew :desktop:test --tests "*SwRealMpvTest*"`. It plays
+`testdata/sw-pattern.mp4`, made with
+`ffmpeg -filter_complex "color=c=red:s=160x240:r=25:d=2[a];color=c=blue:s=160x240:r=25:d=2[b];[a][b]hstack,format=yuv420p[v]" -map "[v]" -c:v libx264 -preset veryslow -crf 16 -tune stillimage sw-pattern.mp4`.
+
 Orbit design shots: `./gradlew :desktop:test --tests "*DesignShotsTest*"` renders the direction-5 screens off-screen at
 1280 × 760 into `desktop/build/orbit-shots/` (Home and Movies local and from a made-up catalogue, the title page,
 search, the guide, Settings, both "Who's watching?" styles, the stream prompt). The player overlay is ASS drawn by mpv

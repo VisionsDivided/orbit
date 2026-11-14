@@ -15,8 +15,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.awt.SwingPanel
+import androidx.compose.ui.awt.awtEventOrNull
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
@@ -76,14 +85,56 @@ fun VideoHost(app: AppState) = BoxWithConstraints(Modifier.fillMaxSize()) {
         }
         return@BoxWithConstraints
     }
+    if (MpvVideo.mode(Platform.os) == VideoMode.SW) {
+        // macOS: mpv renders frames into memory, drawn here as an ordinary Compose image (menus can draw above it).
+        // Same lifecycle as the Canvas below: mpv starts when the video appears and stops when it goes.
+        DisposableEffect(lib) { app.player.attach(lib, MpvVideo.SW); onDispose { app.player.detach() } }
+        SwVideoSurface(app.player.sw, mod, onSize = { w, h -> app.player.surface(w, h) },
+            onClick = { btn, x, y, n -> app.runOnUi { app.player.click(btn, x, y, n) } })
+        return@BoxWithConstraints
+    }
     SwingPanel(background = Color.Black, modifier = mod, factory = {
         VideoCanvas(onReady = { wid -> app.player.attach(lib, wid) }, onGone = { app.player.detach() }, onMouse = { e -> app.runOnUi { app.player.mouse(e) } },
             onSize = { w, h -> app.runOnUi { app.player.surface(w, h) } })
     })
 }
 
+/**
+ * The software-rendered video ([SwRenderer]): black, with the newest frame drawn over the whole box (the frame has
+ * the box's aspect; mpv letterboxed the video in it). Redraws on every new frame; the box size in pixels goes to
+ * the renderer (render size) and to [onSize] (OSD layout); clicks go to [onClick] with AWT button numbers.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+fun SwVideoSurface(r: SwRenderer?, modifier: Modifier, onSize: (Int, Int) -> Unit = { _, _ -> }, onClick: (Int, Int, Int, Int) -> Unit = { _, _, _, _ -> }) {
+    var box by remember { mutableStateOf(IntSize.Zero) }
+    // also when the renderer appears after the first layout (mpv starts once the surface is composed)
+    LaunchedEffect(r, box) { if (box != IntSize.Zero) r?.box(box.width, box.height) }
+    Canvas(modifier.background(Color.Black)
+        .onSizeChanged { box = it; onSize(it.width, it.height) }
+        .onPointerEvent(PointerEventType.Release) { e ->
+            val awt = e.awtEventOrNull ?: return@onPointerEvent
+            val p = e.changes.firstOrNull()?.position ?: return@onPointerEvent
+            onClick(awt.button, p.x.roundToInt(), p.y.roundToInt(), awt.clickCount)
+        }) {
+        r ?: return@Canvas
+        r.frame.value // read: a new frame redraws
+        val f = r.claim() ?: return@Canvas
+        val img = f.image() ?: return@Canvas
+        try {
+            drawIntoCanvas { c ->
+                c.nativeCanvas.drawImageRect(img, org.jetbrains.skia.Rect.makeWH(f.w.toFloat(), f.h.toFloat()),
+                    org.jetbrains.skia.Rect.makeWH(size.width, size.height), org.jetbrains.skia.SamplingMode.LINEAR, null, true)
+            }
+        } finally { img.close() } // the drawing keeps its own reference until it is flushed
+    }
+}
+
 class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
     private var mpv: Mpv? = null
+    /** The software frames of the playing mpv ([VideoMode.SW], macOS); null on the `wid` path. */
+    var sw by mutableStateOf<SwRenderer?>(null)
+        private set
     private var loadedUrl: String? = null
     private var req: PlayReq? = null
     var info by mutableStateOf(false)
@@ -120,13 +171,13 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
             val m = Mpv(lib, wid, app.settings.hwdec, onLoaded = { app.runOnUi { onLoaded() } }) { why -> app.runOnUi { onEnd(why) } }
             m.set("audio-delay", "%.3f".format(java.util.Locale.US, app.settings.audioDelayMs / 1000.0))
             applyCaptionStyle(m)
-            mpv = m; loadedUrl = null
+            mpv = m; loadedUrl = null; sw = m.sw
             app.playing?.let { load(it) }
             if (ticker?.isActive != true) ticker = scope.launch { while (true) { delay(500); tick() } }
         } catch (e: Throwable) { Diag.log("mpv start failed: ${e.message}"); app.toast("Video engine failed: ${e.message}") }
     }
 
-    fun detach() { saveResume(); ticker?.cancel(); mpv?.destroy(); mpv = null; loadedUrl = null }
+    fun detach() { saveResume(); ticker?.cancel(); sw = null; mpv?.destroy(); mpv = null; loadedUrl = null }
 
     private fun applyCaptionStyle(m: Mpv) {
         m.set("sub-font-size", listOf("40", "55", "72")[app.settings.captionSize.coerceIn(0, 2)])
@@ -608,17 +659,20 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
         m.overlay(4, upNextEvents()?.joinToString("\n"))
     }
 
-    fun mouse(e: MouseEvent) {
-        if (!app.full) { if (e.button == MouseEvent.BUTTON1) app.playing?.live?.let { app.playChannel(it) }; return }
+    fun mouse(e: MouseEvent) = click(e.button, e.x, e.y, e.clickCount)
+
+    /** A click on the video at [x], [y] (in the units of [surface]) with AWT mouse [button]. */
+    fun click(button: Int, x: Int, y: Int, count: Int) {
+        if (!app.full) { if (button == MouseEvent.BUTTON1) app.playing?.live?.let { app.playChannel(it) }; return }
         lastInput = System.currentTimeMillis()
-        if (e.button == MouseEvent.BUTTON1 && menu && vw > 0 && vh > 0) {
+        if (button == MouseEvent.BUTTON1 && menu && vw > 0 && vh > 0) {
             // a click on a quick action runs it (the OSD is 720 high, as wide as the surface's aspect)
-            val i = PlayerOsd.qaAt(e.x * aw / vw, e.y * PlayerOsd.H / vh, actions().size)
+            val i = PlayerOsd.qaAt(x * aw / vw, y * PlayerOsd.H / vh, actions().size)
             if (i >= 0) { sel = i; act(actions()[i].id, 1); showBar(); return }
         }
         when {
-            e.button == MouseEvent.BUTTON3 -> { menu = !menu; sel = 0; showBar() }
-            e.clickCount >= 2 -> app.fullscreen = !app.fullscreen
+            button == MouseEvent.BUTTON3 -> { menu = !menu; sel = 0; showBar() }
+            count >= 2 -> app.fullscreen = !app.fullscreen
             else -> showBar()
         }
     }

@@ -5,11 +5,27 @@ package io.github.kmmarin.tvbro.desktop
 import org.junit.Assert.*
 import org.junit.Test
 
-/** The per-OS video output choices: Windows and Linux exactly as before, macOS not embedding unless asked to. */
+/** The per-OS video output choices: Windows and Linux exactly as before, macOS software frames unless asked otherwise. */
 class MpvVideoTest {
     @Test fun optionsPerOs() {
         assertEquals(listOf("wid" to "42", "vo" to "gpu"), MpvVideo.options(Os.WINDOWS, 42))
         assertEquals(listOf("wid" to "42", "gpu-context" to "x11egl", "vo" to "gpu"), MpvVideo.options(Os.LINUX, 42))
+    }
+
+    @Test fun videoModePerOs() {
+        // macOS: software frames by default; wid / none only when asked for
+        assertEquals(VideoMode.SW, MpvVideo.mode(Os.MAC, null))
+        assertEquals(VideoMode.SW, MpvVideo.mode(Os.MAC, "sw"))
+        assertEquals(VideoMode.SW, MpvVideo.mode(Os.MAC, "render"))
+        assertEquals(VideoMode.WID, MpvVideo.mode(Os.MAC, "wid"))
+        assertEquals(VideoMode.NONE, MpvVideo.mode(Os.MAC, " None "))
+        // Windows: wid as always; sw only for testing
+        assertEquals(VideoMode.WID, MpvVideo.mode(Os.WINDOWS, null))
+        assertEquals(VideoMode.WID, MpvVideo.mode(Os.WINDOWS, "none"))
+        assertEquals(VideoMode.SW, MpvVideo.mode(Os.WINDOWS, "sw"))
+        // Linux / Pi: always wid
+        assertEquals(VideoMode.WID, MpvVideo.mode(Os.LINUX, null))
+        assertEquals(VideoMode.WID, MpvVideo.mode(Os.LINUX, "sw"))
     }
 
     @Test fun macEmbedsOnlyForTheSpike() {
