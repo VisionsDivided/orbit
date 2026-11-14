@@ -102,7 +102,8 @@ class HomeFeed(private val m: AppModel, private val api: CatalogApi = CatalogApi
     private fun tileOf(c: CatalogItem): Tile {
         val vod = if (c.source == "iptv") vodOf(c) else null
         val next = c.next?.let { n -> listOfNotNull((if (n.season > 0) "S${n.season} " else "") + "E${n.num}", n.title?.takeIf { it.isNotBlank() }).joinToString(" · ") }
-        val left = if (!c.isShow && c.progressSecs != null && c.progressDur != null && c.progressDur > c.progressSecs) "${(c.progressDur - c.progressSecs) / 60} min left" else null
+        val ps = c.progressSecs; val pd = c.progressDur   // locals: CatalogItem is in shared (no smart cast across modules)
+        val left = if (!c.isShow && ps != null && pd != null && pd > ps) "${(pd - ps) / 60} min left" else null
         val meta = next ?: left ?: listOfNotNull(c.year, c.genres.firstOrNull()).joinToString(" · ").ifEmpty { null }
         return Tile(c.key, c.title, meta, c.poster, c.backdrop, c.colors, c.source, c.progress, c.year, c.rating, c.genres, c.isShow, vod, locked = c.locked, id = c.id, conn = c.conn)
     }

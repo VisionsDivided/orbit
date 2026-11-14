@@ -75,8 +75,9 @@ enum class BrowseSort(val label: String, val param: String) {
 object Titles {
     fun of(c: CatalogItem): Title {
         val next = c.next?.let { n -> listOfNotNull((if (n.season > 0) "S${n.season} " else "") + "E${n.num}", n.title?.takeIf { it.isNotBlank() }).joinToString(" · ") }
-        val left = if (!c.isShow && c.progressSecs != null && c.progressDur != null && c.progressDur > c.progressSecs && c.progressSecs > 0)
-            "${(c.progressDur - c.progressSecs) / 60} min left" else null
+        val ps = c.progressSecs; val pd = c.progressDur   // locals: CatalogItem is in shared (no smart cast across modules)
+        val left = if (!c.isShow && ps != null && pd != null && pd > ps && ps > 0)
+            "${(pd - ps) / 60} min left" else null
         val meta = next ?: left ?: listOfNotNull(c.year, c.genres.firstOrNull()).joinToString(" · ").ifEmpty { null }
         return Title(
             c.key, c.title, c.isShow, c.poster, c.backdrop, c.colors, c.year, c.rating, c.genres, c.source,

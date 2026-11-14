@@ -107,7 +107,7 @@ fun main(args: Array<String>) {
                         VideoHost(app) // last: drawn above Home, at a stable place in the tree
                     }
                     Overlays(app)
-                    StreamAskDialog(app)
+                    StreamAskDialog(app, window)
                 }
             }
         }
@@ -155,21 +155,25 @@ fun Home(app: AppState) {
     val hero = remember { HeroState() }
     var discoverArt by remember { mutableStateOf<String?>(null) }
     val d = app.detail
-    val art: String? = when {
-        d != null -> app.detailCache[d.key]?.backdrop ?: d.poster
-        app.tab == Tab.HOME || app.tab == Tab.MOVIES || app.tab == Tab.SHOWS -> hero.item?.let { app.detailCache[it.key]?.backdrop ?: it.poster }
-        app.tab == Tab.DISCOVER -> discoverArt
+    val artItem = when {
+        d != null -> d
+        app.tab == Tab.HOME || app.tab == Tab.MOVIES || app.tab == Tab.SHOWS -> hero.item
         else -> null
     }
+    val art: String? = if (app.tab == Tab.DISCOVER && d == null) discoverArt else artItem?.let { app.catalog.art(it) }
+    val colors = artItem?.let { CatalogMap.mesh(app.catalog.info[it.key]?.colors) }
+    // the colour keys belong to the screen shown: a new screen starts without any until something takes the focus
+    LaunchedEffect(app.tab, d?.key) { app.colorKeys = null }
     Box(Modifier.fillMaxSize().background(Theme.bg).onFocusChanged { app.homeHasFocus = it.hasFocus }.onKeyEvent { e ->
         if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
         when {
             // Back closes the topmost layer; menus and questions are their own windows and close themselves first,
-            // full screen takes its keys from AWT. Here: a page (details, a settings page), else the top bar.
-            e.key == Key.Escape || (e.key == Key.Backspace && !typing) -> when (TvNav.top(false, false, false, app.detail != null || (app.tab == Tab.SETTINGS && app.settingsPage != 0))) {
-                TvNav.Layer.PAGE -> { if (app.detail != null) app.detail = null else app.settingsPage = 0; true }
+            // full screen takes its keys from AWT. Here: a page (details, a collection, Manage profiles), else the top bar.
+            e.key == Key.Escape || (e.key == Key.Backspace && !typing) -> when (TvNav.top(false, false, false, app.detail != null || app.pageBack != null)) {
+                TvNav.Layer.PAGE -> { if (app.detail != null) app.detail = null else app.pageBack?.invoke(); true }
                 else -> if (inRail) false else { typing = false; scope.launch { app.railFr.settle() }; true }
             }
+            e.key in listOf(Key.F1, Key.F2, Key.F3, Key.F4) -> app.colorKeys?.forKey(e.key)?.let { it.act(); true } ?: false
             typing -> false
             e.key == Key.DirectionUp -> if (inRail) true else fm.moveFocus(FocusDirection.Up) || inScreenEdge(app, scope)
             e.key == Key.DirectionDown -> {
@@ -184,27 +188,30 @@ fun Home(app: AppState) {
         }
     }) {
         val cinematic = d != null || app.tab in listOf(Tab.HOME, Tab.MOVIES, Tab.SHOWS, Tab.DISCOVER)
-        Backdrop(if (cinematic) art else null, strongBottom = !cinematic)
+        // text-heavy pages (guide, search, settings): the orbit mesh with the stronger bottom scrim (§6)
+        Backdrop(if (cinematic) art else null, strongBottom = !cinematic, colors = if (cinematic) colors else null)
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.onFocusChanged { inRail = it.hasFocus }) { TopBar(app) }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 // each screen is a focus group that restores its last focused item when focus comes back from the top bar
-                if (d != null) Box(Modifier.fillMaxSize().padding(horizontal = 56.dp, vertical = 8.dp)) { DetailScreen(app, d) }
+                if (d != null) Box(Modifier.fillMaxSize()) { DetailScreen(app, d) }
                 else key(app.settings.timeFmt, app.tab) { Box(Modifier.fillMaxSize().focusRestorer().focusGroup()) { when (app.tab) {
                     Tab.HOME -> HomeScreen(app, hero)
                     Tab.MOVIES -> VodSection(app, app.movies, false, hero)
                     Tab.SHOWS -> VodSection(app, app.series, true, hero)
                     Tab.DISCOVER -> DiscoverScreen(app) { discoverArt = it }
-                    Tab.TV -> Box(Modifier.padding(start = 40.dp, end = 40.dp, bottom = 8.dp)) { TvScreen(app) }
+                    Tab.TV -> Box(Modifier.padding(start = 56.dp, end = 56.dp, bottom = 52.dp)) { TvScreen(app) }
                     Tab.MYLIST -> Box(Modifier.padding(horizontal = 56.dp, vertical = 8.dp)) { MyListScreen(app) }
                     Tab.RECORDINGS -> Box(Modifier.padding(horizontal = 56.dp, vertical = 8.dp)) { RecordingsScreen(app) }
-                    Tab.SEARCH -> Box(Modifier.padding(horizontal = 56.dp, vertical = 8.dp)) { SearchScreen(app) }
-                    Tab.SETTINGS -> Box(Modifier.padding(horizontal = 56.dp, vertical = 8.dp)) { SettingsScreen(app) }
+                    Tab.SEARCH -> Box(Modifier.padding(start = 56.dp, end = 56.dp, top = 4.dp)) { SearchScreen(app) }
+                    Tab.SETTINGS -> SettingsScreen(app)
                 } } }
             }
         }
-        // notices: a pill at the bottom left (the colour-key legend's place, DESIGN-SPEC-5 §9)
-        if (app.toastMsg.isNotEmpty() || (app.busy && app.sources.isNotEmpty())) Box(Modifier.align(Alignment.BottomStart).padding(start = 56.dp, bottom = 18.dp)
+        // the colour-key legend at the bottom left (DESIGN-SPEC-5 §9), notices just above it
+        val keys = app.colorKeys
+        if (keys != null && !app.full) KeyLegend(keys, Modifier.align(Alignment.BottomStart).padding(start = 56.dp, bottom = 18.dp))
+        if (app.toastMsg.isNotEmpty() || (app.busy && app.sources.isNotEmpty())) Box(Modifier.align(Alignment.BottomStart).padding(start = 56.dp, bottom = if (keys != null) 58.dp else 18.dp)
             .background(Color(0xC705060C), RoundedCornerShape(50)).border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(50)).padding(18.dp, 8.dp)) {
             T(app.toastMsg.ifEmpty { app.status }, 13, if (app.toastMsg.isNotEmpty()) Theme.text else Theme.dim, maxLines = 3)
         }

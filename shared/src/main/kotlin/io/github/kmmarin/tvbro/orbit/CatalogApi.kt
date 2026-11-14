@@ -19,7 +19,8 @@ data class CatalogNext(val id: String, val season: Int, val num: Int, val title:
 /**
  * A catalog title (docs/orbit/API-v1.md "Catalogue"). [key] uses the TV's own key scheme ("m|p0|123", "s|p0|7";
  * Plex / Jellyfin "m|<connection>|<item>"), so My list and resume line up with the local state. Artwork addresses
- * are absolute (the server's relative `/img?…` made absolute; loading them needs the session, see Logos.auth).
+ * are absolute (the server's relative `/img?…` made absolute; loading them needs the session, see
+ * [OrbitApi.imageHeaders]).
  */
 data class CatalogItem(
     val key: String,
@@ -58,7 +59,7 @@ data class CatalogCollection(val id: String, val name: String, val count: Int, v
                              val source: String = "", val kind: String = "movie")
 
 /**
- * The catalog routes for the TV (signed in, per profile). Every call throws [OrbitError] on an error answer;
+ * The catalog routes for the TV and the desktop app (signed in, per profile). Every call throws [OrbitError] on an error answer;
  * [OrbitError.code] 404 means the home server has no catalog yet (an older server): fall back to local data.
  * Call off the main thread.
  */

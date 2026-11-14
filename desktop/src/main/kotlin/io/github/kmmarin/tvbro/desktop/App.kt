@@ -81,6 +81,18 @@ class AppState(private val scope: CoroutineScope, testSources: List<Source>? = n
     val detailCache = HashMap<String, VodDetail>()
     /** Orbit: this app signed in to a home server like a linked TV (Orbit.kt); without a sign-in, plain tvBro. */
     val orbit = OrbitDesktop(this, scope)
+    /** Orbit: Home, Movies and Shows from the home server's catalogue while signed in (Catalog.kt). */
+    val catalog = DeskCatalog(this)
+    /** A page inside a section (a collection, Manage profiles) that Esc closes first; null = none. */
+    var pageBack by mutableStateOf<(() -> Unit)?>(null)
+    /** Settings ▸ Profiles opens "Manage profiles" (set while Settings is on screen; Who's watching? uses it). */
+    var manageProfiles: (() -> Unit)? = null
+    /** The search typed last (kept while the app runs). */
+    var searchQ by mutableStateOf("")
+    /** Movies and Shows: the sub-menu page each shows (Recommended, Browse, Collections), kept while the app runs. */
+    val vodPages = mutableStateMapOf<Boolean, VodPage>()
+    /** The current screen's colour keys (red, green, yellow, blue: F1 to F4, or a click on the legend). */
+    var colorKeys by mutableStateOf<ColorKeys?>(null)
 
     /** Closes the pop-up menu without a choice. */
     fun closeMenu() { val m = menu; menu = null; m?.onDismiss?.invoke() }
@@ -154,7 +166,56 @@ class AppState(private val scope: CoroutineScope, testSources: List<Source>? = n
 
     /** Orbit sign-out or another profile: My list, search history and the last channel of the account go. */
     fun clearProfileData() {
-        update { it.copy(myList = emptyList(), searchHistory = emptyList(), lastChannel = "", lastUi = "") }
+        update { it.copy(myList = emptyList(), searchHistory = emptyList(), lastChannel = "", lastUi = "", channelFormats = "") }
+    }
+
+    // ---- per-channel live stream format (TS / HLS), per profile and synced as "tvChannelFormats" (Orbit.kt) ----
+    private var fmtCache: Pair<String, ChannelFormats>? = null
+
+    fun channelFormats(): ChannelFormats {
+        val raw = settings.channelFormats
+        fmtCache?.takeIf { it.first == raw }?.let { return it.second }
+        val f = ChannelFormats.fromJson(raw.takeIf { it.isNotBlank() }?.let { runCatching { kotlinx.serialization.json.Json.parseToJsonElement(it) }.getOrNull() })
+        fmtCache = raw to f
+        return f
+    }
+
+    /** The channel's own format ([ChannelFormats.TS] / [ChannelFormats.HLS]), or null: the default (TS on the desktop). */
+    fun channelFormat(key: String): String? = channelFormats()[key]
+
+    fun setChannelFormats(f: ChannelFormats) = update { it.copy(channelFormats = f.toJson().toString()) }
+
+    /** "TS · auto", "HLS" (set for this channel), as the guide and the player show it. */
+    fun formatLabel(c: Channel): String = when (channelFormat(c.key)) {
+        ChannelFormats.HLS -> "HLS"; ChannelFormats.TS -> "TS"; else -> if (LiveFormat.canHls(c.url)) "TS · auto" else "auto"
+    }
+
+    /** The address the player opens for live [c]: HLS when the channel is set to it (Xtream live only). */
+    fun liveUrl(c: Channel, url: String = c.url): String = LiveFormat.playUrl(url, channelFormat(c.key), globalHls = false)
+
+    /** The yellow key: Default → TS → HLS → Default for this channel; a playing channel switches at once. */
+    fun cycleFormat(c: Channel) {
+        if (!LiveFormat.canHls(c.url)) return toast("${c.name}: only Xtream live channels have an HLS stream")
+        val next = when (channelFormat(c.key)) { null -> ChannelFormats.TS; ChannelFormats.TS -> ChannelFormats.HLS; else -> null }
+        setChannelFormat(c, next)
+    }
+
+    fun setChannelFormat(c: Channel, fmt: String?) {
+        setChannelFormats(channelFormats().with(c.key, fmt, System.currentTimeMillis()))
+        toast("${c.name}: " + when (fmt) { ChannelFormats.HLS -> "HLS (.m3u8)"; ChannelFormats.TS -> "MPEG-TS (.ts)"; else -> "default stream format" })
+        orbit.changed()
+        if (playing?.live?.key == c.key && playing?.archive == null) player.reloadLive()
+    }
+
+    /** The green key in the guide: a future programme is scheduled or cancelled; on now / a channel: stop or the record menu. */
+    fun recordKey(c: Channel, p: Programme?) {
+        val t = System.currentTimeMillis() / 1000
+        if (p != null && ProgTime.classify(c, p.start, p.stop, t) == ProgState.FUTURE) {
+            recorder.scheduledFor(c, p)?.let { return recorder.stop(it) }
+            return recorder.recordProgramme(c, p)
+        }
+        recorder.active(c)?.let { return recorder.stop(it) }
+        recordMenu(c)
     }
 
     /** A My list / resume entry the web app can show: channels by name and logo, films and shows by poster and id. */
@@ -200,6 +261,8 @@ class AppState(private val scope: CoroutineScope, testSources: List<Source>? = n
         io { SmbShare.password = Secrets.readString("smb"); SmbBridge.cfg = { settings.smb } }
         if (settings.resume.isNotEmpty()) { watch.importLegacy(settings.resume); update { it.copy(resume = emptyMap()) } }
         watch.lookup = ::findVod
+        // artwork on the home server itself (the catalogue's /img and /v1/media/image) needs the session cookie
+        Images.auth = { u -> io.github.kmmarin.tvbro.orbit.OrbitApi.imageHeaders(orbit.link, u) }
         if (!temporary) orbit.start()
         scope.launch { while (true) { delay(15_000); now = System.currentTimeMillis() / 1000; if (pinOpen && !pinGate.unlocked) pinOpen = false } }
         // Scheduled refresh: cheap check every 30 min; downloads only what is older than 12 h (guide) / 24 h (catalogues).
@@ -487,6 +550,27 @@ class AppState(private val scope: CoroutineScope, testSources: List<Source>? = n
     fun openMovie(v: VodItem, repo: SourceRepo, d: VodDetail?, fromStart: Boolean = false) = io {
         val url = try { repo.movieUrl(v, d) } catch (e: Exception) { runOnUi { toast(e.message ?: "This title cannot be played") }; return@io }
         runOnUi { playMovie(v, url, fromStart) }
+    }
+
+    /** Settings at [cat] (the avatar's menu, "Sign in to Orbit", "Add a source"). */
+    fun openSettings(cat: SetCat) { detail = null; pageBack = null; tab = Tab.SETTINGS; settingsPage = cat.ordinal }
+
+    /** The green key on a title: its trailer (a YouTube id or address from the provider) in the browser. */
+    fun playTrailer(v: VodItem) {
+        fun open(d: VodDetail?) {
+            val t = d?.trailer?.trim().orEmpty()
+            val url = when {
+                t.isEmpty() -> null
+                t.startsWith("https://") -> t
+                Regex("^[A-Za-z0-9_-]{6,20}$").matches(t) -> "https://www.youtube.com/watch?v=$t"
+                else -> null
+            } ?: return toast("No trailer for ${v.name}")
+            try { java.awt.Desktop.getDesktop().browse(java.net.URI(url)); toast("Trailer opened in the browser") }
+            catch (e: Exception) { toast("Could not open the browser (${e.javaClass.simpleName})") }
+        }
+        detailCache[v.key]?.let { return open(it) }
+        val repo = repo(v.sourceId) ?: return toast("No trailer for ${v.name}")
+        io { val d = try { repo.detail(v) } catch (e: Exception) { null }; runOnUi { d?.let { detailCache[v.key] = it }; open(d) } }
     }
 
     fun markMovie(v: VodItem, watched: Boolean) { watch.snap(v); watch.setWatched(v.key, watched); toast(if (watched) "Marked as watched" else "Marked as unwatched") }

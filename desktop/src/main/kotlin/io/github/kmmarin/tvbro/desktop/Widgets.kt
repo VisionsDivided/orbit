@@ -151,12 +151,12 @@ fun Overlays(app: AppState) {
         // header lines wrap at about 60 characters (a restore summary has long ones)
         val head = m.title.lines().take(6).sumOf { (it.length / 60 + 1).coerceAtMost(3) }.coerceAtMost(14)
         val st = rememberDialogState(position = WindowPosition(Alignment.Center), size = androidx.compose.ui.unit.DpSize(520.dp, (90 + head * 22 + rows * 46).dp))
-        DialogWindow(onCloseRequest = { app.closeMenu() }, state = st, title = "tvBro", undecorated = true, resizable = false) {
+        DialogWindow(onCloseRequest = { app.closeMenu() }, state = st, title = "tvBro", undecorated = true, transparent = true, resizable = false) {
             val first = remember { FocusRequester() }
             LaunchedEffect(m) { first.settle() }
-            Column(Modifier.fillMaxSize().background(Theme.surface).border(2.dp, Theme.accent).padding(14.dp).dialogKeys { app.closeMenu() }) {
+            Column(Modifier.fillMaxSize().background(O5.dialog, RoundedCornerShape(14.dp)).border(1.dp, O5.dialogRing, RoundedCornerShape(14.dp)).padding(14.dp).dialogKeys { app.closeMenu() }) {
                 val lines = m.title.lines()
-                T(lines.first(), 18, Theme.accent, bold = true, maxLines = 2)
+                Text2(lines.first(), 18, Color.White, FontWeight.ExtraBold, maxLines = 2)
                 for (l in lines.drop(1).take(5)) T(l, 13, Theme.dim, maxLines = 3)
                 Spacer(Modifier.height(8.dp))
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -169,14 +169,14 @@ fun Overlays(app: AppState) {
     } }
     app.prompt?.let { p -> key(p) {
         val st = rememberDialogState(position = WindowPosition(Alignment.Center), size = androidx.compose.ui.unit.DpSize(520.dp, 190.dp))
-        DialogWindow(onCloseRequest = { app.prompt = null }, state = st, title = "tvBro", undecorated = true, resizable = false) {
+        DialogWindow(onCloseRequest = { app.prompt = null }, state = st, title = "tvBro", undecorated = true, transparent = true, resizable = false) {
             var v by remember(p) { mutableStateOf(p.initial) }
             val fr = remember { FocusRequester() }
             LaunchedEffect(p) { fr.settle() }
             val done = { app.prompt = null; typing = false; p.done(v) }
-            Column(Modifier.fillMaxSize().background(Theme.surface).border(2.dp, Theme.accent).padding(16.dp).dialogKeys { app.prompt = null; typing = false },
+            Column(Modifier.fillMaxSize().background(O5.dialog, RoundedCornerShape(14.dp)).border(1.dp, O5.dialogRing, RoundedCornerShape(14.dp)).padding(16.dp).dialogKeys { app.prompt = null; typing = false },
                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                T(p.title, 16, Theme.accent, bold = true)
+                Text2(p.title, 17, Color.White, FontWeight.ExtraBold)
                 OutlinedTextField(v, { v = it }, Modifier.fillMaxWidth().focusRequester(fr).onFocusChanged { typing = it.isFocused }
                     .onPreviewKeyEvent { e -> if (e.type == KeyEventType.KeyDown && (e.key == Key.Enter || e.key == Key.NumPadEnter)) { done(); true } else false },
                     singleLine = true, visualTransformation = if (p.secret) PasswordVisualTransformation() else VisualTransformation.None)
@@ -187,7 +187,7 @@ fun Overlays(app: AppState) {
     app.picker?.let { pk -> key(pk) {
         val st = rememberDialogState(position = WindowPosition(Alignment.Center), size = androidx.compose.ui.unit.DpSize(560.dp, 600.dp))
         val close = { app.picker = null; typing = false }
-        DialogWindow(onCloseRequest = close, state = st, title = "tvBro", undecorated = true, resizable = false) {
+        DialogWindow(onCloseRequest = close, state = st, title = "tvBro", undecorated = true, transparent = true, resizable = false) {
             var q by remember(pk) { mutableStateOf("") }
             var rows by remember(pk) { mutableStateOf(pk.search("")) }
             LaunchedEffect(q) { delay(150); rows = pk.search(q) } // debounce typing
@@ -195,9 +195,9 @@ fun Overlays(app: AppState) {
             val first = remember { FocusRequester() }
             val fm = LocalFocusManager.current
             LaunchedEffect(pk) { field.settle() }
-            Column(Modifier.fillMaxSize().background(Theme.surface).border(2.dp, Theme.accent).padding(14.dp).dialogKeys(close),
+            Column(Modifier.fillMaxSize().background(O5.dialog, RoundedCornerShape(14.dp)).border(1.dp, O5.dialogRing, RoundedCornerShape(14.dp)).padding(14.dp).dialogKeys(close),
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                T(pk.title, 18, Theme.accent, bold = true, maxLines = 2)
+                Text2(pk.title, 18, Color.White, FontWeight.ExtraBold, maxLines = 2)
                 for (l in pk.sub.lines()) T(l, 13, Theme.dim, maxLines = 2)
                 OutlinedTextField(q, { q = it }, Modifier.fillMaxWidth().focusRequester(field).onFocusChanged { typing = it.isFocused }
                     .onPreviewKeyEvent { e ->
@@ -222,12 +222,12 @@ fun Overlays(app: AppState) {
     } }
     app.dueReminder?.takeIf { !app.full }?.let { r ->
         val st = rememberDialogState(position = WindowPosition(Alignment.Center), size = androidx.compose.ui.unit.DpSize(480.dp, 200.dp))
-        DialogWindow(onCloseRequest = { app.reminderDone(r, false) }, state = st, title = "tvBro", undecorated = true, resizable = false) {
+        DialogWindow(onCloseRequest = { app.reminderDone(r, false) }, state = st, title = "tvBro", undecorated = true, transparent = true, resizable = false) {
             val fr = remember { FocusRequester() }
             LaunchedEffect(r) { fr.settle() }
-            Column(Modifier.fillMaxSize().background(Theme.surface).border(2.dp, Theme.accent).padding(16.dp).dialogKeys { app.reminderDone(r, false) },
+            Column(Modifier.fillMaxSize().background(O5.dialog, RoundedCornerShape(14.dp)).border(1.dp, O5.dialogRing, RoundedCornerShape(14.dp)).padding(16.dp).dialogKeys { app.reminderDone(r, false) },
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                T("Reminder", 14, Theme.accent)
+                T("REMINDER", 12, Theme.dim, bold = true)
                 T(r.title, 20, bold = true, maxLines = 2)
                 T("${r.channel} · ${io.github.kmmarin.tvbro.data.TimeFmt.time(r.startMs / 1000)}", 14, Theme.dim)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

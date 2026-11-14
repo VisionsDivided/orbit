@@ -173,6 +173,17 @@ username and password, then "Who's watching?".
    replace any typed into the app, so channel and VOD keys match every other device), `/v1/sync/state?since=` and
    `/v1/sync/batch` every minute and shortly after a change, and the stream count below (one slot per app, the
    "Stop … and watch" choice when every stream is in use).
+5. Home, Movies and Shows use the catalogue routes ("Catalogue" below, the shared `CatalogApi`): Home, Recommended,
+   Browse (`source` from the All · Local · IPTV toggle, `genre`, `sort`, pages of 120) and Collections. Signed out,
+   or on a 404 from a server without the catalogue, the app uses its own IPTV catalogue as before. Artwork on the home
+   server (`/img`, `/v1/media/image`) is loaded with the session cookie and without following redirects.
+6. The per-channel live stream format (TS / HLS) is the profile's `tvChannelFormats` pref, as on the TV ("What belongs
+   to a profile" below), merged in each sync (the newer copy wins).
+7. A recording made by the desktop app takes a slot of its own with `/api/stream/start` (its own `sid`, label
+   "<device> · recording", `what` "Recording: <title>") and keeps it with heartbeats until it ends (`/api/stream/stop`).
+   Started by hand, a full count asks which stream to stop; a scheduled one lets the server stop the oldest viewer.
+   The server does not mark these slots as recordings (`recording` false; only its own recordings are pinned), so
+   another device can still take the slot: the recording then goes on and the app says so.
 
 Why a `desktop` kind and not `web`: a desktop session plays from the provider itself, so it needs the playlists,
 which browser sessions never get. It has the `viewer` role whatever the account's role, like a linked TV (the app has
@@ -305,7 +316,7 @@ points; reminders; search history; preferences), `GET /api/series/continue`, `GE
 custom groups, the guide, recordings and recording rules, parental PIN and locks, and server settings.
 
 Preference keys written by Orbit clients (scope `prefs`):
-- `tvChannelFormats`: the TV's per-channel live stream format, `{"at": <ms>, "channels": {"<channel key>": "ts"|"hls"}}`
+- `tvChannelFormats`: the per-channel live stream format of the TV and the desktop app, `{"at": <ms>, "channels": {"<channel key>": "ts"|"hls"}}`
   (at most 400 channels; a channel not listed follows the TV's Settings ▸ Live stream format). The copy with the newer
   `at` wins as a whole.
 
