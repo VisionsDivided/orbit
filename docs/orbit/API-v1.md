@@ -348,16 +348,19 @@ file is left as it was. Deleting a profile deletes its data; sessions on it move
 ## Discover and requests (Phase 6)
 
 Browse what is new and ask for films and shows through the household's Seerr (the
-successor of Overseerr / Jellyseerr). The server talks to Seerr; clients never see its address or API key.
+successor of Overseerr / Jellyseerr). The server talks to Seerr; clients never see its API key, and see its address only as a title page's
+`seerrUrl` ("Open in Seerr").
 Server code: `web/server/orbit/seerr.py` (settings, client, cache, normalization) and `web/server/orbit/discover.py`
 (the routes below).
 
 | Method | Path | Who | Body / query → Answer |
 |---|---|---|---|
 | GET | `/v1/discover/status` | signed in | → `{"configured", "reachable", "linked", "version"?}`; owners and admins also get `"baseUrl"` and `"keySet"` (never the key). `linked`: your account has a Seerr user. |
-| GET | `/v1/discover/rows` | signed in | → `{"rows": [{"id": "trending"\|"movies"\|"tv"\|"upcoming", "title", "items": [Title]}], "stale"}`. `upcoming` mixes films and shows. |
-| GET | `/v1/discover/search?q=` | signed in | `q`: 1–100 characters → `{"results": [Title], "stale"}` (people are left out). |
+| GET | `/v1/discover/rows` | signed in | → `{"rows": [{"id": "trending"\|"movies"\|"tv"\|"upcoming", "title", "items": [Title], "page": 1, "pages"}], "stale"}`: the first page of each list (Seerr sends 20 per page). `pages`: how many pages Seerr has (at most 500; 0 when the list could not be loaded). `upcoming` mixes films and shows. |
+| GET | `/v1/discover/rows/{id}?page=` | signed in | `id` from the rows above, `page` 1–500 (default 1) → `{"id", "title", "items": [Title], "page", "pages", "stale"}`: one further page of a row, for clients that load more near the row's end. `upcoming` interleaves page N of the film and show lists. Cached like the rows (each page on its own). 404 for an unknown row, 400 for a bad page, 503 while Seerr cannot be reached and nothing is cached. |
+| GET | `/v1/discover/search?q=&page=` | signed in | `q`: 1–100 characters, `page` 1–500 (default 1) → `{"results": [Title], "people": [Person], "page", "pages", "total", "stale"}` through Seerr's `/search` (films, shows and people). `total`: matches over all pages (films, shows and people), or null. Each page cached 10 minutes. |
 | GET | `/v1/discover/title?type=movie\|tv&tmdb=` | signed in | → `Title` with `seasons` for shows, plus `"stale"`. 404 when Seerr does not know it. |
+| GET | `/v1/discover/title/{movie\|tv}/{tmdb}` | signed in | → `TitlePage`, plus `"stale"`: everything a title page shows. Cached 1 minute (requests and download progress change while someone looks at it); a request through `POST /v1/requests` drops it. 404 when Seerr does not know the title (or the path is not `<movie\|tv>/<number>`), 400 for another type. Request chosen seasons with `POST /v1/requests` and `"seasons"`. |
 | GET | `/v1/discover/image` | signed in | `?p=/<size>/<file>`: one TMDB artwork file through this server (for clients whose page may load images only from its own origin, the web app). `size` is one of `w92 w154 w185 w300 w342 w500 w780 w1280 original`; `file` is 1–100 letters, digits, `_` or `-` with `.jpg`, `.jpeg`, `.png` or `.webp` (exactly TMDB's `/t/p/<size>/<file>`; anything else is 400). Fetched only from `https://image.tmdb.org/t/p/`, at most 5 MB (413), served only when the bytes are a JPEG / PNG / GIF / WebP / AVIF (415 otherwise; never the upstream Content-Type), with `Cache-Control: private, max-age=604800` and a sandbox CSP. Kept in the server's image cache (`imgcache/`, shared with `/img`, 300 MB cap, oldest dropped). 404 when TMDB has no such file. Works whether or not Seerr is set up. This is the one other `/v1` answer that is not JSON. |
 | GET | `/v1/requests` | signed in | → `{"requests": [Request], "linked"}`: your own requests (the newest 50). Owners and admins may pass `all=1` for everyone's; then `requestedBy.accountId` names the Orbit account where one is linked. |
 | POST | `/v1/requests` | signed in, linked | `{"type": "movie"\|"tv", "tmdb", "seasons"?: [n]}` → 201 `{"created": true, "request": Request, "title": Title}`, or 200 `{"created": false, "title": Title}` when it is already available, being processed or requested (nothing new is sent to Seerr). For shows without `seasons`, every season that is neither available nor requested is asked for. 409 for an account without a linked Seerr user ("ask the owner to link your Seerr user"); 403 with Seerr's message when Seerr refuses (permissions, quota); 503 while Seerr cannot be reached. |
@@ -370,6 +373,16 @@ Objects:
   "status": "available"|"partial"|"processing"|"pending"|"requestable", "requestStatus"?: "pending"|"approved"|"declined"|"failed"|"completed", "download"?: Download, "play"?: Item, "seasons"?: [{"season", "episodes", "name", "status"}]}`.
   `status` comes from Seerr's media status (5 available, 4 partially available, 3 processing, 2 pending; anything
   else is requestable). `requestStatus` is the newest request's state. Specials (season 0) are left out.
+- `TitlePage`: a `Title` (with `seasons` for shows, each with its own `status`) plus `"genres": [name]`,
+  `"tagline"`, `"date"` (`"YYYY-MM-DD"` release / first air date, or null), `"runtime"` (minutes, a show's episode
+  length; or null), `"cast": [{"id", "name", "character", "photo"}]` (Seerr's order, the first 20; `photo` a TMDB
+  `w185` URL or null), `"trailer": {"name", "url"}|null` (the first YouTube trailer, else teaser; the URL is always
+  `https://www.youtube.com/watch?v=<key>`, built by the server from the video key), `"requests": [{"id", "status",
+  "created", "by", "seasons"}]` (every request on the title, newest first; `by` is the Seerr user's display name,
+  `created` an ISO time) and `"seerrUrl"` (the title on the household's Seerr, `<Seerr address>/<movie|tv>/<tmdb>`,
+  for "Open in Seerr"). Shows also get `"seasonCount"`, `"episodeCount"`, `"networks": [name]` and `"showStatus"`
+  (TMDB's, e.g. "Returning Series").
+- `Person`: `{"id", "name", "photo", "knownFor": [Title]}` (a person in the search results; `knownFor` up to 10).
 - `Request`: `{"id", "type", "tmdb", "status", "mediaStatus", "created", "seasons"? , "download"?: Download, "requestedBy": {"seerrUserId", "name", "accountId"?}, "title": Title|null}`.
   The request's `title` carries the request's own `download` and `mediaStatus` (the list is fetched fresh on every
   call; the title may come from the cache).
@@ -394,7 +407,7 @@ How it works:
   on "local network sources" (`net.set_private_hosts`). Loopback and link-local stay refused. While
   `POST /v1/discover/settings` tests a new address, that address is allowed only for the test's own calls (that
   request's thread, `net.private_host_here`); the household-wide allowlist changes only once the address is saved.
-- **Cache:** rows 10 minutes, titles 1 hour, searches 10 minutes, at most 256 answers. `GET /v1/requests` looks up
+- **Cache:** rows 10 minutes (each page), titles 1 hour, title pages 1 minute, searches 10 minutes (each page), at most 256 answers. `GET /v1/requests` looks up
   each distinct title once (cached ones not at all), at most 4 at a time; a title Seerr does not know (404) is
   not asked for again for 10 minutes and shows as `"title": null`. When Seerr cannot be reached
   (or answers 5xx), the last answer is served with `"stale": true`; with nothing cached the call answers 503. After
@@ -408,6 +421,10 @@ How it works:
   straight from TMDB's public image CDN (no key, but TMDB sees the client's address and which artwork it loads), or
   through `GET /v1/discover/image?p=/<size>/<file>` (the part after `/t/p`), which the web app does: its CSP allows
   only images from its own origin. Then only the server talks to TMDB.
+  Note: the home server's JSON envelope (`sign_images` in `tvbro_server/app.py`) rewrites every `poster` / `backdrop`
+  URL in any answer, `/v1` included, into a signed `/img?u=<url>&s=<signature>` URL, so clients actually receive
+  `/img?u=https%3A%2F%2Fimage.tmdb.org%2F...` for Discover titles. The web app takes the TMDB URL back out and loads it
+  through `/v1/discover/image`; cast and people `photo` URLs are not rewritten.
 
 ## Catalogue: Home, Movies and Shows (Phase 5)
 

@@ -6,7 +6,7 @@ Routes are mounted into the /v1 route table by the app (``Api.routes.update(disc
 same session, Host, Origin and CSRF checks as every other /v1 call.
 
 - Discovery (rows, search, title) works for every signed-in account and is fetched with the admin key; answers are
-  cached (rows 10 minutes, titles 1 hour, bounded). When Seerr cannot be reached, the last answer is served with
+  cached (rows and searches 10 minutes per page, titles 1 hour, title pages 1 minute, bounded). When Seerr cannot be reached, the last answer is served with
   ``"stale": true``; requests then answer 503.
 - Requests are made *as the account's Seerr user* (``X-Api-User``), so Seerr's own permissions, auto-approval and
   quotas apply. An account without a linked Seerr user can browse but not request (409).
@@ -29,8 +29,10 @@ LOG = logging.getLogger("orbit.discover")
 
 ROWS_TTL = 600
 TITLE_TTL = 3600
+DETAIL_TTL = 60            # the title page (requests and download progress change while someone looks at it)
 SEARCH_TTL = 600
 STATUS_TTL = 30
+MAX_PAGE = 500             # TMDB (and so Seerr) pages discover lists and searches up to page 500
 DOWN_BACKOFF = 15          # after Seerr failed to answer, do not try again for this long (answers stay fast)
 ROWS = (("trending", "Trending", "/discover/trending", None),
         ("movies", "Popular movies", "/discover/movies", "movie"),
@@ -123,6 +125,13 @@ class Discover:
             ("POST", "/v1/discover/map"): self._map,
             ("GET", "/v1/discover/users"): self._users,
             ("GET", "/v1/discover/image"): self._image,
+        }
+
+    def prefix_routes(self) -> dict:
+        """Routes with ids in the path (Api.prefix_routes): one row's further pages and the title page."""
+        return {
+            ("GET", "/v1/discover/rows/"): self._row,
+            ("GET", "/v1/discover/title/"): self._title_page,
         }
 
     def _image(self, c: Call) -> Reply:
@@ -224,14 +233,47 @@ class Discover:
             return ApiError(404, "Seerr does not know this title")
         return ApiError(e.code if e.code in (400, 403, 409) else 502, f"Seerr: {e.msg}")
 
-    def _results(self, client: S.SeerrClient, path: str, kind: Optional[str], params: Optional[dict] = None) -> list:
-        data = client.get(path, {"page": 1, **(params or {})})
-        out = []
-        for r in (data.get("results") if isinstance(data, dict) else None) or []:
+    def _results(self, client: S.SeerrClient, path: str, kind: Optional[str], params: Optional[dict] = None,
+                 page: int = 1, people: bool = False) -> dict:
+        """One page of a Seerr list -> {"items": [Title], "pages", "total"} (+ "people" when asked)."""
+        data = client.get(path, {"page": page, **(params or {})})
+        data = data if isinstance(data, dict) else {}
+        out, folks = [], []
+        for r in data.get("results") or []:
             t = S.normalize(r, kind)
             if t is not None:
                 out.append(t)
-        return out
+            elif people:
+                p = S.normalize_person(r)
+                if p is not None:
+                    folks.append(p)
+        pages = S._int(data.get("totalPages"))
+        pages = max(page if out else 0, min(MAX_PAGE, pages)) if pages is not None else page
+        res = {"items": out, "pages": pages, "total": S._int(data.get("totalResults")) or None}
+        if people:
+            res["people"] = folks
+        return res
+
+    @staticmethod
+    def _page(c: Call) -> int:
+        v = c.query.get("page", "1") or "1"
+        if not (isinstance(v, str) and v.isdigit() and 1 <= int(v) <= MAX_PAGE):
+            raise ApiError(400, f"page: 1 to {MAX_PAGE}")
+        return int(v)
+
+    def _row_spec(self, rid: str) -> Optional[tuple]:
+        """(title, [(Seerr path, kind)]) of a row id."""
+        for r, title, path, kind in ROWS:
+            if r == rid:
+                return title, [(path, kind)]
+        return ("Coming soon", list(UPCOMING)) if rid == "upcoming" else None
+
+    def _row_page(self, cl, parts: list, page: int) -> dict:
+        lists = [self._results(cl, p, k, page=page) for p, k in parts]
+        merged = []
+        for i in range(max((len(x["items"]) for x in lists), default=0)):     # interleave movies and TV
+            merged.extend(x["items"][i] for x in lists if i < len(x["items"]))
+        return {"items": merged, "pages": max((x["pages"] for x in lists), default=page)}
 
     # ---- discovery (any signed-in account) ----
     def _status(self, c: Call) -> Reply:
@@ -263,44 +305,61 @@ class Discover:
         specs = [(rid, title, [(path, kind)]) for rid, title, path, kind in ROWS]
         specs.append(("upcoming", "Coming soon", list(UPCOMING)))
         for rid, title, parts in specs:
-            def fetch(parts=parts):
-                lists = [self._results(cl, p, k) for p, k in parts]
-                merged = []
-                for i in range(max((len(x) for x in lists), default=0)):     # interleave movies and TV
-                    merged.extend(x[i] for x in lists if i < len(x))
-                return merged
             try:
-                items, st = self._cached(("rows", rid), ROWS_TTL, fetch)
+                got, st = self._cached(("rows", rid, 1), ROWS_TTL, lambda parts=parts: self._row_page(cl, parts, 1))
+                items, pages = got["items"], got["pages"]
             except S.SeerrDown:
-                items, st, failed = [], True, failed + 1
+                items, pages, st, failed = [], 0, True, failed + 1
             except S.SeerrError as e:
                 if e.code in (401, 403):                    # discovery uses the admin key
                     raise ApiError(502, "Seerr refused the server's API key")
                 if e.code == 0:
                     raise self._seerr_error(e)
                 LOG.warning("Seerr row %s: %s", rid, e.code)  # e.g. an older Seerr without this list
-                items, st = [], False
+                items, pages, st = [], 0, False
             stale = stale or st
-            rows.append({"id": rid, "title": title, "items": [self._merge(t, find) for t in items]})
+            rows.append({"id": rid, "title": title, "items": [self._merge(t, find) for t in items],
+                         "page": 1, "pages": pages})
         if failed == len(specs):
             raise ApiError(503, "Seerr cannot be reached right now")
         return Reply({"rows": rows, "stale": stale})
+
+    def _row(self, c: Call) -> Reply:
+        """GET /v1/discover/rows/<id>?page=N: a further page of one row (clients load it near the row's end)."""
+        rid = c.path[len("/v1/discover/rows/"):]
+        spec = self._row_spec(rid)
+        if spec is None:
+            raise ApiError(404, "no such row")
+        page = self._page(c)
+        cl = self._client()
+        try:
+            got, stale = self._cached(("rows", rid, page), ROWS_TTL, lambda: self._row_page(cl, spec[1], page))
+        except S.SeerrDown as e:
+            raise self._down(e)
+        except S.SeerrError as e:
+            raise self._seerr_error(e)
+        find = self._finder(c)
+        return Reply({"id": rid, "title": spec[0], "items": [self._merge(t, find) for t in got["items"]],
+                      "page": page, "pages": got["pages"], "stale": stale})
 
     def _search(self, c: Call) -> Reply:
         q = self._query(c).get("q", "")
         q = q.strip() if isinstance(q, str) else ""
         if not 1 <= len(q) <= 100 or any(ord(ch) < 32 for ch in q):
             raise ApiError(400, "q: 1 to 100 characters")
+        page = self._page(c)
         cl = self._client()
         try:
-            items, stale = self._cached(("search", q.lower()), SEARCH_TTL,
-                                        lambda: self._results(cl, "/search", None, {"query": q}))
+            got, stale = self._cached(("search", q.lower(), page), SEARCH_TTL,
+                                      lambda: self._results(cl, "/search", None, {"query": q}, page=page, people=True))
         except S.SeerrDown as e:
             raise self._down(e)
         except S.SeerrError as e:
             raise self._seerr_error(e)
         find = self._finder(c)
-        return Reply({"results": [self._merge(t, find) for t in items], "stale": stale})
+        people = [{**p, "knownFor": [self._merge(t, find) for t in p["knownFor"]]} for p in got.get("people") or []]
+        return Reply({"results": [self._merge(t, find) for t in got["items"]], "people": people,
+                      "page": page, "pages": got["pages"], "total": got["total"], "stale": stale})
 
     @staticmethod
     def _kind_tmdb(kind, tmdb) -> tuple:
@@ -364,6 +423,32 @@ class Discover:
         except S.SeerrError as e:
             raise self._seerr_error(e)
         return Reply({**self._merge(t, self._finder(c)), "stale": stale})
+
+    def _seerr_link(self, kind: str, tmdb: int) -> Optional[str]:
+        base = self.cfg.get().get("baseUrl") or ""
+        return f"{base}/{kind}/{tmdb}" if base else None
+
+    def _title_page(self, c: Call) -> Reply:
+        """GET /v1/discover/title/<movie|tv>/<tmdb>: everything a title page shows (details, cast, trailer, seasons
+        with their status, the requests on it, download progress), cached DETAIL_TTL."""
+        parts = c.path[len("/v1/discover/title/"):].split("/")
+        if len(parts) != 2 or not parts[1].isdigit():
+            raise ApiError(404, "use /v1/discover/title/<movie|tv>/<tmdb id>")
+        kind, tmdb = self._kind_tmdb(parts[0], parts[1])
+        cl = self._client()
+
+        def fetch():
+            t = S.normalize_details(cl.get(f"/{kind}/{tmdb}"), kind)
+            if t is None:
+                raise S.SeerrError(404, "not found")
+            return t
+        try:
+            t, stale = self._cached(("detail", kind, tmdb), DETAIL_TTL, fetch)
+        except S.SeerrDown as e:
+            raise self._down(e)
+        except S.SeerrError as e:
+            raise self._seerr_error(e)
+        return Reply({**self._merge(t, self._finder(c)), "seerrUrl": self._seerr_link(kind, tmdb), "stale": stale})
 
     # ---- requests ----
     def _requests(self, c: Call) -> Reply:
@@ -451,7 +536,8 @@ class Discover:
             if e.code == 409:                                # Seerr's own duplicate check
                 return Reply({"created": False, "title": self._merge(cur, self._finder(c))})
             raise self._seerr_error(e)
-        self.cache.drop(lambda k: k in (("title", kind, tmdb), ("missing", kind, tmdb)) or k[0] == "rows")
+        self.cache.drop(lambda k: k in (("title", kind, tmdb), ("missing", kind, tmdb), ("detail", kind, tmdb))
+                        or k[0] in ("rows", "search"))
         try:
             cur = self._fetch_title(cl, kind, tmdb)
             self.cache.put(("title", kind, tmdb), cur)
