@@ -24,7 +24,7 @@ data class Drive(val path: String, val label: String, val removable: Boolean, va
 object Drives {
     /**
      * Windows: every drive letter except the system drive, removable ones first (JNA GetDriveType).
-     * Linux / Pi: mounts under /media/<user>, /media and /mnt (where the desktop mounts USB drives).
+     * Linux / Pi: mounts under /media/<user>, /media and /mnt (where the desktop mounts USB drives). macOS: /Volumes.
      */
     fun list(): List<Drive> = try {
         if (Platform.windows) {
@@ -35,6 +35,10 @@ object Drives {
                 val name = try { javax.swing.filechooser.FileSystemView.getFileSystemView().getSystemDisplayName(r) } catch (e: Throwable) { "" }
                 Drive(r.path, name.ifBlank { r.path } + if (removable) " (removable)" else "", removable, r.usableSpace / (1024 * 1024))
             }.sortedBy { !it.removable }
+        } else if (Platform.mac) {
+            // macOS mounts every volume under /Volumes; the start-up disk is there too, as a link to /
+            File("/Volumes").listFiles()?.filter { it.isDirectory && it.totalSpace > 0 && it.canonicalPath != "/" && !it.name.startsWith(".") }.orEmpty()
+                .map { Drive(it.path, it.name, true, it.usableSpace / (1024 * 1024)) }
         } else {
             val user = System.getProperty("user.name")
             listOf(File("/media/$user"), File("/media"), File("/mnt")).flatMap { d -> d.listFiles()?.filter { it.isDirectory && it.totalSpace > 0 && it.name != user }.orEmpty() }
