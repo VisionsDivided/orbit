@@ -751,3 +751,14 @@ class Server(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlexUnreachableMessage(unittest.TestCase):
+    def test_lists_what_was_tried_and_hints_at_a_firewall(self):
+        from orbit.connectors.plex import Plex
+        m = Plex.unreachable_message(1, [("http://192.0.2.5:32400", "the server did not answer"),
+                                         ("https://192-0-2-5.abc.plex.direct:32400", "the server did not answer")])
+        self.assertIn("192.0.2.5:32400 (the server did not answer)", m)
+        self.assertIn("firewall", m)
+        self.assertIn("no servers", Plex.unreachable_message(0, []))
+        self.assertIn("relays", Plex.unreachable_message(1, []))

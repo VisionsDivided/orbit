@@ -62,16 +62,16 @@ class Plex(Connector):
         res = http.json("GET", PLEX_TV + "/api/v2/resources?" + urllib.parse.urlencode(
             {"includeHttps": 1, "includeRelay": 0}), client_headers(device_id, token)) or []
         servers = [r for r in res if isinstance(r, dict) and "server" in str(r.get("provides") or "").split(",")]
-        out = []
+        out, tried = [], []
         for r in servers[:MAX_SERVERS]:
             tok = str(r.get("accessToken") or token)
-            base = cls.pick_connection(http, r.get("connections") or [], tok, device_id, state.get("allow"))
+            base = cls.pick_connection(http, r.get("connections") or [], tok, device_id, state.get("allow"), tried)
             if base:
                 out.append(Linked(base, str(r.get("name") or "Plex")[:100], str(r.get("clientIdentifier") or ""),
                                   str(user.get("id") or user.get("uuid") or ""),
                                   str(user.get("username") or user.get("title") or "")[:100], tok))
         if not out:
-            raise ConnectorError(502, "Plex: none of your Plex servers could be reached from this server")
+            raise ConnectorError(502, cls.unreachable_message(len(servers), tried))
         return out
 
     @staticmethod
@@ -88,18 +88,34 @@ class Plex(Connector):
         return out
 
     @classmethod
-    def pick_connection(cls, http: Http, conns: list, token: str, device_id: str, allow=None) -> Optional[str]:
+    def pick_connection(cls, http: Http, conns: list, token: str, device_id: str, allow=None,
+                        tried: Optional[list] = None) -> Optional[str]:
         """The first candidate whose /identity answers. ``allow(base)`` lets the caller permit a LAN address
-        for this probe (orbit/media.py decides who may)."""
+        for this probe (orbit/media.py decides who may). Failures are added to ``tried`` as (address, reason)."""
         for base in cls.candidates(conns):
             if allow:
                 allow(base)
             try:
                 http.json("GET", base + "/identity", client_headers(device_id, token), timeout=4)
                 return base
-            except ConnectorError:
+            except ConnectorError as e:
+                if tried is not None:
+                    tried.append((base, e.msg.split(": ", 1)[-1]))
                 continue
         return None
+
+    @staticmethod
+    def unreachable_message(servers: int, tried: list) -> str:
+        """Why linking failed, with the addresses tried (the owner sees this, to fix a firewall or route)."""
+        if not servers:
+            return "Plex: this Plex account has no servers"
+        if not tried:
+            return "Plex: plex.tv lists no direct address for your Plex server (only relays, which Orbit does not use)"
+        shown = "; ".join(f"{urllib.parse.urlsplit(b).netloc} ({why})" for b, why in tried[:4])
+        more = f" and {len(tried) - 4} more" if len(tried) > 4 else ""
+        hint = (" If Plex runs on the same machine as Orbit, that machine's firewall may block the Orbit container"
+                " from reaching it.") if any("did not answer" in why for _, why in tried) else ""
+        return f"Plex: none of your Plex servers could be reached from this server. Tried {shown}{more}.{hint}"
 
     # ---- helpers ----
     def auth_headers(self) -> dict:
