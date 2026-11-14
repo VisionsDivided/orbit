@@ -88,6 +88,17 @@ class Unit(unittest.TestCase):
             self.pr.approve(self.alex, p["code"], "ffffffffffffffff", "192.0.2.9")
         self.assertEqual(e.exception.code, 404, "not your profile")
 
+    def test_tv_sessions_and_playlists(self):
+        from orbit.api import Api, Call
+        p = self.pr.start("TV", "192.0.2.5")
+        self.pr.approve(self.alex, p["code"], None, "192.0.2.9")
+        tv = self.acc.gate(self.auth.session(self.pr.poll(p["pairId"])["session"]))
+        self.assertEqual((tv["session_kind"], self.alex["session_kind"]), ("tv", "web"))
+        pl = [{"id": "p0", "name": "Main", "kind": "xtream", "server": "http://tv.example.com", "user": "u", "pass": "x"}]
+        api = Api(self.acc, self.pr, playlists=lambda: pl)
+        self.assertEqual(api.handle(Call("GET", "/v1/device/playlists", tv)).obj, {"playlists": pl})
+        self.assertEqual(api.handle(Call("GET", "/v1/device/playlists", self.alex)).code, 403)
+
     def test_limits(self):
         for _ in range(PA.MAX_PER_CLIENT):
             self.pr.start("TV", "192.0.2.5")
@@ -176,6 +187,12 @@ class Server(unittest.TestCase):
         self.assertEqual(self.req("POST", "/api/state/mylist", {"key": "p0|ch9", "value": {"key": "p0|ch9", "kind": "live"}},
                                   auth(tvs))[0], 200)
         self.assertEqual([x["key"] for x in self.req("GET", "/api/state", headers=auth(tvs))[2]["mylist"]], ["p0|ch9"])
+
+        # only the linked TV may fetch the playlists (logins for direct playback); a browser may not
+        code, _, pl = self.req("GET", "/v1/device/playlists", headers=auth(tvs))
+        self.assertEqual((code, pl), (200, {"playlists": []}))
+        self.assertEqual(self.req("GET", "/v1/device/playlists", headers=auth(alex))[0], 403)
+        self.assertEqual(self.req("GET", "/v1/device/playlists")[0], 401)
 
         # and it can be signed out from Alex's devices list
         dev = next(s for s in self.req("GET", "/v1/sessions", headers=auth(alex))[2]["sessions"] if s["device"] == "Living room TV")

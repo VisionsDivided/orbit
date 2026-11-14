@@ -36,9 +36,11 @@ class Reply:
 
 
 class Api:
-    def __init__(self, accounts: Accounts, pairings: Optional[Pairings] = None):
+    def __init__(self, accounts: Accounts, pairings: Optional[Pairings] = None,
+                 playlists: Optional[Callable[[], list]] = None):
         self.acc = accounts
         self.pair = pairings or Pairings(accounts)
+        self.playlists = playlists or (lambda: [])      # the household's enabled playlists, with their logins
         A, PR = self.acc, self.pair
         r: dict[tuple[str, str], Callable[[Call], Reply]] = {
             ("GET", "/v1/status"): lambda c: Reply({"accounts": A.enabled(), "setup": not A.enabled()}),
@@ -58,6 +60,7 @@ class Api:
                 c.sess, c.body.get("username"), c.body.get("password"), c.body.get("displayName"), c.body.get("role"))),
             ("POST", "/v1/accounts/disable"): lambda c: Reply(A.set_disabled(c.sess, c.body.get("id"),
                                                                             c.body.get("disabled"))),
+            ("GET", "/v1/device/playlists"): self._device_playlists,
             ("POST", "/v1/pair/start"): lambda c: Reply(PR.start(c.body.get("device"), c.client)),
             ("POST", "/v1/pair/poll"): lambda c: Reply(PR.poll(c.body.get("pairId"))),
             ("POST", "/v1/pair/approve"): lambda c: Reply(PR.approve(c.sess, c.body.get("code"), c.body.get("profileId"),
@@ -103,6 +106,12 @@ class Api:
     def _delete_profile(self, c: Call) -> Reply:
         self.acc.delete_profile(c.sess["account_id"], c.body.get("id"))
         return Reply({"ok": True})
+
+    def _device_playlists(self, c: Call) -> Reply:
+        """Linked TVs only (never a browser): the playlists to play directly from the provider."""
+        if c.sess.get("session_kind") != "tv":
+            return Reply({"error": "only a linked TV can fetch the playlists"}, 403)
+        return Reply({"playlists": self.playlists()})
 
     def _revoke(self, c: Call) -> Reply:
         self.acc.revoke(c.sess, c.body.get("id"))

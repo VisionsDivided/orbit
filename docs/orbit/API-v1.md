@@ -63,6 +63,17 @@ link again.
 The server checks the `Host` header, so the address the TV uses (for example `192.0.2.10:8750`) must be listed in
 `TVBRO_ALLOWED_HOSTS`.
 
+## Playlists for linked TVs (step 7)
+
+| Method | Path | Who | Body → Answer |
+|---|---|---|---|
+| GET | `/v1/device/playlists` | a **linked TV** session only (403 for browser sign-ins) | → `{"playlists": [{"id", "name", "kind": "xtream"\|"m3u", "server", "user", "pass", "url", "epgUrl"}]}`: the household's enabled playlists with their logins, so the TV plays directly from the provider. Ids are the server's (`p0`, `p1` …), so channel and VOD keys are the same on every device. |
+
+Sessions have a kind (`orbit.db` migration 002): `web` for a browser sign-in, `tv` for a device linked with a pairing
+code. The TV keeps the playlists encrypted and removes them again when it is unlinked or signed out. It syncs My list
+(three-way merge, so offline changes on either side survive) and film resume points (newest wins) through the
+existing `/api/state` routes of its profile, every minute and shortly after a change.
+
 ## What belongs to a profile (step 4)
 In Orbit mode these existing `/api` routes read and write the **signed-in session's profile** instead of the
 household: `GET /api/state`, `POST /api/state/<scope>` (My list, which also holds favourite channels; resume

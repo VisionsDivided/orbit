@@ -132,16 +132,18 @@ class Accounts:
         self._prune()
         return self._issue(self._account(row), device)
 
-    def _issue(self, acc: dict, device: str, profile_id: Optional[str] = None) -> str:
-        """A new account session (profile_id: one of the account's profiles, else its first)."""
+    def _issue(self, acc: dict, device: str, profile_id: Optional[str] = None, kind: str = "web") -> str:
+        """A new account session (profile_id: one of the account's profiles, else its first;
+        kind: 'web' for a browser sign-in, 'tv' for a device linked with a pairing code)."""
         sid = self.auth.issue_session(SESSION_ROLE[acc["role"]])
         h = self.auth._h(sid)
         first = (profile_id,) if profile_id else \
             self.db.one("SELECT id FROM profiles WHERE account_id=? ORDER BY created, id LIMIT 1", (acc["id"],))
         now = int(self.clock())
         dev = device.strip()[:60] if isinstance(device, str) else ""
-        self.db.run("INSERT INTO account_sessions(sess_hash, id, account_id, profile_id, device, created, last_seen) "
-                    "VALUES (?,?,?,?,?,?,?)", (h, _new_id(), acc["id"], first[0] if first else None, dev, now, now))
+        self.db.run("INSERT INTO account_sessions(sess_hash, id, account_id, profile_id, device, created, last_seen, kind) "
+                    "VALUES (?,?,?,?,?,?,?,?)", (h, _new_id(), acc["id"], first[0] if first else None, dev, now, now,
+                                                 "tv" if kind == "tv" else "web"))
         return sid
 
     def logout(self, sess: dict):
@@ -161,7 +163,7 @@ class Accounts:
         ``profile_id`` and ``account_role`` added, or None when it belongs to no (enabled) account."""
         if not self._enabled or not sess:
             return sess
-        row = self.db.one("SELECT s.account_id, s.profile_id, s.last_seen, a.role, a.disabled FROM account_sessions s "
+        row = self.db.one("SELECT s.account_id, s.profile_id, s.last_seen, a.role, a.disabled, s.kind FROM account_sessions s "
                           "JOIN accounts a ON a.id = s.account_id WHERE s.sess_hash=?", (sess["h"],))
         if row is None:
             return None
@@ -176,7 +178,7 @@ class Accounts:
             self.db.run("UPDATE account_sessions SET profile_id=? WHERE sess_hash=?", (pid, sess["h"]))
         if now - row[2] > SEEN_EVERY:
             self.db.run("UPDATE account_sessions SET last_seen=? WHERE sess_hash=?", (now, sess["h"]))
-        return {**sess, "account_id": row[0], "profile_id": pid, "account_role": row[3]}
+        return {**sess, "account_id": row[0], "profile_id": pid, "account_role": row[3], "session_kind": row[5]}
 
     # ---- me ----
     def _account(self, row) -> dict:

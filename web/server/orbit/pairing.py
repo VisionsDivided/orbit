@@ -110,6 +110,6 @@ class Pairings:
                 raise ApiError(404, "no TV is waiting with that code (it may have expired)")
             self.throttle.ok(client)
             acc = self.acc.account(sess["account_id"])
-            hit["sid"] = self.acc._issue(acc, hit["device"], pid)
+            hit["sid"] = self.acc._issue(acc, hit["device"], pid, kind="tv")
             device = hit["device"]
         return {"ok": True, "device": device}

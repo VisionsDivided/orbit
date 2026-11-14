@@ -68,6 +68,18 @@ class Migrations(unittest.TestCase):
         with self.assertRaises(ODB.TooNew):
             ODB.Database(os.path.join(d, "o.db"), self.folder({"001_a.sql": "SELECT 1;"}))
 
+    def test_upgrading_from_the_first_version(self):
+        d = tempfile.mkdtemp()
+        only1 = self.folder({"001_accounts.sql": open(os.path.join(ODB.MIGRATIONS, "001_accounts.sql"), encoding="utf-8").read()})
+        old = ODB.Database(os.path.join(d, "orbit.db"), only1)
+        old.run("INSERT INTO accounts VALUES ('a1','alex','alex','Alex','owner','h',0,1)")
+        old.run("INSERT INTO account_sessions(sess_hash, id, account_id, device, created, last_seen) VALUES ('h1','s1','a1','',1,1)")
+        old.close()
+        new = ODB.Database(os.path.join(d, "orbit.db"))
+        self.assertEqual(new.version(), len(ODB.migrations()))
+        self.assertEqual(new.one("SELECT kind FROM account_sessions WHERE id='s1'")[0], "web", "old sessions count as browsers")
+        self.assertTrue(os.path.exists(os.path.join(d, "orbit.db.bak-v1")))
+
     def test_the_real_migrations_apply(self):
         db = ODB.Database(os.path.join(tempfile.mkdtemp(), "orbit.db"))
         names = {r[0] for r in db.q("SELECT name FROM sqlite_master WHERE type='table'")}

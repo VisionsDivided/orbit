@@ -1005,7 +1005,7 @@ class App:
         self.sign_key = self._load_sign_key()
         self.auth = AUTH.Auth(DATA_DIR, self.sign_key)
         self.orbit = OrbitAccounts(DATA_DIR, self.auth)        # Orbit: accounts gate every session
-        self.v1 = V1.Api(self.orbit)
+        self.v1 = V1.Api(self.orbit, playlists=self._device_playlists)
         # Orbit: My list, favourites, resume, show progress per profile (household state.db in tvBro mode)
         self.profiles = ProfileStores(DATA_DIR, self.state, self.series, self._series_eps, self.orbit.enabled)
         self.orbit.on_setup = self.profiles.adopt_household
@@ -1023,6 +1023,16 @@ class App:
         if not ch:
             return []
         return [(p.start, p.stop, p.title) for p in self.sources.programmes(ch, frm, to)]
+
+    def _device_playlists(self) -> list[dict]:
+        """Orbit: the enabled playlists with their logins, for a linked TV (orbit/api.py checks that)."""
+        out = []
+        for prov in self.sources.enabled():
+            p = prov.store.get_provider() or {}
+            out.append({"id": prov.sid, "name": prov.name, "kind": p.get("kind") or "",
+                        "server": p.get("server") or "", "user": p.get("user") or "", "pass": p.get("pass") or "",
+                        "url": p.get("url") or "", "epgUrl": p.get("epgUrl") or ""})
+        return out
 
     def _series_eps(self, vid: str):
         """(name, cover, [episode dicts]) of a series for the Shows progress store."""
