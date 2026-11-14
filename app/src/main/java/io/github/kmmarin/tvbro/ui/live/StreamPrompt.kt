@@ -11,6 +11,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -42,6 +46,43 @@ fun streamPromptTitle(max: Int): String = when {
 /** The explanation under the title. */
 fun streamPromptText(max: Int, want: String): String =
     "Your provider allows $max at a time. Choose which one to stop" + (if (want.isNotBlank()) " to watch ${want.trim()} here." else " to watch here.")
+
+/**
+ * The stream-limit prompt on a phone (spec section 13): a bottom sheet with the same content as the TV dialog, one row
+ * and "Stop X and watch" per stream (recordings keep going), then Cancel across the width. Nothing is picked for the
+ * viewer; a tap outside the sheet is Cancel.
+ */
+@Composable
+fun PhoneStreamSheet(
+    max: Int, want: String, rows: List<StreamChoice.Row>, oldestOnly: Boolean, onStop: (String) -> Unit, onCancel: () -> Unit,
+) {
+    io.github.kmmarin.tvbro.ui.orbit5.PhoneSheet(onCancel, Modifier.testTag("phone-stream-sheet")) {
+        Text(streamPromptTitle(max), color = O5.Text, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
+        Text(streamPromptText(max, want), color = O5.Muted, fontSize = 12.5.sp, lineHeight = 17.5.sp, modifier = Modifier.padding(top = 4.dp))
+        for (r in rows) {
+            Column(
+                Modifier.padding(top = 9.dp).fillMaxWidth().background(LiveStyle.StreamRow, RoundedCornerShape(12.dp)).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ChannelTile(null, r.what.substringBefore(" · ").ifBlank { r.name }, 34.dp)
+                    Column(Modifier.weight(1f)) {
+                        Text(r.name, color = O5.Text, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(r.what.ifEmpty { "Watching" }, color = O5.Muted, fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val since = if (r.recording) "Recording · keeps going" else if (r.since > 0) "Watching since ${hhmm(r.since)}" else null
+                        since?.let { Text(it, color = O5.Muted, fontSize = 11.sp, maxLines = 1) }
+                    }
+                }
+                if (r.stoppable) io.github.kmmarin.tvbro.ui.orbit5.PhoneButton(r.button, Modifier.fillMaxWidth().testTag("phone-stop-${r.id}")) { onStop(r.id) }
+            }
+        }
+        if (oldestOnly) io.github.kmmarin.tvbro.ui.orbit5.PhoneButton("Stop the oldest and watch here", Modifier.padding(top = 10.dp).fillMaxWidth()) { onStop("") }
+        Box(
+            Modifier.padding(top = 10.dp).fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onCancel).testTag("phone-stream-cancel"),
+            contentAlignment = Alignment.Center,
+        ) { Text("Cancel", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+    }
+}
 
 /** A secondary dialog button (16 % white, radius 12, bold) with the direction-5 focus. */
 @Composable

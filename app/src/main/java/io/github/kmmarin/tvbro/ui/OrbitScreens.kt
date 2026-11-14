@@ -221,6 +221,12 @@ fun OrbitStreamPrompt(m: AppModel) {
     LaunchedEffect(a) { repeat(6) { delay(80); if (cancel.request()) return@LaunchedEffect } }
     // a server from before stream ids: it can only stop the oldest viewer
     val oldestOnly = a.streams.none { it.stoppable } && a.streams.any { !it.recording }
+    // a phone: the same choices as a bottom sheet (spec section 13)
+    if (io.github.kmmarin.tvbro.ui.shell.rememberIsPhone()) {
+        io.github.kmmarin.tvbro.ui.live.PhoneStreamSheet(a.max, a.want, a.streams, oldestOnly,
+            onStop = { id -> m.orbit.answerStreamAsk(id) }, onCancel = { m.orbit.answerStreamAsk(null) })
+        return
+    }
     io.github.kmmarin.tvbro.ui.orbit5.OrbitCanvas {
         Box(Modifier.fillMaxSize().background(Color(0x66000000))) {
             io.github.kmmarin.tvbro.ui.live.StreamPromptCard(

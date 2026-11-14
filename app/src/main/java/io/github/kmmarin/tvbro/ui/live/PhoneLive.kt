@@ -232,13 +232,20 @@ fun PhoneChannelList(
     LazyColumn(Modifier.fillMaxSize().testTag("phone-channels"), state = state, contentPadding = PaddingValues(bottom = bottom + 12.dp)) {
         items(channels.size) { i ->
             val ch = channels[i]
-            val progs = programmes(ch)
+            PhoneChannelRow(ch, programmes(ch), now, marks(ch), { onLong(ch) }) { onTap(ch) }
+        }
+    }
+}
+
+/** One row of the phone channel list (also the player's channel list). */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun PhoneChannelRow(ch: Channel, progs: Array<Programme>, now: Long, mk: RowMarks, onLong: () -> Unit, onTap: () -> Unit) {
             val cur = progs.firstOrNull { it.start <= now && it.stop > now }
             val next = progs.firstOrNull { it.start >= (cur?.stop ?: now) }
-            val mk = marks(ch)
             Row(
                 Modifier.fillMaxWidth().heightIn(min = 64.dp).background(if (mk.playing) Color(0x0FFFFFFF) else Color.Transparent)
-                    .combinedClickable(onLongClick = { onLong(ch) }) { onTap(ch) }
+                    .combinedClickable(onLongClick = onLong, onClick = onTap)
                     .drawBehind { drawLine(O5.Line, Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx()) }
                     .padding(horizontal = 14.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -262,8 +269,6 @@ fun PhoneChannelList(
                     }
                 }
             }
-        }
-    }
 }
 
 /**
