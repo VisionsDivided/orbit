@@ -45,6 +45,7 @@ ENV TVBRO_DATA=/data \
     TVBRO_BIND=127.0.0.1 \
     TVBRO_PORT=8750 \
     TVBRO_KEY_FILE=/run/secrets/orbit_key \
+    OPENSSL_CONF=/etc/ssl/orbit-openssl.cnf \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     ORBIT_VERSION=${ORBIT_VERSION}
