@@ -50,7 +50,9 @@ class Plex(Connector):
             raise ConnectorError(502, "Plex: unexpected PIN answer from plex.tv")
         public = {"method": "pin", "code": str(pin["code"]), "linkUrl": LINK_URL,
                   "hint": "Open plex.tv/link, sign in to Plex and enter this code."}
-        return public, {"pin": str(pin["id"])}
+        # an address the owner typed (optional): tried first, for a server plex.tv lists under another address
+        base = normalize_base_url(base_url) if base_url else None
+        return public, {"pin": str(pin["id"]), "base": base}
 
     @classmethod
     def sign_in_poll(cls, http: Http, state: dict, device_id: str) -> Optional[list]:
@@ -63,7 +65,14 @@ class Plex(Connector):
             {"includeHttps": 1, "includeRelay": 0}), client_headers(device_id, token)) or []
         servers = [r for r in res if isinstance(r, dict) and "server" in str(r.get("provides") or "").split(",")]
         out, tried = [], []
+        typed = state.get("base")
+        if typed:
+            ln = cls.link_typed(http, typed, servers, token, device_id, user, state.get("allow"), tried)
+            if ln:
+                out.append(ln)
         for r in servers[:MAX_SERVERS]:
+            if any(o.server_id and o.server_id == str(r.get("clientIdentifier") or "") for o in out):
+                continue
             tok = str(r.get("accessToken") or token)
             base = cls.pick_connection(http, r.get("connections") or [], tok, device_id, state.get("allow"), tried)
             if base:
@@ -103,6 +112,31 @@ class Plex(Connector):
                     tried.append((base, e.msg.split(": ", 1)[-1]))
                 continue
         return None
+
+    @classmethod
+    def link_typed(cls, http: Http, base: str, servers: list, token: str, device_id: str, user: dict, allow,
+                   tried: list) -> Optional[Linked]:
+        """The server at an address the owner typed: its /identity says which of the account's servers it is
+        (so its own access token is used); one plex.tv does not list must accept the account's token."""
+        if allow:
+            allow(base)
+        try:
+            ident = http.json("GET", base + "/identity", client_headers(device_id), timeout=4)
+        except ConnectorError as e:
+            tried.append((base, e.msg.split(": ", 1)[-1]))
+            return None
+        mid = str(((ident or {}).get("MediaContainer") or {}).get("machineIdentifier") or "")
+        match = next((r for r in servers if mid and str(r.get("clientIdentifier") or "") == mid), None)
+        tok = str((match or {}).get("accessToken") or token)
+        try:
+            http.json("GET", base + "/library/sections", client_headers(device_id, tok), timeout=6)
+        except ConnectorError as e:
+            tried.append((base, "this Plex account has no access to that server" if e.relink
+                          else e.msg.split(": ", 1)[-1]))
+            return None
+        name = str((match or {}).get("name") or "Plex")[:100]
+        return Linked(base, name, mid, str(user.get("id") or user.get("uuid") or ""),
+                      str(user.get("username") or user.get("title") or "")[:100], tok)
 
     @staticmethod
     def unreachable_message(servers: int, tried: list) -> str:

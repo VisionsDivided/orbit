@@ -147,6 +147,7 @@ export function sourcesSetupCard() {
   const card = h('section', { class: 'card glass setup5', 'data-cat': 'sources' }, h('div', { class: 'card-h' }, h('h3', {}, 'Media servers')), h('div', { class: 'hint' }, 'Loading…'));
   let conns = null, loadErr = '', pending = null, gen = 0, timer = null, tick = null, busy = false, pwOpen = false, msg = null, alive = true;
   const jfUrl = field('Jellyfin address', 'jf-url', { placeholder: 'http://192.0.2.30:8096' });
+  const plexUrl = field('Plex address (optional)', 'plex-url', { placeholder: 'http://192.0.2.20:32400' });
   const jfUser = field('Jellyfin username', 'jf-user', { max: '100' });
   const jfPass = field('Password', 'jf-pass', { type: 'password', max: '200' });
 
@@ -190,7 +191,8 @@ export function sourcesSetupCard() {
 
   async function startPlex() {
     busy = true; msg = { tone: 'off', text: 'Asking Plex for a code…' }; draw();
-    try { wait(await post('/v1/media/connect/start', { kind: 'plex' })); } catch (e) { msg = { tone: 'warn', text: 'Plex: ' + e.message }; }
+    const baseUrl = withScheme(plexUrl.i.value);
+    try { wait(await post('/v1/media/connect/start', baseUrl ? { kind: 'plex', baseUrl } : { kind: 'plex' })); } catch (e) { msg = { tone: 'warn', text: 'Plex: ' + e.message }; }
     busy = false; draw();
   }
   async function startJellyfin() {
@@ -251,8 +253,13 @@ export function sourcesSetupCard() {
       if (pending) kids.push(codePanel());
       else {
         for (const f of [jfUrl, jfUser, jfPass]) f.i.disabled = busy;
-        kids.push(srow('Plex', 'Sign in with a code at plex.tv/link. Every Plex server of that user this server can reach is linked.',
-          h('button', { class: 'btn5 sec focusable', type: 'button', 'data-k': 'plex-link', disabled: busy, onclick: startPlex }, 'Link Plex')));
+        plexUrl.i.disabled = busy;
+        kids.push(h('div', { class: 'srow5 jf5' },
+          h('div', { class: 'srow-l' }, 'Plex', h('small', {}, 'Sign in with a code at plex.tv/link. Every Plex server of that user this server can reach is linked. If yours is not found, type its address here.')),
+          h('div', { class: 'form5' },
+            h('div', { class: 'fld5-row' }, plexUrl.el),
+            h('div', { class: 'btns5' },
+              h('button', { class: 'btn5 sec focusable', type: 'button', 'data-k': 'plex-link', disabled: busy, onclick: startPlex }, 'Link Plex')))));
         kids.push(h('div', { class: 'srow5 jf5' },
           h('div', { class: 'srow-l' }, 'Jellyfin', h('small', {}, 'Quick Connect: you get a code to enter in Jellyfin. Or sign in once with a password; it is not stored.')),
           h('div', { class: 'form5' },

@@ -762,3 +762,44 @@ class PlexUnreachableMessage(unittest.TestCase):
         self.assertIn("firewall", m)
         self.assertIn("no servers", Plex.unreachable_message(0, []))
         self.assertIn("relays", Plex.unreachable_message(1, []))
+
+
+class PlexTypedAddress(unittest.TestCase):
+    """A Plex server plex.tv lists under other addresses can be linked by the address the owner typed."""
+
+    class FakeHttp:
+        def __init__(self, answers):
+            self.answers, self.calls = answers, []
+
+        def json(self, method, url, headers=None, body=None, **kw):
+            from orbit.connectors.base import ConnectorError
+            self.calls.append((url, (headers or {}).get("X-Plex-Token")))
+            for suffix, ans in self.answers.items():
+                if url.endswith(suffix):
+                    if isinstance(ans, Exception):
+                        raise ans
+                    return ans
+            raise ConnectorError(502, "Plex: the server did not answer")
+
+    def test_matches_the_account_server_and_uses_its_token(self):
+        from orbit.connectors.plex import Plex
+        http = self.FakeHttp({"/identity": {"MediaContainer": {"machineIdentifier": "m1"}}, "/library/sections": {}})
+        servers = [{"clientIdentifier": "m1", "name": "Home", "accessToken": "srv-tok"}]
+        allowed, tried = [], []
+        ln = Plex.link_typed(http, "http://192.0.2.20:32400", servers, "acct-tok", "dev", {"id": 7, "username": "u"},
+                             allowed.append, tried)
+        self.assertEqual((ln.base_url, ln.server_name, ln.server_id, ln.token), ("http://192.0.2.20:32400", "Home", "m1", "srv-tok"))
+        self.assertEqual(allowed, ["http://192.0.2.20:32400"])
+        self.assertEqual(http.calls[-1], ("http://192.0.2.20:32400/library/sections", "srv-tok"))
+
+    def test_unreachable_or_refused_is_reported(self):
+        from orbit.connectors.base import ConnectorError
+        from orbit.connectors.plex import Plex
+        tried = []
+        self.assertIsNone(Plex.link_typed(self.FakeHttp({}), "http://192.0.2.20:32400", [], "t", "d", {}, None, tried))
+        self.assertIn("did not answer", tried[0][1])
+        refused = self.FakeHttp({"/identity": {"MediaContainer": {"machineIdentifier": "zz"}},
+                                 "/library/sections": ConnectorError(409, "Plex: no", relink=True)})
+        tried = []
+        self.assertIsNone(Plex.link_typed(refused, "http://192.0.2.20:32400", [], "t", "d", {}, None, tried))
+        self.assertIn("no access", tried[0][1])

@@ -271,7 +271,7 @@ class MediaServers:
         pid = secrets.token_urlsafe(24)
         entry = {"account": sess["account_id"], "kind": kind, "exp": self.clock() + PENDING_TTL, "hosts": hosts,
                  "device": device, "state": None}
-        if kind == "jellyfin":
+        if kind == "jellyfin" or base_url:     # Plex: an address the owner typed is optional
             try:
                 allow(normalize_base_url(base_url))
             except ConnectorError as e:
