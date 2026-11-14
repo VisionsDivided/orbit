@@ -1,7 +1,7 @@
 # Copyright 2026 The Orbit authors
 # SPDX-License-Identifier: Apache-2.0
 """Overlapping guide entries (providers send them; a guide drew two titles over each other): parsers.
-normalize_programmes and the guide database answering normalised windows. Run: python -m unittest discover -s web/tests"""
+normalize_programmes and the guide database answering normalised windows (the timeline overlay: an inner entry ends, the enclosing one resumes). Run: python -m unittest discover -s web/tests"""
 import os
 import random
 import shutil
