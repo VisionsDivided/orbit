@@ -1,6 +1,6 @@
 # Orbit branding
 
-The Orbit name, logos and app icons in this folder (and the copies derived from them in `web/frontend/img/` and the
+The Orbit name, logos and app icons in this folder (and the copies derived from them in `web/frontend/brand/` and the
 Android `res/` folders) are the Orbit project's own artwork. The Apache-2.0 license of the code does not grant use of
 the Orbit name or logos (Apache-2.0 section 6, trademarks).
 

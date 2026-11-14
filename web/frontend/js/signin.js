@@ -20,7 +20,7 @@ export async function showSignIn() {
   const msg = h('div', { class: 'hint signin-msg', role: 'status' });
   const btn = h('button', { class: 'btn focusable', type: 'submit' }, 'Sign in');
   const form = h('form', { class: 'signin-card glass', autocomplete: 'on' },
-    h('img', { src: 'img/orbit-signin.webp', alt: 'Orbit, your media, in orbit', class: 'signin-logo' }),
+    h('img', { src: 'brand/orbit-signin.webp', alt: 'Orbit, your media, in orbit', class: 'signin-logo' }),
     h('h1', {}, 'Sign in'),
     h('p', { class: 'hint' }, 'This Orbit server asks for a password. Use the admin password, or the viewer password if your household has one.'),
     h('label', {}, 'Password'), pw, msg, btn);
