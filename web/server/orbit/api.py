@@ -86,10 +86,16 @@ class Api:
                 r[key] = lambda c, fn=fn: self._media(fn(c.sess, c.body, c.query))
         self.media = media
         self.routes = r
+        # routes with an id in the path ("/v1/catalog/collections/<id>"): (method, prefix) -> handler, which reads
+        # the rest of ``call.path`` itself
+        self.prefix_routes: dict[tuple[str, str], Callable[[Call], Reply]] = {}
 
     def handle(self, call: Call) -> Reply:
         self.pair.tick()
         fn = self.routes.get((call.method, call.path))
+        if fn is None:
+            fn = next((f for (m, pre), f in self.prefix_routes.items()
+                       if m == call.method and call.path.startswith(pre) and len(call.path) > len(pre)), None)
         if fn is None:
             return Reply({"error": "not found"}, 404)
         public = call.path in (PUBLIC_GET if call.method == "GET" else PUBLIC_POST)
