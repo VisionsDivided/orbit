@@ -144,26 +144,43 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT) {
     }
 
     /** Who uses the provider's streams now (tvBro's stream count, shared by TVs, browsers and recordings). */
-    data class StreamUse(val sid: String, val label: String, val what: String, val recording: Boolean)
+    /** [id]: the stream's public id, to name it in [streamStart] (empty from servers before 2026-11-14). */
+    data class StreamUse(val sid: String, val label: String, val what: String, val recording: Boolean,
+                         val id: String = "", val profile: String = "")
     data class StreamStatus(val max: Int, val count: Int, val active: List<StreamUse>)
 
-    fun streams(link: OrbitLink): StreamStatus {
-        val j = call(link.server, "/v1/streams", null, link)
+    fun streams(link: OrbitLink): StreamStatus = parseStreams(call(link.server, "/v1/streams", null, link))
+
+    private fun parseStreams(j: JsonObject): StreamStatus {
         val act = (j["active"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { e ->
             val o = e as? JsonObject ?: return@mapNotNull null
-            StreamUse(o.str("sid") ?: "", o.str("label") ?: "", o.str("what") ?: "", (o["recording"] as? JsonPrimitive)?.booleanOrNull ?: false)
+            StreamUse(o.str("sid") ?: "", o.str("label") ?: "", o.str("what") ?: "", (o["recording"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                o.str("id") ?: "", o.str("profile") ?: "")
         }
         return StreamStatus((j["max"] as? JsonPrimitive)?.intOrNull ?: 1, (j["count"] as? JsonPrimitive)?.intOrNull ?: act.size, act)
     }
 
-    private fun streamCall(link: OrbitLink, op: String, sid: String, label: String = "", what: String = ""): JsonObject {
-        val body = JsonObject(mapOf("sid" to JsonPrimitive(sid), "label" to JsonPrimitive(label), "what" to JsonPrimitive(what)))
-        return call(link.server, "/api/stream/$op", Json.encodeToString(JsonObject.serializer(), body), link)
+    private fun streamCall(link: OrbitLink, op: String, sid: String, label: String = "", what: String = "", replace: String? = null): JsonObject {
+        val m = mutableMapOf<String, kotlinx.serialization.json.JsonElement>("sid" to JsonPrimitive(sid), "label" to JsonPrimitive(label), "what" to JsonPrimitive(what))
+        if (!replace.isNullOrEmpty()) m["replace"] = JsonPrimitive(replace)
+        return call(link.server, "/api/stream/$op", Json.encodeToString(JsonObject.serializer(), JsonObject(m)), link)
     }
 
-    /** Takes a slot (the oldest viewer's when all are in use); false when every slot is held by a recording. */
-    fun streamStart(link: OrbitLink, sid: String, label: String, what: String): Boolean =
-        (streamCall(link, "start", sid, label, what)["ok"] as? JsonPrimitive)?.booleanOrNull ?: false
+    sealed class StreamStart {
+        object Ok : StreamStart()
+        /** Every slot is held by a recording. */
+        object Recording : StreamStart()
+        /** The stream chosen to stop has ended and no slot is free: nothing changed; [now] is the current list. */
+        data class Changed(val now: StreamStatus) : StreamStart()
+    }
+
+    /** Takes a slot: when all are in use, the stream whose id is [replace] stops (none given: the oldest viewer). */
+    fun streamStart(link: OrbitLink, sid: String, label: String, what: String, replace: String? = null): StreamStart {
+        val j = streamCall(link, "start", sid, label, what, replace)
+        if ((j["ok"] as? JsonPrimitive)?.booleanOrNull == true) return StreamStart.Ok
+        if ((j["changed"] as? JsonPrimitive)?.booleanOrNull == true) return StreamStart.Changed(parseStreams(j["streams"] as? JsonObject ?: JsonObject(emptyMap())))
+        return StreamStart.Recording
+    }
 
     /** Keeps the slot; returns why it was taken away, or null while it is still ours. */
     fun streamHeartbeat(link: OrbitLink, sid: String): String? =

@@ -8,10 +8,13 @@ movies and episodes all use the same sid, so one tab = one provider stream. A se
 When a new stream starts and ``max_streams`` active sessions already exist, the OLDEST
 active one is stopped: its open relay is closed and its further media requests get
 409 {"stopped": "replaced"} until that tab starts a stream again ("Play here").
+A start may instead name the stream to stop (``replace``: its public id from ``status()``), so the
+person choosing picks which device loses its stream (Orbit: "Stop Kitchen and watch").
 Pure logic with an injectable clock so it can be unit-tested.
 """
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from typing import Callable, Optional
@@ -19,11 +22,21 @@ from typing import Callable, Optional
 ACTIVE_SEC = 20
 
 
+def stream_id(sid: str) -> str:
+    """The public id of a stream session: a hash, so knowing it never lets anyone act as that tab."""
+    return hashlib.sha256(("orbit-stream:" + sid).encode()).hexdigest()[:12]
+
+
+class StreamChanged(Exception):
+    """The stream a start asked to replace has ended (or is a recording) and no slot is free."""
+
+
 class Session:
-    __slots__ = ("sid", "label", "what", "started", "last_seen", "gen", "pinned")
+    __slots__ = ("sid", "label", "what", "started", "last_seen", "gen", "pinned", "profile")
 
     def __init__(self, sid: str, label: str, what: str, now: float):
         self.sid, self.label, self.what = sid, label, what
+        self.profile = ""     # Orbit: name of the profile that started it (empty in tvBro mode)
         self.started = now
         self.last_seen = now
         self.gen = 0          # bumped when the session is stopped; relays compare it
@@ -46,17 +59,30 @@ class StreamRegistry:
     def _active(self, now: float):
         return [s for s in self._s.values() if now - s.last_seen < ACTIVE_SEC]
 
-    def start(self, sid: str, label: str = "", what: str = "", pinned: bool = False) -> Optional[list[str]]:
+    def start(self, sid: str, label: str = "", what: str = "", pinned: bool = False,
+              replace: Optional[str] = None, profile: str = "") -> Optional[list[str]]:
         """A tab starts (or takes back) a stream. Returns the sids that were stopped.
 
         ``pinned`` sessions are server-side recordings: a viewer never evicts them. When every
         slot is held by a recording, a viewer's start is refused: returns None, and that sid's
-        media requests get 409 {"stopped": "recording"}."""
+        media requests get 409 {"stopped": "recording"}.
+
+        ``replace`` (a ``stream_id``) names the stream to stop when a slot is needed, instead of
+        the oldest. When that stream has ended meanwhile and a slot is free, the start just goes
+        ahead; when it has ended (or is a recording) and every slot is still taken, nothing
+        changes and StreamChanged is raised, so the client asks again with the current list."""
         now = self.clock()
         with self._lock:
             others = sorted((x for x in self._active(now) if x.sid != sid), key=lambda x: x.started)
             evictable = [x for x in others if not x.pinned]
-            if len(others) + 1 - self.max_streams > len(evictable):
+            need = len(others) + 1 - self.max_streams
+            if replace and 0 < need <= len(evictable):
+                target = next((x for x in evictable if stream_id(x.sid) == replace), None)
+                if target is None:
+                    raise StreamChanged(replace)
+                evictable.remove(target)
+                evictable.insert(0, target)          # stopped first; any further slot needed: the oldest
+            if need > len(evictable):
                 old = self._s.pop(sid, None)
                 if old is not None:
                     old.gen += 1
@@ -75,6 +101,8 @@ class StreamRegistry:
                     s.started = now       # was idle: counts as a new stream
                 s.last_seen = now
             s.pinned = pinned
+            if profile:
+                s.profile = profile
             stopped = []
             while len(others) + 1 > self.max_streams and evictable:
                 old = evictable.pop(0)
@@ -144,6 +172,7 @@ class StreamRegistry:
         with self._lock:
             act = sorted(self._active(now), key=lambda x: x.started)
             return {"max": self.max_streams, "count": len(act),
-                    "active": [{"sid": s.sid[:6], "label": s.label, "what": s.what,
+                    "active": [{"id": stream_id(s.sid), "sid": s.sid[:6], "label": s.label, "what": s.what,
+                                "profile": s.profile,
                                 "since": int(s.started), "idleSec": int(now - s.last_seen),
                                 "recording": s.pinned} for s in act]}

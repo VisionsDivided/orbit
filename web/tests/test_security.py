@@ -442,6 +442,13 @@ class Server(unittest.TestCase):
         # DNS rebinding: another Host name is refused
         self.assertEqual(self.req("GET", "/api/session", headers={"Host": "evil.example"})[0], 421)
         self.assertEqual(self.req("GET", "/api/channels", headers={"Host": "rebind.evil.example:8750", "Cookie": self.cookie})[0], 421)
+        # Orbit "Find my server": /v1/hello answers any Host (a TV scans by IP) and says only that this is Orbit
+        code, hdr, hello = self.req("GET", "/v1/hello", headers={"Host": "192.0.2.10:8750"})
+        self.assertEqual((code, json.loads(hello)), (200, {"app": "orbit", "api": 1, "hostOk": False}))
+        self.assertEqual(hdr.get("Cache-Control"), "no-store")
+        self.assertEqual(json.loads(self.req("GET", "/v1/hello")[2])["hostOk"], True)
+        self.assertEqual(json.loads(self.req("GET", "/v1/hello?x=1", headers={"Host": "evil.example"})[2]),
+                         {"app": "orbit", "api": 1, "hostOk": False})
         # security headers
         _, hdr, _ = self.req("GET", "/api/health")
         self.assertEqual(hdr.get("X-Content-Type-Options"), "nosniff")

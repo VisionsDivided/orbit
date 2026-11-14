@@ -39,7 +39,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import parsers as P
 from . import net as NET
 from .secretstore import SecretStore, startup_check
-from .streams import StreamRegistry
+from .streams import StreamChanged, StreamRegistry
 from .state import StateStore
 from .epgdb import EpgDb, EpgWriter, key_for, mapped_key, NO_GUIDE
 from .epgmap import EpgMap
@@ -1412,6 +1412,11 @@ class Handler(BaseHTTPRequestHandler):
         self.q = urllib.parse.parse_qs(u.query)
         self.sess = None
         try:
+            if u.path == "/v1/hello":
+                # Orbit: lets a TV's "Find my server" recognise this server (API-v1.md). Answered before the Host
+                # check, so a scan by IP address finds it even when that address is not in TVBRO_ALLOWED_HOSTS yet
+                # (hostOk tells the TV); it says nothing else, so a DNS-rebinding page learns nothing from it.
+                return self._json({"app": "orbit", "api": 1, "hostOk": self._host_ok()})
             if not self._host_ok():
                 return self._err(421, "unknown host name")
             self.sess = self._session()
@@ -1721,7 +1726,13 @@ class Handler(BaseHTTPRequestHandler):
             if not sid:
                 return self._err(400, "sid")
             if path.endswith("/start"):
-                stopped = APP.streams.start(sid, str(d.get("label", ""))[:60], str(d.get("what", ""))[:120])
+                # Orbit: "replace" names the stream to stop (its "id" in /v1/streams) instead of the oldest
+                replace = str(d.get("replace") or "")[:32] or None
+                try:
+                    stopped = APP.streams.start(sid, str(d.get("label", ""))[:60], str(d.get("what", ""))[:120],
+                                                replace=replace, profile=self._profile_name())
+                except StreamChanged:
+                    return self._json({"ok": False, "changed": True, "streams": APP.streams.status()})
                 if stopped is None:
                     return self._json({"ok": False, "stopped": "recording"})
                 return self._json({"ok": True, "replaced": len(stopped)})
@@ -1884,6 +1895,17 @@ class Handler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             cap = 0
         return max(1, min(n, cap)) if cap > 0 else n
+
+    def _profile_name(self) -> str:
+        """Orbit: the name of the signed-in session's profile ("" in tvBro mode or when unknown)."""
+        pid = (self.sess or {}).get("profile_id")
+        if not pid:
+            return ""
+        try:
+            row = APP.orbit.db.one("SELECT name FROM profiles WHERE id=?", (pid,))
+        except Exception:                           # noqa: BLE001
+            return ""
+        return str(row[0])[:40] if row else ""
 
     def _sync_status(self) -> dict:
         st = APP.sources.status()

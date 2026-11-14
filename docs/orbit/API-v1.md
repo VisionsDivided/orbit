@@ -35,6 +35,7 @@ It is written so another implementation (for example Rust) could replace the ser
 
 | Method | Path | Who | Body → Answer |
 |---|---|---|---|
+| GET | `/v1/hello` | anyone (public, **any Host**) | → `{"app": "orbit", "api": 1, "hostOk": bool}`. Recognises an Orbit server (the TV's "Find my server" scan). It is answered before the Host check, so a scan by IP address works; `hostOk` says whether the Host the client used is allowed (else the address must be added to `TVBRO_ALLOWED_HOSTS` before the TV can link). It names no version, account or setting. |
 | GET | `/v1/status` | anyone (public) | → `{"accounts": bool, "setup": bool}`. `setup` is true while the first owner can be created. |
 | POST | `/v1/setup` | anyone, only while no account exists | `{"token", "username", "password", "displayName"?}` → `Me` + session cookie. `token` is the one-time setup token from the server's data folder (`orbit-setup-token`). |
 | POST | `/v1/auth/login` | anyone | `{"username", "password", "device"?}` → `Me` + session cookie. Wrong username or password: 403, the same message either way. Throttled like tvBro's login. |
@@ -68,6 +69,12 @@ link again.
 The server checks the `Host` header, so the address the TV uses (for example `192.0.2.10:8750`) must be listed in
 `TVBRO_ALLOWED_HOSTS`.
 
+**Find my server.** Next to the address field the TV offers "Find my server": it asks `GET /v1/hello` on port 8750 of
+every address of its own /24 network (only private home ranges: 10/8, 172.16/12, 192.168/16; TCP, 64 at a time, 0.5 s connect and 1.5 s overall timeout per address; a few seconds in all, at most 6) and
+lists the servers that answer `"app": "orbit"`. Picking one fills the field. UDP broadcast is not used: the server
+runs in Docker behind a TCP port mapping, which broadcasts do not reach. A server whose `hostOk` is false is listed
+with a note that its address must be added to `TVBRO_ALLOWED_HOSTS`.
+
 ## Playlists for linked TVs (step 7)
 
 | Method | Path | Who | Body → Answer |
@@ -86,6 +93,27 @@ comes back when that account links again). It syncs My list
 (three-way merge, so offline changes on either side survive) and film resume points (newest wins) through the
 profile's state, every minute and shortly after a change: it downloads the state only when its revision changed and
 sends its own changes in one batch (`/v1/sync/*` below; the `/api/state` routes with older servers).
+
+## The provider's stream limit (Phase 2)
+
+TVs, browsers and recordings share one count of provider streams (tvBro's `StreamRegistry`). Each device or tab
+has a random stream session id (`sid`, 32+ characters) that it keeps to itself.
+
+| Method | Path | Who | Body → Answer |
+|---|---|---|---|
+| GET | `/v1/streams` | signed in | → `{"max", "count", "active": [StreamUse]}`, oldest first. Only streams active in the last 20 seconds count. |
+| POST | `/api/stream/start` | signed in | `{"sid", "label", "what", "replace"?}` → `{"ok": true, "replaced": n}`. Takes a slot; when every slot is taken, another viewer is stopped: the stream whose `id` is `replace`, or else the oldest. `{"ok": false, "stopped": "recording"}` when every slot is held by a recording. `{"ok": false, "changed": true, "streams": {...}}` (the `/v1/streams` answer) when `replace` names a stream that has ended or is a recording and no slot is free: nothing was stopped; ask again with the new list. When the chosen stream has ended and a slot is free, the start simply goes ahead. |
+| POST | `/api/stream/heartbeat` | signed in | `{"sid"}` every ~10 s → `{"ok": true}`, or `{"stopped": "replaced"\|"recording"}` once another device took the slot. |
+| POST | `/api/stream/stop` | signed in | `{"sid"}` → `{"ok": true}`: the slot is free again. |
+
+- `StreamUse`: `{"id", "sid", "label", "what", "profile", "since", "idleSec", "recording": bool}`. `id` is a public
+  id of the stream (a hash of its `sid`, 12 hex characters) to pass as `replace`; knowing it does not let anyone send
+  that device's heartbeats. `sid` is the first 6 characters of the session id (kept for older clients to recognise
+  their own stream). `label` is the device as the client named it ("Chrome on Windows", "TV (…)"), `profile` the
+  Orbit profile that started it (empty in tvBro mode and for recordings), `what` what is playing.
+- The TV lists every active stream when the limit is full and offers one "Stop <name> and watch" per viewer
+  (recordings are listed but cannot be chosen), plus Cancel. The web app still stops the oldest without asking
+  (it never had a prompt).
 
 ## Show progress for devices (step 7b)
 
@@ -174,6 +202,11 @@ points; reminders; search history; preferences), `GET /api/series/continue`, `GE
 `GET /api/backup` / `POST /api/restore`. Each profile's data is a separate SQLite file
 (`profiles/<profile id>/state.db`). Still shared by the household: playlists and their sync, channel layout and
 custom groups, the guide, recordings and recording rules, parental PIN and locks, and server settings.
+
+Preference keys written by Orbit clients (scope `prefs`):
+- `tvChannelFormats`: the TV's per-channel live stream format, `{"at": <ms>, "channels": {"<channel key>": "ts"|"hls"}}`
+  (at most 400 channels; a channel not listed follows the TV's Settings ▸ Live stream format). The copy with the newer
+  `at` wins as a whole.
 
 At setup, the household's data so far (its `state.db`) is copied into the owner's first profile; the household
 file is left as it was. Deleting a profile deletes its data; sessions on it move to the account's first profile.

@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
-from tvbro_server.streams import ACTIVE_SEC, StreamRegistry  # noqa: E402
+from tvbro_server.streams import ACTIVE_SEC, StreamChanged, StreamRegistry, stream_id  # noqa: E402
 
 
 class Clock:
@@ -60,6 +60,67 @@ class ReplaceOldest(unittest.TestCase):
         self.assertIsNotNone(self.r.touch("X"))
         self.assertEqual(self.r.status()["count"], 1)
         self.assertEqual(self.r.touch(None), 0)
+
+
+class ReplaceChosen(unittest.TestCase):
+    """Orbit: the person starting a stream picks which one to stop ("Stop Kitchen and watch")."""
+
+    def setUp(self):
+        self.c = Clock()
+        self.r = StreamRegistry(2, self.c)
+        self.r.start("KITCHEN", "Kitchen TV", "News", profile="Kitchen"); self.c.t += 1
+        self.r.start("BEDROOM", "Bedroom TV", "Film", profile="Bedroom"); self.c.t += 1
+
+    def ids(self):
+        return {a["label"]: a["id"] for a in self.r.status()["active"]}
+
+    def test_status_names_every_stream_with_a_public_id(self):
+        act = self.r.status()["active"]
+        self.assertEqual([(a["label"], a["profile"], a["what"]) for a in act],
+                         [("Kitchen TV", "Kitchen", "News"), ("Bedroom TV", "Bedroom", "Film")])
+        self.assertEqual(act[0]["id"], stream_id("KITCHEN"))
+        self.assertNotIn("KITCHEN", act[0]["id"])                 # a hash, not the session id itself
+        self.assertEqual(len({a["id"] for a in act}), 2)
+
+    def test_the_chosen_stream_is_stopped_not_the_oldest(self):
+        self.assertEqual(self.r.start("LIVING", "Living room", "Match", replace=self.ids()["Bedroom TV"]), ["BEDROOM"])
+        self.assertIsNone(self.r.touch("BEDROOM"))
+        self.assertIsNotNone(self.r.touch("KITCHEN"))
+        self.assertEqual(self.r.why("BEDROOM"), "replaced")
+
+    def test_without_a_choice_the_oldest_goes(self):
+        self.assertEqual(self.r.start("LIVING"), ["KITCHEN"])
+
+    def test_chosen_stream_ended_and_slot_free_just_starts(self):
+        gone = self.ids()["Bedroom TV"]
+        self.r.stop("BEDROOM")
+        self.assertEqual(self.r.start("LIVING", replace=gone), [])
+        self.assertIsNotNone(self.r.touch("KITCHEN"))
+
+    def test_chosen_stream_ended_but_all_slots_taken_changes_nothing(self):
+        gone = self.ids()["Bedroom TV"]
+        self.r.stop("BEDROOM")
+        self.r.start("OFFICE", "Office", "Talk")                 # someone else took the free slot meanwhile
+        with self.assertRaises(StreamChanged):
+            self.r.start("LIVING", replace=gone)
+        self.assertIsNotNone(self.r.touch("KITCHEN"))
+        self.assertIsNotNone(self.r.touch("OFFICE"))
+        self.assertEqual(self.r.status()["count"], 2)
+
+    def test_a_recording_cannot_be_chosen(self):
+        self.r.stop("BEDROOM")
+        self.r.start("REC", "Recording", "Show", pinned=True)
+        with self.assertRaises(StreamChanged):
+            self.r.start("LIVING", replace=self.ids()["Recording"])   # the viewer is not silently stopped instead
+        self.assertIsNotNone(self.r.touch("KITCHEN"))
+        # every slot held by recordings: refused as "recording", as before, whatever was chosen
+        self.r.set_max(1); self.r.stop("KITCHEN")
+        self.assertIsNone(self.r.start("LIVING", replace=self.ids()["Recording"]))
+
+    def test_unknown_id_while_full_changes_nothing(self):
+        with self.assertRaises(StreamChanged):
+            self.r.start("LIVING", replace="000000000000")
+        self.assertEqual(self.r.status()["count"], 2)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,8 @@ import kotlinx.serialization.json.longOrNull
 data class SyncSnapshot(
     val rev: String?, val mylist: Set<String>, val resume: Map<String, ServerResume>,
     val episodes: List<ServerEpisode>, val shows: List<ServerShow>,
+    /** The profile's prefs as the server has them (per-channel stream formats live there, FormatSync.kt). */
+    val prefs: JsonObject? = null,
 )
 
 /**
@@ -110,7 +112,7 @@ object OrbitBatch {
 
     fun snapshot(rev: String?, state: JsonObject, progress: JsonObject): SyncSnapshot {
         val (eps, shows) = shows(progress)
-        return SyncSnapshot(rev, listKeys(state), resume(state), eps, shows)
+        return SyncSnapshot(rev, listKeys(state), resume(state), eps, shows, state["prefs"] as? JsonObject)
     }
 
     /**

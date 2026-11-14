@@ -71,6 +71,47 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
     /** Orbit: live channels as HLS instead of MPEG-TS (some providers deliver HLS far more steadily). */
     var liveHls by mutableStateOf(store.liveHls.also { io.github.kmmarin.tvbro.ui.LivePlayer.preferHls = it }); private set
     fun changeLiveHls(on: Boolean) { liveHls = on; store.liveHls = on; io.github.kmmarin.tvbro.ui.LivePlayer.preferHls = on }
+
+    // Orbit: a channel's own stream format (Default / TS / HLS) per profile, synced through the profile's server prefs
+    private var fmtCache: Pair<String, ChannelFormats>? = null
+    /** Whose choices apply: the linked profile, or this TV alone when it is not linked. */
+    private fun fmtProfile() = orbit.link?.let { "${it.username}/${it.profile}" } ?: ""
+    fun channelFormats(): ChannelFormats {
+        val p = fmtProfile()
+        fmtCache?.let { if (it.first == p) return it.second }
+        val raw = store.channelFormats(p)
+        val f = ChannelFormats.fromJson(raw?.let { runCatching { kotlinx.serialization.json.Json.parseToJsonElement(it) }.getOrNull() })
+        fmtCache = p to f
+        return f
+    }
+    private fun saveChannelFormats(f: ChannelFormats) {
+        val p = fmtProfile()
+        val old = channelFormats()
+        fmtCache = p to f
+        store.saveChannelFormats(p, f.toJson().toString())
+        // a channel playing now whose format changed starts again in the new one (liveGen restarts the players)
+        val k = liveKey
+        if (k != null && old[k] != f[k]) { liveUrl = null; liveGen++ }
+    }
+    /** "ts", "hls" or null (follows Settings ▸ Live stream format). */
+    fun channelFormat(key: String): String? = channelFormats()[key]
+    fun setChannelFormat(c: Channel, fmt: String?) {
+        saveChannelFormats(channelFormats().with(c.key, fmt, System.currentTimeMillis()))
+        toast("${c.name}: " + when (fmt) { ChannelFormats.HLS -> "HLS"; ChannelFormats.TS -> "MPEG-TS"; else -> "default stream format" })
+        if (orbit.link != null) viewModelScope.launch(Dispatchers.IO) { orbit.syncState() }
+    }
+    /** Channels already offered "Try HLS" in this run of the app (the hint comes once per channel). */
+    val stallHinted = mutableSetOf<String>()
+
+    private fun formatMenu(c: Channel) {
+        val cur = channelFormat(c.key)
+        fun mark(v: String?) = if (cur == v) "✓  " else "     "
+        menu = MenuState("Stream format: ${c.name}", listOf(
+            mark(null) + "Default (Settings: ${if (liveHls) "HLS" else "MPEG-TS"})" to { setChannelFormat(c, null) },
+            mark(ChannelFormats.TS) + "MPEG-TS (.ts)" to { setChannelFormat(c, ChannelFormats.TS) },
+            mark(ChannelFormats.HLS) + "HLS (.m3u8): steadier with some providers" to { setChannelFormat(c, ChannelFormats.HLS) },
+        ))
+    }
     var external by mutableStateOf(store.external); private set
     var previewOn by mutableStateOf(store.previewOn); private set
     var previewMuted by mutableStateOf(store.previewMuted); private set
@@ -575,6 +616,10 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
         activeRec(c)?.let { r -> items += "Stop recording" to { stopRec(r) } } ?: run { items += "Record..." to { recordMenu(c) } }
         cur?.let { p -> items += "Programme info: ${p.title}" to { progMenu = c to p } }
         if (c.catchup != null && c.catchupDays > 0) items += "Catch-up (guide, Left into the past)" to { focusCh = c; section = Section.TV; screen = Screen.LIST; toast("In the guide, press Left on ${c.name} to go back in time") }
+        if (LiveFormat.canHls(c.url)) {   // Orbit: only Xtream live channels have both formats
+            val f = when (channelFormat(c.key)) { ChannelFormats.HLS -> "HLS"; ChannelFormats.TS -> "MPEG-TS"; else -> "Default" }
+            items += "Stream format: $f..." to { formatMenu(c) }
+        }
         items += "Rename" to { prompt = PromptState("Channel name", c.name, false) { v -> if (v.isNotBlank()) savePrefs2(prefs.copy(names = prefs.names + (c.key to v.trim()))) } }
         items += "Hide channel" to { savePrefs2(prefs.copy(hiddenCh = prefs.hiddenCh + c.key)) }
         items += "Move up" to { savePrefs2(prefs.copy(order = move(prefs.order.ifEmpty { shown.map { it.key } }.let { o -> o + shown.map { it.key }.filter { k -> k !in o } }, c.key, -1))) }
@@ -1372,6 +1417,8 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
             store.clearViewingHistory(); this@AppModel.history = emptyList()
             refreshLists()
         }
+        override val channelFormats: ChannelFormats get() = this@AppModel.channelFormats()
+        override fun setChannelFormats(f: ChannelFormats) = saveChannelFormats(f)
         override fun stopPlayback(reason: String) {
             liveExo?.stop(); liveUrl = null; liveKey = null
             if (screen == Screen.PLAYER || screen == Screen.VODPLAY) screen = Screen.LIST
