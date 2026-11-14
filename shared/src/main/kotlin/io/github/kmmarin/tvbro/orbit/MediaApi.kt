@@ -46,7 +46,7 @@ data class MediaNextUp(val id: String, val title: String)
  * addresses are absolute and always on the home server (the relay): loading them needs the session cookie
  * ([MediaApi.streamHeaders]) and never carries a Plex / Jellyfin token.
  */
-data class MediaPlayback(
+data class MediaPlayAnswer(
     val session: String, val url: String, val kind: String, val container: String? = null, val mime: String? = null,
     val durationSecs: Long = 0, val resumeSecs: Long? = null, val title: String = "", val subtitle: String? = null,
     val audio: List<MediaAudio> = emptyList(), val subtitles: List<MediaSubtitle> = emptyList(), val next: MediaNextUp? = null,
@@ -77,7 +77,7 @@ class MediaApi(private val api: OrbitApi = OrbitApi()) {
      * for the original file when the server can (direct play), else HLS; [caps] tells the server what this device plays
      * ([HLS_ONLY]: never the original file, the fallback after a direct-play failure).
      */
-    fun play(link: OrbitLink, conn: String, id: String, client: String, caps: JsonObject? = null): MediaPlayback {
+    fun play(link: OrbitLink, conn: String, id: String, client: String, caps: JsonObject? = null): MediaPlayAnswer {
         val body = buildMap<String, JsonElement> {
             put("conn", JsonPrimitive(conn)); put("id", JsonPrimitive(id)); put("client", JsonPrimitive(client))
             if (caps != null) put("caps", caps)
@@ -141,7 +141,7 @@ class MediaApi(private val api: OrbitApi = OrbitApi()) {
         }
 
         /** The play answer; [OrbitError] 502 when it lacks the session or a playable address on the home server. */
-        fun parse(j: JsonObject, server: String): MediaPlayback {
+        fun parse(j: JsonObject, server: String): MediaPlayAnswer {
             val session = j.str("session")?.takeIf { it.isNotBlank() } ?: throw OrbitError(502, "The home server sent no play session")
             val url = onServer(server, j.str("url")) ?: throw OrbitError(502, "The home server sent no address to play")
             val kind = j.str("kind") ?: if (url.substringBefore('?').endsWith(".m3u8")) "hls" else "file"
@@ -156,7 +156,7 @@ class MediaApi(private val api: OrbitApi = OrbitApi()) {
                 MediaSubtitle(id, o.str("label") ?: o.str("lang") ?: "Subtitles $id", o.str("lang"), onServer(server, o.str("url")) ?: return@mapNotNull null)
             }
             val next = (j["next"] as? JsonObject)?.let { n -> n.str("id")?.let { MediaNextUp(it, n.str("title") ?: "") } }
-            return MediaPlayback(session, url, kind, j.str("container"), j.str("mime"), j.num("durationSecs") ?: 0, j.num("resumeSecs"),
+            return MediaPlayAnswer(session, url, kind, j.str("container"), j.str("mime"), j.num("durationSecs") ?: 0, j.num("resumeSecs"),
                 j.str("title") ?: "", j.str("subtitle")?.takeIf { it.isNotBlank() }, audio, subs, next)
         }
 
