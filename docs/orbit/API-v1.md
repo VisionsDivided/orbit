@@ -74,6 +74,16 @@ code. The TV keeps the playlists encrypted and removes them again when it is unl
 (three-way merge, so offline changes on either side survive) and film resume points (newest wins) through the
 existing `/api/state` routes of its profile, every minute and shortly after a change.
 
+## Show progress for devices (step 7b)
+
+| Method | Path | Who | Body → Answer |
+|---|---|---|---|
+| GET | `/v1/progress/shows` | signed in | → `{"episodes": [{"seriesId", "epId", "secs", "dur", "done", "at"}], "shows": [{"id", "key", "name", "poster", "lastEp", "next": {"id", "season", "num", "title", "secs", "dur", "resume"}\|null, "finished", "hidden", "at"}]}` for the session's profile. `at` is milliseconds. |
+| POST | `/v1/progress/episodes` | signed in | `{"items": [{"seriesId", "epId", "secs", "dur", "done", "at", "name"?, "poster"?}]}` (at most 500) → `{"applied", "shows"}`. Per episode the newest change wins (an older `at` is skipped); a clock ahead of the server's counts as now. Changed shows get their next episode recomputed in the background. |
+
+`seriesId` is the server's VOD id (`7` for the first playlist, `p1~7` for others); `key` is the show's My list key
+(`s|p0|7`). Episode ids are the provider's.
+
 ## What belongs to a profile (step 4)
 In Orbit mode these existing `/api` routes read and write the **signed-in session's profile** instead of the
 household: `GET /api/state`, `POST /api/state/<scope>` (My list, which also holds favourite channels; resume

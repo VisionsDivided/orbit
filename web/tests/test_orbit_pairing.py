@@ -193,6 +193,12 @@ class Server(unittest.TestCase):
         self.assertEqual((code, pl), (200, {"playlists": []}))
         self.assertEqual(self.req("GET", "/v1/device/playlists", headers=auth(alex))[0], 403)
         self.assertEqual(self.req("GET", "/v1/device/playlists")[0], 401)
+        # show progress of the TV's profile (episode sync)
+        self.assertEqual(self.req("GET", "/v1/progress/shows", headers=auth(tvs))[2], {"episodes": [], "shows": []})
+        code, _, r = self.req("POST", "/v1/progress/episodes", {"items": [{"seriesId": "7", "epId": "101", "secs": 120, "dur": 2400,
+                                                                          "at": int(time.time() * 1000)}]}, auth(tvs))
+        self.assertEqual((code, r["applied"]), (200, 1))
+        self.assertEqual(self.req("GET", "/v1/progress/shows", headers=auth(tvs))[2]["episodes"][0]["secs"], 120)
 
         # and it can be signed out from Alex's devices list
         dev = next(s for s in self.req("GET", "/v1/sessions", headers=auth(alex))[2]["sessions"] if s["device"] == "Living room TV")

@@ -12,6 +12,7 @@ from typing import Callable, Optional
 
 from .accounts import Accounts, ApiError
 from .pairing import Pairings
+from . import progress as PROG
 
 # paths that work without a session (setup / sign-in / TV pairing send X-TvBro: 1 instead of a CSRF token)
 PUBLIC_GET = {"/v1/status"}
@@ -37,8 +38,10 @@ class Reply:
 
 class Api:
     def __init__(self, accounts: Accounts, pairings: Optional[Pairings] = None,
-                 playlists: Optional[Callable[[], list]] = None):
+                 playlists: Optional[Callable[[], list]] = None,
+                 stores: Optional[Callable[[dict], tuple]] = None):
         self.acc = accounts
+        self.stores = stores                              # (StateStore, SeriesStore) of a session's profile
         self.pair = pairings or Pairings(accounts)
         self.playlists = playlists or (lambda: [])      # the household's enabled playlists, with their logins
         A, PR = self.acc, self.pair
@@ -61,6 +64,8 @@ class Api:
             ("POST", "/v1/accounts/disable"): lambda c: Reply(A.set_disabled(c.sess, c.body.get("id"),
                                                                             c.body.get("disabled"))),
             ("GET", "/v1/device/playlists"): self._device_playlists,
+            ("GET", "/v1/progress/shows"): lambda c: Reply(PROG.shows_state(self._series(c))),
+            ("POST", "/v1/progress/episodes"): lambda c: Reply(PROG.push_episodes(self._series(c), c.body.get("items"))),
             ("POST", "/v1/pair/start"): lambda c: Reply(PR.start(c.body.get("device"), c.client)),
             ("POST", "/v1/pair/poll"): lambda c: Reply(PR.poll(c.body.get("pairId"))),
             ("POST", "/v1/pair/approve"): lambda c: Reply(PR.approve(c.sess, c.body.get("code"), c.body.get("profileId"),
@@ -106,6 +111,14 @@ class Api:
     def _delete_profile(self, c: Call) -> Reply:
         self.acc.delete_profile(c.sess["account_id"], c.body.get("id"))
         return Reply({"ok": True})
+
+    def _series(self, c: Call):
+        if self.stores is None:
+            raise ApiError(503, "show progress is not available")
+        try:
+            return self.stores(c.sess)[1]
+        except PermissionError:
+            raise ApiError(409, "no profile selected")
 
     def _device_playlists(self, c: Call) -> Reply:
         """Linked TVs only (never a browser): the playlists to play directly from the provider."""
