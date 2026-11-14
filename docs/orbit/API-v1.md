@@ -308,6 +308,9 @@ Preference keys written by Orbit clients (scope `prefs`):
 - `tvChannelFormats`: the TV's per-channel live stream format, `{"at": <ms>, "channels": {"<channel key>": "ts"|"hls"}}`
   (at most 400 channels; a channel not listed follows the TV's Settings ▸ Live stream format). The copy with the newer
   `at` wins as a whole.
+- `liveGroupsPinned`: Live TV groups the profile pinned as quick-select tabs, a JSON array of full group names,
+  most recent first, at most 8 (web and TV share it). The TV sends its copy when it changed the pins since its last
+  sync, otherwise it takes the server's.
 
 At setup, the household's data so far (its `state.db`) is copied into the owner's first profile; the household
 file is left as it was. Deleting a profile deletes its data; sessions on it move to the account's first profile.
