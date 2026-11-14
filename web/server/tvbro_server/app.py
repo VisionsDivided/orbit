@@ -1031,6 +1031,7 @@ class App:
         self.discover = ODISC.Discover(self.orbit, OSEERR.SeerrConfig(DATA_DIR), fetch_image=_fetch_tmdb_image,
                                        image_cache=self.images, sniff=_img_ctype)
         self.v1.routes.update(self.discover.routes())
+        self.v1.prefix_routes.update(self.discover.prefix_routes())
         self.v1.routes.update(OSYNC.routes(self.profiles.for_session))   # /v1/sync: revision check, batches
         # Orbit: /v1/catalog (Home, Movies, Shows): IPTV VOD + the account's Plex / Jellyfin + the profile's state
         self.catalog = OCAT.Catalog(

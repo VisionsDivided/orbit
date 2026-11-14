@@ -50,10 +50,33 @@ def show(i, name, date, info=None, seasons=(0, 1, 2, 3)):
     return s
 
 
-class MockSeerr:
-    """The parts of Seerr's REST API that Orbit uses, with synthetic data."""
+PER_PAGE = 20
 
-    def __init__(self):
+
+def details(t, n):
+    """Synthetic title-page fields (genres, runtime, cast, a trailer) for a mock movie / show."""
+    t.update(genres=[{"id": 18, "name": "Drama"}, {"id": 53, "name": "Thriller"}], tagline=f"Tagline {n}.",
+             credits={"cast": [{"id": 9000 + k, "name": f"Actor {k}", "character": f"Role {k}", "order": k,
+                                "profilePath": f"/a{k}.jpg"} for k in range(25)]},
+             relatedVideos=[{"site": "YouTube", "key": "notatrailer1", "type": "Clip", "name": "Clip"},
+                            {"site": "Vimeo", "key": "123456789", "type": "Trailer", "name": "Vimeo"},
+                            {"site": "YouTube", "key": f"yt{n:08d}", "type": "Trailer", "name": "Official Trailer"}])
+    if t["mediaType"] == "movie":
+        t["runtime"] = 118
+    else:
+        t.update(episodeRunTime=[52], numberOfSeasons=len([s for s in t["seasons"] if s["seasonNumber"]]),
+                 numberOfEpisodes=10 * len(t["seasons"]), networks=[{"name": "Example Network"}],
+                 status="Returning Series")
+    return t
+
+
+class MockSeerr:
+    """The parts of Seerr's REST API that Orbit uses, with synthetic data.
+
+    ``big=True`` adds 60 generated films and 60 shows, so discover lists and searches have several pages
+    (PER_PAGE results each, like Seerr / TMDB's 20), and people in search results."""
+
+    def __init__(self, big=False):
         self.calls = []                       # (method, path, query, headers, body)
         self.down = False
         self.title_delay = 0.0                # seconds each movie / tv details answer takes
@@ -79,6 +102,33 @@ class MockSeerr:
                          {"id": 5, "status": 1, "type": "tv", "createdAt": "2026-11-02T10:00:00.000Z",
                           "media": {"tmdbId": 1399, "mediaType": "tv", "status": 4},
                           "seasons": [{"seasonNumber": 2}], "requestedBy": {"id": 3, "displayName": "Jo"}}]
+        self.titles[("tv", 1399)]["mediaInfo"]["requests"][0]["requestedBy"] = {"id": 3, "displayName": "Jo"}
+        details(self.titles[("movie", 550)], 550)
+        details(self.titles[("tv", 1399)], 1399)
+        # discover lists: path -> [(type, tmdb)], served PER_PAGE at a time
+        self.lists = {"/api/v1/discover/trending": [("movie", 550), ("person", 31), ("tv", 1399)],
+                      "/api/v1/discover/movies": [("movie", 550), ("movie", 603)],
+                      "/api/v1/discover/tv": [("tv", 1399)],
+                      "/api/v1/discover/movies/upcoming": [("movie", 680)],
+                      "/api/v1/discover/tv/upcoming": [("tv", 2000)]}
+        self.people = [{"id": 31, "mediaType": "person", "name": "Some Actor", "profilePath": "/a31.jpg",
+                        "knownFor": [dict(self.titles[("movie", 603)])]}]
+        if big:
+            films = [("movie", 10001 + i) for i in range(60)]
+            shows = [("tv", 20001 + i) for i in range(60)]
+            for i, (_, n) in enumerate(films):
+                self.titles[("movie", n)] = details(movie(n, f"Mock Film {i + 1:02d}", f"{2026 - i % 30}-05-01",
+                                                          status=(5 if i % 7 == 3 else 3 if i % 7 == 5 else None)), n)
+            for i, (_, n) in enumerate(shows):
+                self.titles[("tv", n)] = details(show(n, f"Mock Show {i + 1:02d}", f"{2025 - i % 20}-02-01"), n)
+            trend = [k for pair in zip(films[:45], shows[:15] * 3) for k in pair][:50]   # mostly films, as Seerr's often is
+            self.lists["/api/v1/discover/trending"] = self.lists["/api/v1/discover/trending"] + trend
+            self.lists["/api/v1/discover/movies"] = self.lists["/api/v1/discover/movies"] + films
+            self.lists["/api/v1/discover/tv"] = self.lists["/api/v1/discover/tv"] + shows
+            self.lists["/api/v1/discover/movies/upcoming"] += films[30:55]
+            self.lists["/api/v1/discover/tv/upcoming"] += shows[40:50]
+            self.people += [{"id": 40 + k, "mediaType": "person", "name": f"Mock Person {k}", "profilePath": None,
+                             "knownFor": [dict(self.titles[films[k]]), dict(self.titles[shows[k]])]} for k in range(3)]
         mock_ = self
 
         class H(BaseHTTPRequestHandler):
@@ -107,8 +157,11 @@ class MockSeerr:
         self.srv.shutdown()
         self.srv.server_close()
 
-    def results(self, keys):
-        return {"page": 1, "totalPages": 1, "results": [self.titles[k] for k in keys]}
+    def results(self, keys, page=1):
+        objs = [self.people[0] if k == ("person", 31) else self.titles[k] for k in keys]
+        pages = (len(objs) + PER_PAGE - 1) // PER_PAGE
+        return {"page": page, "totalPages": pages, "totalResults": len(objs),
+                "results": objs[(page - 1) * PER_PAGE:page * PER_PAGE]}
 
     def handle(self, h, method):
         u = urllib.parse.urlsplit(h.path)
@@ -123,27 +176,20 @@ class MockSeerr:
             return h._send(200, {"version": "2.0.0"})
         if h.headers.get("X-Api-Key") != KEY:
             return h._send(403, {"message": "You do not have permission to access this endpoint"})
-        person = {"id": 31, "mediaType": "person", "name": "Some Actor"}
+        page = int((q.get("page") or ["1"])[0])
         if p == "/api/v1/auth/me":
             return h._send(200, {"id": 1, "displayName": "Admin"})
-        if p == "/api/v1/discover/trending":
-            r = self.results([("movie", 550), ("tv", 1399)])
-            r["results"].insert(1, person)
-            return h._send(200, r)
-        if p == "/api/v1/discover/movies":
-            return h._send(200, self.results([("movie", 550), ("movie", 603)]))
-        if p == "/api/v1/discover/tv":
-            return h._send(200, self.results([("tv", 1399)]))
-        if p == "/api/v1/discover/movies/upcoming":
-            return h._send(200, self.results([("movie", 680)]))
-        if p == "/api/v1/discover/tv/upcoming":
-            return h._send(200, self.results([("tv", 2000)]))
+        if p in self.lists:
+            return h._send(200, self.results(self.lists[p], page))
         if p == "/api/v1/search":
-            if [x.lower() for x in q.get("query", [])] == ["available film"]:
-                r = self.results([("movie", 603)])
-                r["results"].append(person)
-                return h._send(200, r)
-            return h._send(200, {"page": 1, "totalPages": 0, "results": []})
+            words = (q.get("query") or [""])[0].lower()
+            hits = [self.titles[k] for k in sorted(self.titles)
+                    if words in (self.titles[k].get("title") or self.titles[k].get("name") or "").lower()]
+            hits += [x for x in self.people if words in x["name"].lower()
+                     or any(words in (k.get("title") or k.get("name") or "").lower() for k in x["knownFor"])]
+            pages = (len(hits) + PER_PAGE - 1) // PER_PAGE
+            return h._send(200, {"page": page, "totalPages": pages, "totalResults": len(hits),
+                                 "results": hits[(page - 1) * PER_PAGE:page * PER_PAGE]})
         for kind in ("movie", "tv"):
             if p.startswith(f"/api/v1/{kind}/"):
                 with self._flight:
@@ -211,6 +257,7 @@ class Discover(unittest.TestCase):
         self.disc = D.Discover(self.acc, self.cfg, clock=self.clock)
         self.api = Api(self.acc)
         self.api.routes.update(self.disc.routes())
+        self.api.prefix_routes.update(self.disc.prefix_routes())
 
     def tearDown(self):
         self.seerr.stop()
@@ -455,6 +502,130 @@ class Discover(unittest.TestCase):
         self.assertEqual(self.call(self.sam, "GET", "/v1/discover/title", type="tv", tmdb=4242)[0], 404)
         self.assertEqual(self.call(self.sam, "GET", "/v1/discover/title", type="book", tmdb=1)[0], 400)
         self.assertEqual(self.call(self.sam, "GET", "/v1/discover/title", type="movie", tmdb="x")[0], 400)
+
+    def big(self):
+        self.seerr.stop()
+        self.seerr = MockSeerr(big=True)
+        self.configure()
+
+    def test_rows_page_and_further_pages(self):
+        """Rows say how many pages Seerr has; GET /v1/discover/rows/<id>?page=N loads the next ones."""
+        self.big()
+        code, j = self.call(self.sam, "GET", "/v1/discover/rows")
+        self.assertEqual(code, 200, j)
+        rows = {r["id"]: r for r in j["rows"]}
+        self.assertEqual((len(rows["movies"]["items"]), rows["movies"]["page"], rows["movies"]["pages"]), (20, 1, 4))
+        self.assertEqual(rows["upcoming"]["pages"], 2, "the longer of films and shows")
+        code, p2 = self.call(self.sam, "GET", "/v1/discover/rows/movies", page=2)
+        self.assertEqual(code, 200, p2)
+        self.assertEqual((p2["id"], p2["page"], p2["pages"], len(p2["items"]), p2["stale"]), ("movies", 2, 4, 20, False))
+        self.assertEqual(p2["items"][0]["title"], "Mock Film 19", "page 2 follows page 1")
+        self.assertIn("page=2", self.seerr.last("GET", "/api/v1/discover/movies")[-1][2])
+        last = self.call(self.sam, "GET", "/v1/discover/rows/movies", page=4)[1]
+        self.assertEqual(len(last["items"]), 2)
+        self.assertEqual(self.call(self.sam, "GET", "/v1/discover/rows/movies", page=5)[1]["items"], [])
+        # upcoming interleaves films and shows on later pages too
+        up = self.call(self.sam, "GET", "/v1/discover/rows/upcoming", page=2)[1]
+        self.assertEqual([t["type"] for t in up["items"]][:2], ["movie"] * 2, "shows ran out on page 1")
+        # trending carries people on Seerr's side; they are dropped, and each page is cached
+        tr = self.call(self.sam, "GET", "/v1/discover/rows/trending", page=2)[1]
+        self.assertTrue(tr["items"] and all(t["type"] in ("movie", "tv") for t in tr["items"]))
+        n = len(self.seerr.calls)
+        self.call(self.sam, "GET", "/v1/discover/rows/trending", page=2)
+        self.assertEqual(len(self.seerr.calls), n)
+        # status and Play come along like on every other route
+        self.disc.local_finder = lambda c: (lambda kind, tmdb: {"key": "m|p0|9"} if tmdb == 10021 else None)
+        p2 = self.call(self.sam, "GET", "/v1/discover/rows/movies", page=2)[1]
+        film = next(t for t in p2["items"] if t["tmdb"] == 10021)
+        self.assertEqual((film["status"], film["play"]["key"]), ("available", "m|p0|9"))
+        self.assertTrue({"available", "processing", "requestable"} <= {t["status"] for t in p2["items"]})
+        for bad in ("0", "501", "x", "-1"):
+            self.assertEqual(self.call(self.sam, "GET", "/v1/discover/rows/movies", page=bad)[0], 400, bad)
+        self.assertEqual(self.call(self.sam, "GET", "/v1/discover/rows/nope")[0], 404)
+        self.seerr.down = True
+        self.assertEqual(self.call(self.sam, "GET", "/v1/discover/rows/tv", page=3)[0], 503)
+
+    def test_search_pages_and_people(self):
+        self.big()
+        code, j = self.call(self.sam, "GET", "/v1/discover/search", q="mock")
+        self.assertEqual(code, 200, j)
+        self.assertEqual((j["page"], j["pages"], j["total"]), (1, 7, 123))
+        self.assertEqual(len(j["results"]), 20)
+        self.assertEqual(j["people"], [], "people come after the titles here")
+        code, last = self.call(self.sam, "GET", "/v1/discover/search", q="mock", page=7)
+        self.assertEqual([p["name"] for p in last["people"]], ["Mock Person 0", "Mock Person 1", "Mock Person 2"])
+        person = last["people"][0]
+        self.assertEqual(person["photo"], None)
+        self.assertEqual([t["title"] for t in person["knownFor"]], ["Mock Film 01", "Mock Show 01"])
+        code, j = self.call(self.sam, "GET", "/v1/discover/search", q="some actor")
+        self.assertEqual((j["results"], [p["id"] for p in j["people"]]), ([], [31]))
+        self.assertEqual(j["people"][0]["photo"], "https://image.tmdb.org/t/p/w185/a31.jpg")
+        self.assertEqual(j["people"][0]["knownFor"][0]["status"], "available")
+        # each page cached on its own
+        n = len(self.seerr.calls)
+        self.call(self.sam, "GET", "/v1/discover/search", q="MOCK", page=7)
+        self.assertEqual(len(self.seerr.calls), n)
+        self.call(self.sam, "GET", "/v1/discover/search", q="mock", page=2)
+        self.assertEqual(len(self.seerr.calls), n + 1)
+        self.assertIn("page=2", self.seerr.last("GET", "/api/v1/search")[-1][2])
+        self.assertEqual(self.call(self.sam, "GET", "/v1/discover/search", q="mock", page="0")[0], 400)
+
+    def test_title_page(self):
+        self.configure()
+        self.link_sam()
+        code, t = self.call(self.sam, "GET", "/v1/discover/title/movie/550")
+        self.assertEqual(code, 200, t)
+        self.assertEqual((t["title"], t["year"], t["date"], t["runtime"], t["genres"], t["tagline"]),
+                         ("Requestable Film", 1999, "1999-10-15", 118, ["Drama", "Thriller"], "Tagline 550."))
+        self.assertEqual(len(t["cast"]), S.MAX_CAST)
+        self.assertEqual(t["cast"][0], {"id": 9000, "name": "Actor 0", "character": "Role 0",
+                                        "photo": "https://image.tmdb.org/t/p/w185/a0.jpg"})
+        self.assertEqual(t["trailer"], {"name": "Official Trailer", "url": "https://www.youtube.com/watch?v=yt00000550"},
+                         "a YouTube trailer, built from its key; clips and other sites are skipped")
+        self.assertEqual((t["status"], t["requests"], t["stale"]), ("requestable", [], False))
+        self.assertEqual(t["seerrUrl"], self.seerr.base + "/movie/550")
+        self.assertNotIn("seasons", t)
+        # a show: seasons with their own status, the requests on it with who asked and when
+        code, s = self.call(self.sam, "GET", "/v1/discover/title/tv/1399")
+        self.assertEqual(code, 200, s)
+        self.assertEqual([(x["season"], x["status"]) for x in s["seasons"]],
+                         [(1, "available"), (2, "pending"), (3, "requestable")])
+        self.assertEqual((s["seasonCount"], s["episodeCount"], s["runtime"], s["networks"], s["status"]),
+                         (3, 40, 52, ["Example Network"], "partial"))
+        self.assertEqual(s["requests"], [{"id": 5, "status": "pending", "created": "2026-11-02T10:00:00.000Z",
+                                          "by": "Jo", "seasons": [2]}])
+        # a title without the extra fields still works
+        code, n = self.call(self.sam, "GET", "/v1/discover/title/tv/2000")
+        self.assertEqual((code, n["cast"], n["trailer"], n["genres"], n["seasonCount"]), (200, [], None, [], 1))
+        # cached for DETAIL_TTL, dropped by a request
+        calls = lambda: len(self.seerr.last("GET", "/api/v1/tv/1399"))  # noqa: E731
+        before = calls()
+        self.call(self.sam, "GET", "/v1/discover/title/tv/1399")
+        self.assertEqual(calls(), before)
+        code, r = self.call(self.sam, "POST", "/v1/requests", {"type": "tv", "tmdb": 1399, "seasons": [3]})
+        self.assertEqual(code, 201, r)
+        self.assertEqual(self.seerr.last("POST", "/api/v1/request")[-1][4], {"mediaType": "tv", "mediaId": 1399, "seasons": [3]})
+        s = self.call(self.sam, "GET", "/v1/discover/title/tv/1399")[1]
+        self.assertEqual([x["status"] for x in s["seasons"]], ["available", "pending", "pending"])
+        self.assertEqual((s["requests"][0]["by"], s["requests"][0]["seasons"]), ("Sam", [3]), "newest first")
+        self.clock.t += D.DETAIL_TTL + 1
+        before = calls()
+        self.call(self.sam, "GET", "/v1/discover/title/tv/1399")
+        self.assertEqual(calls(), before + 1)
+        # Play when the catalogue has it
+        self.disc.local_finder = lambda c: (lambda kind, tmdb: {"key": "m|p0|7"} if tmdb == 550 else None)
+        t = self.call(self.sam, "GET", "/v1/discover/title/movie/550")[1]
+        self.assertEqual((t["status"], t["play"]), ("available", {"key": "m|p0|7"}))
+        # errors
+        self.assertEqual(self.call(self.sam, "GET", "/v1/discover/title/movie/4242")[0], 404)
+        self.assertEqual(self.call(self.sam, "GET", "/v1/discover/title/book/1")[0], 400)
+        for bad in ("/v1/discover/title/movie", "/v1/discover/title/movie/x", "/v1/discover/title/movie/1/2"):
+            self.assertEqual(self.call(self.sam, "GET", bad)[0], 404, bad)
+        self.seerr.stop()
+        self.clock.t += D.DETAIL_TTL + 1
+        code, t = self.call(self.sam, "GET", "/v1/discover/title/movie/550")
+        self.assertEqual((code, t["stale"]), (200, True), "the last answer while Seerr is down")
+        self.assertEqual(self.call(self.sam, "GET", "/v1/discover/title/movie/603")[0], 503)
 
     def test_availability_override_hook(self):
         self.configure()
@@ -711,6 +882,11 @@ class Server(unittest.TestCase):
         self.assertEqual((code, [t["tmdb"] for t in j["results"]]), (200, [603]), j)
         code, _, j = self.req("GET", "/v1/discover/title?type=movie&tmdb=550", headers=auth)
         self.assertEqual((code, j["title"]), (200, "Requestable Film"))
+        # the routes with ids in the path are mounted too
+        code, _, j = self.req("GET", "/v1/discover/title/movie/550", headers=auth)
+        self.assertEqual((code, j["runtime"], len(j["cast"])), (200, 118, 20), j)
+        code, _, j = self.req("GET", "/v1/discover/rows/movies?page=1", headers=auth)
+        self.assertEqual((code, [t["tmdb"] for t in j["items"]]), (200, [550, 603]), j)
         self.assertNotIn(KEY, json.dumps(self.req("GET", "/v1/discover/status", headers=auth)[2]))
         # the TMDB image proxy is mounted, signed in only, and refuses anything but a size + file name
         self.assertEqual(self.req("GET", "/v1/discover/image?p=/w500/a.jpg")[0], 401)

@@ -409,6 +409,79 @@ def normalize(raw, kind: Optional[str] = None, details: bool = False) -> Optiona
     return out
 
 
+MAX_CAST = 20
+_YT_KEY = re.compile(r"^[A-Za-z0-9_-]{6,20}$")
+
+
+def _trailer(raw: dict) -> Optional[dict]:
+    """The first YouTube trailer (else teaser) of ``relatedVideos`` -> {"name", "url"}. The URL is built here from
+    the video key (never Seerr's own ``url``), so it can only ever be a youtube.com watch page."""
+    vids = [v for v in raw.get("relatedVideos") or [] if isinstance(v, dict)
+            and str(v.get("site") or "").lower() == "youtube" and _YT_KEY.match(str(v.get("key") or ""))]
+    for kind in ("Trailer", "Teaser"):
+        for v in vids:
+            if v.get("type") == kind:
+                return {"name": _text(v.get("name"), 200) or kind, "url": "https://www.youtube.com/watch?v=" + v["key"]}
+    return None
+
+
+def _requests_of(info) -> list:
+    """Every request on a media object, newest first: [{id, status, created, by, seasons}]."""
+    out = []
+    reqs = info.get("requests") if isinstance(info, dict) else None
+    for r in reqs if isinstance(reqs, list) else []:
+        if not isinstance(r, dict):
+            continue
+        by = r.get("requestedBy") if isinstance(r.get("requestedBy"), dict) else {}
+        out.append({"id": _int(r.get("id")), "status": REQUEST_STATUS.get(_int(r.get("status")), "unknown"),
+                    "created": _iso(r.get("createdAt")),
+                    "by": _text(by.get("displayName") or by.get("username") or by.get("plexUsername")
+                                or by.get("jellyfinUsername"), 100),
+                    "seasons": sorted(s["seasonNumber"] for s in r.get("seasons") or []
+                                      if isinstance(s, dict) and _int(s.get("seasonNumber")) is not None)})
+    out.sort(key=lambda r: (r["created"] or "", r["id"] or 0), reverse=True)
+    return out
+
+
+def normalize_details(raw, kind: str) -> Optional[dict]:
+    """Seerr's movie / tv details -> the Title (with seasons) plus what a title page shows: genres, runtime,
+    tagline, cast (the first MAX_CAST), a trailer link, every request on it and, for shows, the season and episode
+    counts and networks."""
+    t = normalize(raw, kind, details=True)
+    if t is None:
+        return None
+    t["genres"] = [_text(g.get("name"), 60) for g in raw.get("genres") or [] if isinstance(g, dict) and g.get("name")][:8]
+    t["tagline"] = _text(raw.get("tagline"), 300)
+    t["date"] = _text(raw.get("releaseDate") if kind == "movie" else raw.get("firstAirDate"), 10) or None
+    if kind == "movie":
+        t["runtime"] = _int(raw.get("runtime")) or None
+    else:
+        rt = [n for n in raw.get("episodeRunTime") or [] if _int(n)]
+        t["runtime"] = rt[0] if rt else None
+        t["seasonCount"] = len(t.get("seasons") or []) or _int(raw.get("numberOfSeasons")) or 0
+        t["episodeCount"] = _int(raw.get("numberOfEpisodes")) or 0
+        t["networks"] = [_text(n.get("name"), 60) for n in raw.get("networks") or []
+                         if isinstance(n, dict) and n.get("name")][:3]
+        t["showStatus"] = _text(raw.get("status"), 40)
+    credits = raw.get("credits") if isinstance(raw.get("credits"), dict) else {}
+    cast = [p for p in credits.get("cast") or [] if isinstance(p, dict) and _int(p.get("id")) and p.get("name")]
+    cast.sort(key=lambda p: _int(p.get("order")) if _int(p.get("order")) is not None else 999)
+    t["cast"] = [{"id": p["id"], "name": _text(p.get("name"), 100), "character": _text(p.get("character"), 100),
+                  "photo": image(p.get("profilePath"), "w185")} for p in cast[:MAX_CAST]]
+    t["trailer"] = _trailer(raw)
+    t["requests"] = _requests_of(raw.get("mediaInfo"))
+    return t
+
+
+def normalize_person(raw) -> Optional[dict]:
+    """A person in Seerr's search results -> {"id", "name", "photo", "knownFor": [Title]}."""
+    if not isinstance(raw, dict) or raw.get("mediaType") != "person" or not _int(raw.get("id")):
+        return None
+    known = [x for x in (normalize(k) for k in raw.get("knownFor") or []) if x is not None]
+    return {"id": raw["id"], "name": _text(raw.get("name"), 100), "photo": image(raw.get("profilePath"), "w185"),
+            "knownFor": known[:10]}
+
+
 def normalize_request(raw) -> Optional[dict]:
     if not isinstance(raw, dict):
         return None
