@@ -62,6 +62,8 @@ class Devices(unittest.TestCase):
         self.assertEqual(self.acc.device_name_of(tv["h"]), "")
         self.assertEqual(self.call(tv, "POST", "/v1/device/name", {"name": "Kitchen"}), (200, {"ok": True, "name": "Kitchen"}))
         self.assertEqual(self.acc.device_name_of(tv["h"]), "Kitchen")
+        self.assertEqual(self.call(tv, "GET", "/v1/me")[1]["deviceName"], "Kitchen")
+        self.assertEqual(self.call(self.alex, "GET", "/v1/me")[1]["deviceName"], "")
         self.assertEqual(self.call(tv, "POST", "/v1/device/name", {"name": "x" * 40})[0], 400)
         mine = {s["device"]: s for s in self.acc.sessions(self.alex)}
         self.assertEqual((mine["TV (Model)"]["name"], mine["TV (Model)"]["kind"]), ("Kitchen", "tv"))

@@ -247,7 +247,7 @@ class Accounts:
         profiles = self.profiles(sess["account_id"])
         cur = next((p for p in profiles if p["id"] == sess.get("profile_id")), None)
         return {"account": self.account(sess["account_id"]), "profiles": profiles, "profile": cur,
-                "csrf": self.auth.csrf(sess["h"])}
+                "csrf": self.auth.csrf(sess["h"]), "deviceName": self.device_name_of(sess["h"])}
 
     # ---- profiles (always the caller's own account) ----
     @staticmethod
