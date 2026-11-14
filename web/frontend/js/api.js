@@ -197,6 +197,15 @@ export const api = {
     return r;
   },
   withSid,
+  // ---- Plex / Jellyfin through the home server (API-v1 "Media servers" > "Playback") ----
+  /** {conn, id, audio?} -> {session, url, kind, durationSecs, resumeSecs, title, subtitle, audio, subtitles, next} */
+  mediaPlay: (p) => req('/v1/media/play', { method: 'POST', body: JSON.stringify({ ...p, client: 'web' }) }),
+  /** state: 'playing' | 'paused' | 'stopped'. keepalive: also when the page is going away. */
+  mediaProgress: (session, positionSecs, state, keepalive) => req('/v1/media/progress', { method: 'POST', keepalive: !!keepalive,
+    body: JSON.stringify({ session, positionSecs: Math.max(0, Math.round((positionSecs || 0) * 10) / 10), state }) }),
+  /** Seasons of a show, episodes of a season. */
+  mediaChildren: (conn, id) => req(`/v1/media/children?conn=${encodeURIComponent(conn)}&id=${encodeURIComponent(id)}`),
+  mediaItem: (conn, id) => req(`/v1/media/item?conn=${encodeURIComponent(conn)}&id=${encodeURIComponent(id)}`),
   // ---- shows: progress per series on the server (Continue watching, next episode, marks, captions) ----
   seriesContinue: () => req('/api/series/continue'),
   seriesState: (id) => req('/api/series/state?id=' + encodeURIComponent(id)),
