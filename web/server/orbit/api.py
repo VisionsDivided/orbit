@@ -136,13 +136,13 @@ class Api:
             raise ApiError(409, "no profile selected")
 
     def _device_playlists(self, c: Call) -> Reply:
-        """Linked TVs only (never a browser): the playlists to play directly from the provider."""
+        """Linked TVs only (never a browser): the playlists to play directly from the provider.
+
+        Every linked TV gets them, whatever its account's role (the owner wants every household TV to watch IPTV).
+        This means any account can read the provider logins by linking a "TV" (or a script) with its own
+        approval: the household trusts its members with them. Browser sessions never get them."""
         if c.sess.get("session_kind") != "tv":
             return Reply({"error": "only a linked TV can fetch the playlists"}, 403)
-        # the playlists carry the provider login: only TVs linked to an owner or admin account get them (a member
-        # could otherwise "link" a script with their own approval and read the login)
-        if c.sess.get("account_role") not in ("owner", "admin"):
-            return Reply({"error": "ask the owner or an admin to link this TV to their account to use the household's playlists"}, 403)
         return Reply({"playlists": self.playlists()})
 
     @staticmethod

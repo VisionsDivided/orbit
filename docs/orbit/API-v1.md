@@ -68,10 +68,13 @@ The server checks the `Host` header, so the address the TV uses (for example `19
 
 | Method | Path | Who | Body → Answer |
 |---|---|---|---|
-| GET | `/v1/device/playlists` | a **linked TV** session only (403 for browser sign-ins) | → `{"playlists": [{"id", "name", "kind": "xtream"\|"m3u", "server", "user", "pass", "url", "epgUrl"}]}`: the household's enabled playlists with their logins, so the TV plays directly from the provider. Ids are the server's (`p0`, `p1` …), so channel and VOD keys are the same on every device. |
+| GET | `/v1/device/playlists` | a **linked TV** session of any account (owner, admin or member); 403 for browser sign-ins | → `{"playlists": [{"id", "name", "kind": "xtream"\|"m3u", "server", "user", "pass", "url", "epgUrl"}]}`: the household's enabled playlists with their logins, so the TV plays directly from the provider. Ids are the server's (`p0`, `p1` …), so channel and VOD keys are the same on every device. |
 
 Sessions have a kind (`orbit.db` migration 002): `web` for a browser sign-in, `tv` for a device linked with a pairing
-code. The TV keeps the playlists encrypted and removes them again when it is unlinked or signed out. It syncs My list
+code. Every linked TV gets the playlists, whatever its account's role: every household TV can watch IPTV.
+The flip side is that any account can read the provider logins by linking a device with its own approval, so only
+give accounts to people the household trusts with them. Browser sessions never get them (`session_kind` must be
+`tv`). The TV keeps the playlists encrypted and removes them again when it is unlinked or signed out. It syncs My list
 (three-way merge, so offline changes on either side survive) and film resume points (newest wins) through the
 existing `/api/state` routes of its profile, every minute and shortly after a change.
 
