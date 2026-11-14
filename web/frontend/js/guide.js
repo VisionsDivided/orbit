@@ -118,11 +118,43 @@ export function chunksFor(from, to) {
   return out;
 }
 
-/** Merge programme lists from several chunks: dedupe by start, sort. */
+/**
+ * One channel's programmes made drawable: providers send overlapping entries (two titles printed over each
+ * other). Sorted by start (then by stop, so of two that start together the longer one comes last and is kept);
+ * exact duplicates and entries fully inside a longer one with the same title are dropped; an entry that runs into
+ * the next one ends where the next one starts; what is left with no length is dropped. Copies are returned for
+ * trimmed entries; the input is not changed. The server does the same (parsers.normalize_programmes).
+ */
+export function normalizeProgs(progs) {
+  const ps = (progs || []).filter((p) => p && p.stop > p.start)
+    .slice().sort((a, b) => a.start - b.start || a.stop - b.stop);
+  const kept = [];
+  for (let i = 0; i < ps.length; i++) {
+    const p = ps[i];
+    let drop = false;
+    for (let j = 0; j < ps.length && !drop; j++) {
+      if (j === i) continue;
+      const o = ps[j];
+      if (o.title !== p.title || o.start > p.start || o.stop < p.stop) continue;
+      // inside o (or the same span): an exact duplicate keeps its first copy, a shorter one goes
+      drop = o.start === p.start && o.stop === p.stop ? j < i : true;
+    }
+    if (!drop) kept.push(p);
+  }
+  const out = [];
+  for (let i = 0; i < kept.length; i++) {
+    const p = kept[i], nx = kept[i + 1];
+    const q = nx && nx.start < p.stop ? { ...p, stop: nx.start } : p;
+    if (q.stop > q.start) out.push(q);
+  }
+  return out;
+}
+
+/** Merge programme lists from several chunks: dedupe by start, normalise (normalizeProgs). */
 export function mergeProgs(lists) {
-  const m = new Map();
-  for (const l of lists) for (const p of l || []) if (!m.has(p.start)) m.set(p.start, p);
-  return [...m.values()].sort((a, b) => a.start - b.start);
+  const all = [];
+  for (const l of lists) for (const p of l || []) all.push(p);
+  return normalizeProgs(all);
 }
 
 /** State of a programme for the UI: 'now' | 'future' | 'catchup' (past, in archive) | 'past'. */
