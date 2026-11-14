@@ -102,3 +102,48 @@ file is left as it was. Deleting a profile deletes its data; sessions on it move
 - Every query is filtered by the signed-in account; a profile or session id of another account is "not found".
 - Sessions last 180 days and are renewed while used (tvBro's session rules). Revoking a session, logging out
   or disabling an account ends it at once.
+
+## Discover and requests (Phase 6)
+
+Browse what is new and ask for films and shows through the household's Seerr (the
+successor of Overseerr / Jellyseerr). The server talks to Seerr; clients never see its address or API key.
+Server code: `web/server/orbit/seerr.py` (settings, client, cache, normalization) and `web/server/orbit/discover.py`
+(the routes below).
+
+| Method | Path | Who | Body / query → Answer |
+|---|---|---|---|
+| GET | `/v1/discover/status` | signed in | → `{"configured", "reachable", "linked", "version"?}`; owners and admins also get `"baseUrl"` and `"keySet"` (never the key). `linked`: your account has a Seerr user. |
+| GET | `/v1/discover/rows` | signed in | → `{"rows": [{"id": "trending"\|"movies"\|"tv"\|"upcoming", "title", "items": [Title]}], "stale"}`. `upcoming` mixes films and shows. |
+| GET | `/v1/discover/search?q=` | signed in | `q`: 1–100 characters → `{"results": [Title], "stale"}` (people are left out). |
+| GET | `/v1/discover/title?type=movie\|tv&tmdb=` | signed in | → `Title` with `seasons` for shows, plus `"stale"`. 404 when Seerr does not know it. |
+| GET | `/v1/requests` | signed in | → `{"requests": [Request], "linked"}`: your own requests (the newest 50). Owners and admins may pass `all=1` for everyone's; then `requestedBy.accountId` names the Orbit account where one is linked. |
+| POST | `/v1/requests` | signed in, linked | `{"type": "movie"\|"tv", "tmdb", "seasons"?: [n]}` → 201 `{"created": true, "request": Request, "title": Title}`, or 200 `{"created": false, "title": Title}` when it is already available, being processed or requested (nothing new is sent to Seerr). For shows without `seasons`, every season that is neither available nor requested is asked for. 409 for an account without a linked Seerr user ("ask the owner to link your Seerr user"); 403 with Seerr's message when Seerr refuses (permissions, quota); 503 while Seerr cannot be reached. |
+| POST | `/v1/discover/settings` | owner, admin | `{"baseUrl", "apiKey"}` → `{"configured": true, "baseUrl", "keySet": true, "version"}`. The connection and key are tested (`/api/v1/status`, `/api/v1/auth/me`) before anything is saved (400 wrong key, 502 unreachable). Leave `apiKey` out to change only the address. `{"remove": true}` → `{"configured": false}`. |
+| GET | `/v1/discover/users` | owner, admin | → `{"users": [{"id", "name", "email", "username", "plexUsername", "jellyfinUsername"}], "accounts": [{"id", "username", "displayName", "seerrUserId", "suggested"}]}`. `suggested`: the one Seerr user whose username, Plex / Jellyfin name, display name or e-mail name equals the account's username or display name (case-insensitive), else null. |
+| POST | `/v1/discover/map` | owner, admin | `{"accountId", "seerrUserId"}` (null unlinks) → `{"accountId", "seerrUserId"}`; the Seerr user must exist (400). `{"auto": true}` links every unlinked account that has exactly one suggestion → `{"linked": [{"accountId", "seerrUserId"}]}`. |
+
+Objects:
+- `Title`: `{"type": "movie"|"tv", "tmdb", "title", "year", "overview", "poster", "backdrop", "rating",
+  "status": "available"|"partial"|"processing"|"pending"|"requestable", "requestStatus"?: "pending"|"approved"|"declined"|"failed"|"completed", "seasons"?: [{"season", "episodes", "name", "status"}]}`.
+  `status` comes from Seerr's media status (5 available, 4 partially available, 3 processing, 2 pending; anything
+  else is requestable). `requestStatus` is the newest request's state. Specials (season 0) are left out.
+- `Request`: `{"id", "type", "tmdb", "status", "mediaStatus", "created", "seasons"? , "requestedBy": {"seerrUserId", "name", "accountId"?}, "title": Title|null}`.
+
+How it works:
+- **Requests are made as the account's Seerr user.** The server uses Seerr's admin API key with `X-Api-User:
+  <linked Seerr user id>`, so Seerr's own permissions, auto-approval and quotas apply to each person. Discovery
+  (rows, search, title) uses the key alone and works for every account, linked or not.
+- **Storage:** the Seerr address, key and the account → Seerr user links are one encrypted file, `seerr.enc` in the
+  data folder, sealed with the server key like the provider logins (covered by `rotate_key` and the startup key
+  check). Nothing is added to `orbit.db`, so no migration number is used.
+- **LAN access:** the configured Seerr host and port (only those) may be on the local network without switching
+  on "local network sources" (`net.set_private_hosts`). Loopback and link-local stay refused.
+- **Cache:** rows 10 minutes, titles 1 hour, searches 10 minutes, at most 256 answers. When Seerr cannot be reached
+  (or answers 5xx), the last answer is served with `"stale": true`; with nothing cached the call answers 503. After
+  a failure the server does not try Seerr again for 15 seconds, so pages stay fast. `POST /v1/requests` always
+  checks Seerr's current state first and answers 503 while Seerr is down.
+- **Play instead of Request:** `discover.availability_override(tmdb, type)` is merged over every Title. It does
+  nothing yet; Phase 5 (catalogue merge) will return local Plex / Jellyfin / IPTV matches by TMDb id there.
+- **Privacy note:** `poster` and `backdrop` are full `https://image.tmdb.org/t/p/...` URLs, so clients load artwork
+  straight from TMDB's public image CDN (no key, but TMDB sees the client's address and which artwork it loads). A
+  later option can proxy them through the server's image cache.
