@@ -70,6 +70,11 @@ class Recorder(private val app: AppState) {
     var rules by mutableStateOf(load(ruleFile, SeriesRule.serializer()))
         private set
     private val running = HashMap<String, Mpv>()
+    /** Orbit: recordings holding a slot of the household's stream count, and those asking for one. */
+    private val claimed = HashSet<String>()
+    private val claiming = HashSet<String>()
+    /** Recordings started by hand: when every stream is in use, the viewer chooses which one stops. */
+    private val askFor = HashSet<String>()
 
     private fun <T> load(f: File, s: kotlinx.serialization.KSerializer<T>): List<T> = try {
         if (f.exists()) Json2.json.decodeFromString(ListSerializer(s), f.readText()) else emptyList()
@@ -90,7 +95,9 @@ class Recorder(private val app: AppState) {
         if (active(c) != null) return app.toast("Already recording ${c.name}")
         val now = System.currentTimeMillis()
         val end = if (untilMs > 0) untilMs else if (minutes > 0) now + minutes * 60_000L else 0
-        put(Rec(UUID.randomUUID().toString().take(8), title ?: c.name, c.name, c.key, startMs = now, endMs = end))
+        val id = UUID.randomUUID().toString().take(8)
+        askFor += id
+        put(Rec(id, title ?: c.name, c.name, c.key, startMs = now, endMs = end))
         tick()
         app.toast("Recording ${title ?: c.name}")
     }
@@ -102,7 +109,9 @@ class Recorder(private val app: AppState) {
         if (end < now) { if (!quiet) app.toast("That programme has ended"); return }
         if (scheduledFor(c, p) != null) { if (!quiet) app.toast("Already scheduled"); return }
         val start = maxOf(p.start * 1000 - app.settings.recPadStartMin * 60_000L, now)
-        put(Rec(UUID.randomUUID().toString().take(8), p.title.ifBlank { c.name }, c.name, c.key, startMs = start, endMs = end, seriesId = seriesId))
+        val id = UUID.randomUUID().toString().take(8)
+        if (!quiet && start <= now) askFor += id                      // on air now, asked for by hand
+        put(Rec(id, p.title.ifBlank { c.name }, c.name, c.key, startMs = start, endMs = end, seriesId = seriesId))
         tick()
         if (!quiet) app.toast(if (start <= now) "Recording ${p.title}" else "Scheduled: ${p.title} at ${TimeFmt.time(start / 1000)}")
     }
@@ -176,6 +185,12 @@ class Recorder(private val app: AppState) {
         }
         if (!PlayUrl.allowed(url)) return fail(PlayUrl.refusal(url))
         val lib = MpvLoader.lib ?: run { update(r.id) { it.copy(status = "failed", note = "Video library (libmpv) missing: see Settings > Playback") }; return }
+        // Orbit: a recording takes its own slot of the household's stream count first, like the home server's do
+        // (a reconnected part keeps the slot it has)
+        if (!resume && app.orbit.linked && r.id !in claimed) {
+            if (claiming.add(r.id)) claim(r, askFor.remove(r.id))
+            return
+        }
         val dir = RecTarget.dir(app.settings).apply { mkdirs() }
         val f = File(dir, RecPlan.fileName(r.title, if (resume) System.currentTimeMillis() else r.startMs))
         try {
@@ -191,7 +206,22 @@ class Recorder(private val app: AppState) {
                 else it.copy(status = "recording", file = f.path)
             }
         } catch (e: Throwable) {
+            if (!resume && claimed.remove(r.id)) app.orbit.releaseRecording(r.id)
             update(r.id) { it.copy(status = "failed", note = "Could not start (${e.message ?: e.javaClass.simpleName})") }
+        }
+    }
+
+    /** Asks the home server for a slot for [r] (off the UI thread), then starts it, or files it as not started. */
+    private fun claim(r: Rec, ask: Boolean) = app.io {
+        val ok = app.orbit.claimRecording(r.id, r.title, ask)
+        app.runOnUi {
+            claiming.remove(r.id)
+            val still = items.any { it.id == r.id && it.status == "scheduled" }
+            when {
+                !ok -> { if (still) update(r.id) { it.copy(status = "failed", note = "Not started: every stream of the provider is in use") } }
+                !still -> app.orbit.releaseRecording(r.id)          // cancelled meanwhile
+                else -> { claimed += r.id; start(r) }
+            }
         }
     }
 
@@ -199,6 +229,7 @@ class Recorder(private val app: AppState) {
     private fun finish(id: String, note: String) {
         running.remove(id)?.let { m -> m.set("stream-record", ""); m.destroy() }
         restarts.remove(id)
+        if (claimed.remove(id)) app.orbit.releaseRecording(id)
         val r = items.firstOrNull { it.id == id } ?: return
         val files = (listOf(r.file) + r.parts).filter { it.isNotBlank() && !it.startsWith("smb://") }.map(::File)
         files.filter { it.isFile && it.length() == 0L }.forEach { it.delete() }
