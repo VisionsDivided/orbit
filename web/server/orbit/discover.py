@@ -6,7 +6,7 @@ Routes are mounted into the /v1 route table by the app (``Api.routes.update(disc
 same session, Host, Origin and CSRF checks as every other /v1 call.
 
 - Discovery (rows, search, title) works for every signed-in account and is fetched with the admin key; answers are
-  cached (rows 10 minutes, titles 1 hour, bounded). When Seerr cannot be reached, the last answer is served with
+  cached (rows and searches 10 minutes per page, titles 1 hour, title pages 1 minute, bounded). When Seerr cannot be reached, the last answer is served with
   ``"stale": true``; requests then answer 503.
 - Requests are made *as the account's Seerr user* (``X-Api-User``), so Seerr's own permissions, auto-approval and
   quotas apply. An account without a linked Seerr user can browse but not request (409).

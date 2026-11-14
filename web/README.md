@@ -408,7 +408,7 @@ is never changed, so syncs keep every edit.
 | `GET /api/layout` · `POST /api/layout {op, …}` | `group.create {name}`, `group.rename {id, name}`, `group.hide {id, hidden}`, `group.move {id, dir}`, `group.delete {id}`, `channel.rename {key, name}`, `channel.hide {key, hidden}`, `channel.move {group, key, dir}`, `channel.add/remove {group, key}`, `reset` |
 
 ## Tests
-`node --test web/tests/guide.test.mjs web/tests/vod.test.mjs web/tests/reminders.test.mjs web/tests/playfmt.test.mjs web/tests/resume.test.mjs web/tests/livefix.test.mjs web/tests/streamprompt.test.mjs web/tests/signout.test.mjs web/tests/setup.test.mjs`
+`node --test web/tests/guide.test.mjs web/tests/vod.test.mjs web/tests/reminders.test.mjs web/tests/playfmt.test.mjs web/tests/resume.test.mjs web/tests/livefix.test.mjs web/tests/streamprompt.test.mjs web/tests/signout.test.mjs web/tests/setup.test.mjs web/tests/discover.test.mjs`
 and `python -m unittest discover -s web/tests` (security attack cases in `test_security.py`: `file:` / `gopher:` /
 `ftp:` / `data:` / `concat:` sources and streams, loopback, 169.254.169.254, 10.x / 172.16.x / 192.168.x / 100.64.x,
 redirects to them, DNS rebinding, ffmpeg protocol whitelist, CSRF without token / wrong origin / text/plain,

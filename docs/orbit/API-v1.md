@@ -421,6 +421,10 @@ How it works:
   straight from TMDB's public image CDN (no key, but TMDB sees the client's address and which artwork it loads), or
   through `GET /v1/discover/image?p=/<size>/<file>` (the part after `/t/p`), which the web app does: its CSP allows
   only images from its own origin. Then only the server talks to TMDB.
+  Note: the home server's JSON envelope (`sign_images` in `tvbro_server/app.py`) rewrites every `poster` / `backdrop`
+  URL in any answer, `/v1` included, into a signed `/img?u=<url>&s=<signature>` URL, so clients actually receive
+  `/img?u=https%3A%2F%2Fimage.tmdb.org%2F...` for Discover titles. The web app takes the TMDB URL back out and loads it
+  through `/v1/discover/image`; cast and people `photo` URLs are not rewritten.
 
 ## Catalogue: Home, Movies and Shows (Phase 5)
 
