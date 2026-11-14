@@ -82,9 +82,12 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
 
     // Orbit: a channel's own stream format (Default / TS / HLS) per profile, synced through the profile's server prefs
     private var fmtCache: Pair<String, ChannelFormats>? = null
+    /** Bumped on every change: screens that show a channel's format (the guide's HLS tag) recompose. */
+    private val fmtRev = mutableIntStateOf(0)
     /** Whose choices apply: the linked profile, or this TV alone when it is not linked. */
     private fun fmtProfile() = orbit.link?.let { "${it.username}/${it.profile}" } ?: ""
     fun channelFormats(): ChannelFormats {
+        fmtRev.intValue // subscribe
         val p = fmtProfile()
         fmtCache?.let { if (it.first == p) return it.second }
         val raw = store.channelFormats(p)
@@ -96,6 +99,7 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
         val p = fmtProfile()
         val old = channelFormats()
         fmtCache = p to f
+        fmtRev.intValue++
         store.saveChannelFormats(p, f.toJson().toString())
         // a channel playing now whose format changed starts again in the new one (liveGen restarts the players)
         val k = liveKey
