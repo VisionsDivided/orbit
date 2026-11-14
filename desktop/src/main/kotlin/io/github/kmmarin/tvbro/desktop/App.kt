@@ -308,7 +308,12 @@ class AppState(private val scope: CoroutineScope, testSources: List<Source>? = n
         settingsPage = p.getOrNull(3)?.toIntOrNull() ?: 0
         Tab.entries.firstOrNull { it.name == p.getOrNull(1) }?.let { tab = it }
         if (last != null && (p.getOrNull(0) == "full" || settings.lastUi.isEmpty())) playChannel(last)
+        uiRestoreDone = true
     }
+
+    /** [restoreUi] has finished (it runs on the scope after the first load; tests wait for it). */
+    @Volatile internal var uiRestoreDone = false
+        private set
 
     // ---- live ----
     fun playChannel(ch: Channel) {
