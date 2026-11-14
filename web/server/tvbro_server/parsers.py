@@ -131,6 +131,12 @@ class VodItem:
     url: Optional[str] = None
     year: Optional[str] = None
     genre: Optional[str] = None
+    # Orbit catalogue (orbit/catalog.py); not in to_json, so the web app's answers stay as they were.
+    # Trailing fields with defaults: catalogues stored by older versions (catcache) still load.
+    added: Optional[int] = None        # provider's "added" (films) / "last_modified" (series), Unix seconds
+    tmdb: Optional[str] = None         # provider's TMDb id, when it sends one
+    backdrop: Optional[str] = None     # series: first backdrop_path
+    released: Optional[str] = None     # "YYYY-MM-DD" when the provider sends a full date
 
     def to_json(self) -> dict:
         return {
@@ -479,7 +485,7 @@ def parse_movies(raw: bytes, source_id: str, cats: list[XtreamCategory], limit: 
             f"m|{source_id}|{vid}", source_id, "movie", vid, _s(o, "name", "title") or f"Movie {vid}",
             _s(o, "stream_icon", "cover", "movie_image"), cm.get(_s(o, "category_id") or "", "Other"),
             _s(o, "rating", "rating_5based"), _s(o, "container_extension") or "mp4",
-            year=_year(o), genre=_s(o, "genre")))
+            year=_year(o), genre=_s(o, "genre"), added=_unix(o, "added"), tmdb=_tmdb(o), released=_date(o)))
         if len(out) >= limit:
             break
     return out
@@ -497,13 +503,42 @@ def parse_series_list(raw: bytes, source_id: str, cats: list[XtreamCategory], li
         out.append(VodItem(
             f"s|{source_id}|{sid}", source_id, "series", sid, _s(o, "name", "title") or f"Series {sid}",
             _s(o, "cover", "stream_icon"), cm.get(_s(o, "category_id") or "", "Other"),
-            _s(o, "rating", "rating_5based"), "", year=_year(o), genre=_s(o, "genre")))
+            _s(o, "rating", "rating_5based"), "", year=_year(o), genre=_s(o, "genre"),
+            added=_unix(o, "last_modified", "added"), tmdb=_tmdb(o), backdrop=_first_url(o.get("backdrop_path")),
+            released=_date(o)))
         if len(out) >= limit:
             break
     return out
 
 
 _YEAR_IN_NAME = re.compile(r"[(\[](19\d\d|20\d\d)[)\]]")
+_DATE = re.compile(r"^(19|20)\d\d-\d\d-\d\d")
+
+
+def _unix(o: dict, *keys: str) -> Optional[int]:
+    """A Unix time in seconds (providers send it as a string or number); None when missing or absurd."""
+    v = _s(o, *keys)
+    if not v or not v.isdigit():
+        return None
+    n = int(v)
+    return n if 315532800 <= n <= 4102444800 else None      # 1980 .. 2100
+
+
+def _tmdb(o: dict) -> Optional[str]:
+    v = _s(o, "tmdb", "tmdb_id")
+    return v if v and v.isdigit() and v != "0" and len(v) <= 10 else None
+
+
+def _date(o: dict) -> Optional[str]:
+    v = _s(o, "releaseDate", "releasedate", "release_date")
+    return v[:10] if v and _DATE.match(v) else None
+
+
+def _first_url(v) -> Optional[str]:
+    if isinstance(v, list):
+        v = next((x for x in v if isinstance(x, str) and x.strip()), None)
+    s = v.strip() if isinstance(v, str) else ""
+    return s if s.startswith(("http://", "https://")) else None
 
 
 def _year(o: dict) -> Optional[str]:

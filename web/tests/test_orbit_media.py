@@ -561,6 +561,47 @@ class Media(unittest.TestCase):
         self.media._allow(self.alex, hs)("http://192.0.2.60:8096")
         self.assertEqual(hs, {("192.0.2.60", 8096)})
 
+    def test_an_address_being_linked_is_allowed_only_for_that_sign_in(self):
+        """An owner signing in to a LAN server: only that sign-in's own requests may reach it until it is saved;
+        the global allowlist (every other request of the server) never lists it."""
+        seen = []
+        others = []
+
+        def peek(stage):
+            seen.append((stage, NET._host_listed("192.0.2.60", 8096), NET._host_listed("192.0.2.61", 32400)))
+            t = threading.Thread(target=lambda: others.append(NET._host_listed("192.0.2.60", 8096)))
+            t.start()
+            t.join()                                   # another request (thread) at the same moment
+
+        class Fake:
+            label = "Fake"
+
+            @classmethod
+            def sign_in_start(cls, http, base_url, device):
+                peek("start")
+                return {"method": "pin"}, {"base": base_url}
+
+            @classmethod
+            def sign_in_poll(cls, http, state, device):
+                peek("poll-before")
+                state["allow"]("http://192.0.2.61:32400")      # a server found on the way (Plex resources)
+                peek("poll-after")
+                return None
+
+        self.media.kinds = {**self.media.kinds, "jellyfin": Fake}
+        st = self.ok("POST", "/v1/media/connect/start", self.alex, {"kind": "jellyfin", "baseUrl": "http://192.0.2.60:8096"})
+        self.assertNotIn(("192.0.2.60", 8096), self.media.private_hosts())
+        self.assertFalse(NET._host_listed("192.0.2.60", 8096))
+        self.assertEqual(self.ok("POST", "/v1/media/connect/poll", self.alex, {"id": st["id"]})["status"], "pending")
+        self.assertEqual(seen, [("start", True, False), ("poll-before", True, False), ("poll-after", True, True)])
+        self.assertEqual(others, [False, False, False])
+        self.assertFalse(NET._host_listed("192.0.2.61", 32400))
+        self.assertEqual(self.media.private_hosts(), set())
+        # a member's sign-in never gets the address, even inside its own requests
+        seen.clear()
+        self.ok("POST", "/v1/media/connect/start", self.sam, {"kind": "jellyfin", "baseUrl": "http://192.0.2.60:8096"})
+        self.assertEqual(seen, [("start", False, False)])
+
     def test_pending_sign_ins_expire_and_are_capped(self):
         now = [1000.0]
         self.media.clock = lambda: now[0]
@@ -618,7 +659,7 @@ class Migration(unittest.TestCase):
         old.close()
         new = ODB.Database(os.path.join(d, "orbit.db"))
         self.addCleanup(new.close)
-        self.assertEqual(new.version(), 3)
+        self.assertEqual(new.version(), len(ODB.migrations()))
         self.assertTrue(os.path.exists(os.path.join(d, "orbit.db.bak-v2")))
         new.run("INSERT INTO media_connections(id, account_id, kind, base_url, device_id, created) "
                 "VALUES ('c1','a1','jellyfin','http://jf.example.com:8096','orbit-x',1)")

@@ -28,6 +28,7 @@ class Call:
     body: dict = field(default_factory=dict)
     client: str = ""                     # client address, for sign-in throttling
     query: dict = field(default_factory=dict)   # the query string of a GET, first value of each name
+    origin: str = ""                     # "http://<Host>" as the client addressed this server (facade addresses)
 
 
 @dataclass
@@ -44,12 +45,15 @@ class Api:
     def __init__(self, accounts: Accounts, pairings: Optional[Pairings] = None,
                  playlists: Optional[Callable[[], list]] = None,
                  stores: Optional[Callable[[dict], tuple]] = None,
-                 streams: Optional[Callable[[], dict]] = None, media: Optional[MediaServers] = None):
+                 streams: Optional[Callable[[], dict]] = None, media: Optional[MediaServers] = None,
+                 device_view: Optional[Callable[[list, Call], list]] = None):
         self.acc = accounts
         self.streams = streams or (lambda: {"max": 1, "count": 0, "active": []})   # tvBro's StreamRegistry.status()
         self.stores = stores                              # (StateStore, SeriesStore) of a session's profile
         self.pair = pairings or Pairings(accounts)
         self.playlists = playlists or (lambda: [])      # the household's enabled playlists, with their logins
+        # orbit/facade.py: what a linked TV gets instead of the logins (None: the logins themselves)
+        self.device_view = device_view
         A, PR = self.acc, self.pair
         r: dict[tuple[str, str], Callable[[Call], Reply]] = {
             ("GET", "/v1/status"): lambda c: Reply({"accounts": A.enabled(), "setup": not A.enabled()}),
@@ -70,6 +74,10 @@ class Api:
             ("POST", "/v1/accounts/disable"): lambda c: Reply(A.set_disabled(c.sess, c.body.get("id"),
                                                                             c.body.get("disabled"))),
             ("GET", "/v1/device/playlists"): self._device_playlists,
+            ("POST", "/v1/device/name"): lambda c: Reply(A.set_device_name(c.sess, c.body.get("name"))),
+            ("GET", "/v1/devices"): lambda c: Reply({"devices": A.devices(c.sess)}),
+            ("POST", "/v1/devices/rename"): lambda c: Reply(A.rename_device(c.sess, c.body.get("id"), c.body.get("name"))),
+            ("POST", "/v1/devices/unlink"): self._unlink_device,
             ("GET", "/v1/streams"): lambda c: Reply(self.streams()),
             ("GET", "/v1/progress/shows"): lambda c: Reply(PROG.shows_state(self._series(c))),
             ("POST", "/v1/progress/episodes"): lambda c: Reply(PROG.push_episodes(self._series(c), c.body.get("items"))),
@@ -86,10 +94,16 @@ class Api:
                 r[key] = lambda c, fn=fn: self._media(fn(c.sess, c.body, c.query))
         self.media = media
         self.routes = r
+        # routes with an id in the path ("/v1/catalog/collections/<id>"): (method, prefix) -> handler, which reads
+        # the rest of ``call.path`` itself
+        self.prefix_routes: dict[tuple[str, str], Callable[[Call], Reply]] = {}
 
     def handle(self, call: Call) -> Reply:
         self.pair.tick()
         fn = self.routes.get((call.method, call.path))
+        if fn is None:
+            fn = next((f for (m, pre), f in self.prefix_routes.items()
+                       if m == call.method and call.path.startswith(pre) and len(call.path) > len(pre)), None)
         if fn is None:
             return Reply({"error": "not found"}, 404)
         public = call.path in (PUBLIC_GET if call.method == "GET" else PUBLIC_POST)
@@ -136,14 +150,18 @@ class Api:
             raise ApiError(409, "no profile selected")
 
     def _device_playlists(self, c: Call) -> Reply:
-        """Linked TVs only (never a browser): the playlists to play directly from the provider.
+        """Linked TVs only (never a browser): the household's playlists.
 
         Every linked TV gets them, whatever its account's role (the owner wants every household TV to watch IPTV).
-        This means any account can read the provider logins by linking a "TV" (or a script) with its own
-        approval: the household trusts its members with them. Browser sessions never get them."""
+        With hidden provider logins (``device_view``, orbit/facade.py; the default) they point at this server's
+        Xtream facade with a login of the TV's own. Without it they carry the provider logins, and any account can
+        read those by linking a "TV" (or a script) with its own approval. Browser sessions never get them."""
         if c.sess.get("session_kind") != "tv":
             return Reply({"error": "only a linked TV can fetch the playlists"}, 403)
-        return Reply({"playlists": self.playlists()})
+        pl = self.playlists()
+        if self.device_view is not None:
+            pl = self.device_view(pl, c)
+        return Reply({"playlists": pl})
 
     @staticmethod
     def _media(out) -> Reply:
@@ -153,6 +171,10 @@ class Api:
 
     def _change_password(self, c: Call) -> Reply:
         self.acc.change_password(c.sess, c.body.get("current"), c.body.get("password"))
+        return Reply({"ok": True})
+
+    def _unlink_device(self, c: Call) -> Reply:
+        self.acc.unlink_device(c.sess, c.body.get("id"))
         return Reply({"ok": True})
 
     def _revoke(self, c: Call) -> Reply:

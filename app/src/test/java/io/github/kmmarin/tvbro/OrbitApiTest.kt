@@ -37,5 +37,8 @@ class OrbitApiTest {
         val l = OrbitApi.linkFrom("http://192.0.2.10:8750", "sid", "csrf", me)
         assertEquals(listOf("Alex", "alex", "Kids"), listOf(l.account, l.username, l.profile))
         assertEquals(true, l.kids)
+        assertEquals("", l.deviceName)                     // not named yet (or a server before device names)
+        val named = Json.parseToJsonElement("""{"account":{"displayName":"Alex"},"profile":null,"deviceName":"Kitchen"}""").jsonObject
+        assertEquals("Kitchen", OrbitApi.linkFrom("http://192.0.2.10:8750", "sid", "csrf", named).deviceName)
     }
 }

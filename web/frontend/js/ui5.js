@@ -52,6 +52,12 @@ export function itemHref(it) {
   if (ref) return `detail:${ref.kind}:${ref.id}`;
   return 'title:' + encodeURIComponent(it.key);
 }
+/** The My list entry of an item (the /api shape: key, kind, name, poster, id…); key is the catalogue's own key. */
+export function listEntry(it) {
+  const ref = it.vod || iptvRef(it);
+  return { key: it.key, kind: ref ? ref.kind : (it.kind === 'show' ? 'series' : 'movie'), name: it.title, poster: it.poster, id: ref ? ref.id : (it.id || it.key),
+    ext: it.raw && it.raw.ext, rating: it.rating, year: it.year, source: it.source || undefined, conn: it.conn || undefined };
+}
 const titleCache = new Map();
 export function rememberTitle(it) { titleCache.set(it.key, it); if (titleCache.size > 500) titleCache.delete(titleCache.keys().next().value); }
 export function cachedTitle(key) { return titleCache.get(key) || null; }

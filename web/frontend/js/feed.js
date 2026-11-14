@@ -80,6 +80,15 @@ export async function playItem(it) {
       playMovie(m, d);
       return;
     }
+    // a catalogue show with its next episode: play that episode (from where it stopped)
+    if (ref && ref.kind === 'series' && it.next && it.next.id != null) {
+      const s = { id: ref.id, name: it.title, poster: it.poster, key: it.key };
+      rememberItem('series', s);
+      const d = await vodInfo('series', ref.id, true);
+      try { await loadSeriesState(ref.id); } catch {}
+      const ep = (d.episodes || []).find((x) => String(x.id) === String(it.next.id));
+      if (ep) { playEpisode(s, d, ep); return; }
+    }
   } catch (e) { if (!e.cancelled) toast('Could not play: ' + e.message); return; }
   location.hash = itemHref(it);
 }
@@ -120,7 +129,12 @@ export async function continueItems() {
 }
 /** My list (films and shows), optionally one kind ('movie' | 'series'). */
 export function myListItems(kind) {
-  return myList().filter((x) => (kind ? x.kind === kind : x.kind === 'movie' || x.kind === 'series')).map((x) => fromVod(x.kind, x));
+  return myList().filter((x) => (kind ? x.kind === kind : x.kind === 'movie' || x.kind === 'series')).map((x) => {
+    const it = fromVod(x.kind, x);
+    // a Plex / Jellyfin title (saved from the catalogue): no /api detail page; it opens #title:<key>
+    if (x.conn || (x.source && x.source !== 'iptv')) { it.vod = null; it.source = x.source || null; it.conn = x.conn || null; it.id = x.id; }
+    return it;
+  });
 }
 /** The newest page of a VOD kind ('movie' | 'series') from the server, as items. */
 export async function latestItems(kind, cat = '__all', n = 24) {
@@ -129,7 +143,9 @@ export async function latestItems(kind, cat = '__all', n = 24) {
 }
 /** A Continue watching card (landscape) with Resume as OK and a remove menu. */
 export function cwCard(it, o = {}) {
-  const c = landCard(it, { sub: it.sub, onFocus: o.onFocus, onOpen: () => playItem(it) });
+  const n = it.next;
+  const sub = it.sub || (n ? [n.season != null && n.num != null ? `S${n.season} E${n.num}` : null, n.title, it.progress && it.progress.dur && it.progress.secs ? fmtLeft(it.progress.dur - it.progress.secs) : null].filter(Boolean).join(' · ') : undefined);
+  const c = landCard(it, { sub, onFocus: o.onFocus, onOpen: () => playItem(it) });
   onItemMenu(c, () => menu(it.title, [
     { label: '▶ Resume', action: () => playItem(it) },
     { label: 'Open the page', action: () => { location.hash = itemHref(it); } },

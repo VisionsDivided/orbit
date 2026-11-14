@@ -16,7 +16,7 @@ export const ROUTES = {
 };
 /** Item field -> the names the server may use for it (first one present wins). */
 export const FIELDS = {
-  key: ['key', 'id'],
+  key: ['key'],
   kind: ['kind', 'type', 'mediaType'],
   title: ['title', 'name'],
   year: ['year'],
@@ -76,6 +76,10 @@ export function normalizeItem(raw) {
     progress,
     overview: pick(raw, FIELDS.overview) || '',
     runtime: num(pick(raw, FIELDS.runtime)),
+    id: raw.id != null ? String(raw.id) : null,
+    conn: raw.conn != null ? String(raw.conn) : null,
+    locked: !!raw.locked,
+    next: raw.next && typeof raw.next === 'object' ? raw.next : null,
     raw,
   };
 }
@@ -87,7 +91,7 @@ export function normalizeRows(rows) {
 export function normalizeCollection(c) {
   if (!c || typeof c !== 'object' || c.id == null) return null;
   return { id: String(c.id), name: String(c.name || c.title || ''), count: num(c.count) || 0, poster: c.poster || null, backdrop: c.backdrop || null,
-    colors: Array.isArray(c.colors) && c.colors.length ? c.colors : null, overview: c.overview || c.summary || '', raw: c };
+    colors: Array.isArray(c.colors) && c.colors.length ? c.colors : null, overview: c.overview || c.summary || '', source: c.source || null, kind: c.kind ? normKind(c.kind) : null, raw: c };
 }
 
 /**
@@ -100,6 +104,7 @@ export function iptvRef(it) {
   const p = String(it.key).split('|');
   if (p[0] !== 'm' && p[0] !== 's') return null;
   const kind = p[0] === 'm' ? 'movie' : 'series';
+  if (it.id && !it.conn) return { kind, id: String(it.id) };    // the catalogue sends the /api VOD id itself
   if (p.length === 2) return p[1] ? { kind, id: p[1] } : null;
   const src = p[1], raw = p.slice(2).join('|');
   if (!raw) return null;
@@ -129,7 +134,7 @@ export function forgetMissing() { missingUntil.clear(); }
 export const catalog = {
   async home() {
     const r = await getJson(ROUTES.home(), 'home'); if (r.missing) return null;
-    return { rows: normalizeRows(r.data.rows) };
+    return { hero: items(r.data.hero), rows: normalizeRows(r.data.rows) };
   },
   async recommended(kind) {
     const r = await getJson(ROUTES.recommended(pathKind(kind)), 'recommended'); if (r.missing) return null;

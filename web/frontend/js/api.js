@@ -5,6 +5,7 @@
 // short-lived in-memory view; media URLs are signed by the server.
 
 import { detectEnv, wantFormat, clientCaps } from './playfmt.js';
+import { claimSlot, askWhichStream } from './streamprompt.js';
 
 /** 'hls' on clients without Media Source Extensions (iPhone / iPad), else 'ts'. */
 const FMT = wantFormat(detectEnv());
@@ -39,11 +40,19 @@ export function deviceLabel() {
   return `${br}${os ? ' on ' + os : ''}`;
 }
 let hbTimer = null, streaming = false;
-/** Claim this tab's stream slot (the server may stop the oldest other tab). Await before playing. */
-export async function beginStream(what) {
+/** Claim this tab's stream slot. Await before playing. When every slot is in use (Orbit), the player asks which
+ *  stream to stop (streamprompt.js); opts.ask === false (the preview) never stops anyone and just stays off.
+ *  Resolves true, false (every slot is held by a recording, or full for the preview) or 'cancel' (the person
+ *  chose Cancel). */
+export async function beginStream(what, opts = {}) {
   streaming = true;
   try {
-    const r = await req('/api/stream/start', { method: 'POST', body: JSON.stringify({ sid: SID, label: deviceLabel(), what: what || '' }) });
+    // /v1/streams only in Orbit mode (plain fetch: a 401 in tvBro mode must not open the sign-in page)
+    const status = async () => { const x = await fetch('/v1/streams', { credentials: 'same-origin' }); return x.ok ? x.json() : null; };
+    const start = (replace) => req('/api/stream/start', { method: 'POST', body: JSON.stringify({ sid: SID, label: deviceLabel(), what: what || '', ...(replace ? { replace } : {}) }) });
+    const r = await claimSlot({ status, start, ask: askWhichStream, sid: SID, interactive: opts.ask !== false });
+    if (r && r.cancelled) { streaming = false; return 'cancel'; }
+    if (r && r.full) { streaming = false; return false; }
     if (r && r.stopped) { streaming = false; window.dispatchEvent(new CustomEvent('tvbro-replaced', { detail: r.stopped })); return false; }
   } catch {}
   clearInterval(hbTimer);

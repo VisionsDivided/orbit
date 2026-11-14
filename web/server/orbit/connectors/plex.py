@@ -13,7 +13,7 @@ import urllib.parse
 from typing import Optional
 
 from .base import (DEVICE_NAME, LIST_KINDS, PAGE, PRODUCT, STATES, VERSION, Connector, ConnectorError, Http, Linked,
-                   item, normalize_base_url, safe_id, ticks)
+                   colors, item, normalize_base_url, safe_id, ticks)
 
 PLEX_TV = "https://plex.tv"            # tests point this at a mock
 LINK_URL = "https://plex.tv/link"
@@ -22,6 +22,7 @@ KIND = {"movie": "movie", "show": "series", "season": "season", "episode": "epis
 TYPE_NUM = {"movie": 1, "series": 2}
 LIB_KIND = {"movie": "movie", "show": "series"}
 MAX_SERVERS = 10
+MAX_COLLECTIONS = 300                 # per server, for the catalogue
 
 
 def client_headers(device_id: str, token: Optional[str] = None) -> dict:
@@ -131,7 +132,18 @@ class Plex(Connector):
                               (kind in ("series", "season") and d.get("leafCount") and d.get("leafCount") == d.get("viewedLeafCount"))},
                     seriesId=str(series) if series else None,
                     season=d.get("parentIndex") if kind == "episode" else (d.get("index") if kind == "season" else None),
-                    episode=d.get("index") if kind == "episode" else None)
+                    episode=d.get("index") if kind == "episode" else None,
+                    genres=[(g or {}).get("tag") for g in d.get("Genre") or [] if isinstance(g, dict)],
+                    added=d.get("addedAt"), released=d.get("originallyAvailableAt"), colors=self._colors(d),
+                    lastViewed=d.get("lastViewedAt"))
+
+    @staticmethod
+    def _colors(d: dict):
+        """Plex's UltraBlur backdrop colours (top left, bottom right), when the server sends them."""
+        u = d.get("UltraBlurColors")
+        if isinstance(u, list):
+            u = u[0] if u else None
+        return colors(u.get("topLeft"), u.get("bottomRight")) if isinstance(u, dict) else None
 
     def _items(self, ans) -> list:
         return [self._norm(d) for d in _mc(ans).get("Metadata") or [] if isinstance(d, dict) and d.get("ratingKey")]
@@ -180,6 +192,30 @@ class Plex(Connector):
 
     def children(self, item_id: str) -> list:
         return [i for i in self._children(item_id) if i["kind"] in ("season", "episode")]
+
+    # ---- the catalogue ----
+    def collections(self) -> list:
+        out = []
+        for lib in self.list_libraries():
+            if lib["kind"] not in ("movie", "series"):
+                continue
+            ans = self._get(f"/library/sections/{safe_id(lib['id'], 'library')}/collections")
+            for d in _mc(ans).get("Metadata") or []:
+                if len(out) >= MAX_COLLECTIONS:
+                    return out
+                if not isinstance(d, dict) or not d.get("ratingKey"):
+                    continue
+                cid = safe_id(d["ratingKey"])
+                kids = self._items(self._get(f"/library/collections/{cid}/children"))
+                out.append({"id": cid, "title": str(d.get("title") or "")[:200], "kind": lib["kind"],
+                            "poster": d.get("thumb") or None, "backdrop": d.get("art") or None, "colors": self._colors(d),
+                            "items": [i["id"] for i in kids if i["kind"] in ("movie", "series")]})
+        return out
+
+    def continue_items(self) -> list:
+        """On Deck: films in progress and the next episode of shows being watched."""
+        return [i for i in self._items(self._get("/library/onDeck", {"includeGuids": 1}))
+                if i["kind"] in ("movie", "episode")]
 
     # ---- playing ----
     def playback(self, item_id: str) -> dict:

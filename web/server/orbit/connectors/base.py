@@ -16,9 +16,11 @@ Items are normalized to one shape (``item``); artwork is returned as a server-re
 /v1 image route fetches with the token (``image``), so a token never reaches a page for a picture."""
 from __future__ import annotations
 
+import calendar
 import json
 import re
 import socket
+import time
 import urllib.error
 import urllib.parse
 from dataclasses import dataclass, field
@@ -134,7 +136,40 @@ def item(id: str, kind: str, title: str, **kw) -> dict:
         "progress": {"secs": int(prog.get("secs") or 0), "dur": int(prog.get("dur") or 0),
                      "watched": bool(prog.get("watched"))},
         "seriesId": kw.get("seriesId"), "season": kw.get("season"), "episode": kw.get("episode"),
+        # for the catalogue (orbit/catalog.py): genre names, when it was added (Unix seconds), release date
+        # ("YYYY-MM-DD"), two backdrop colours ("#rrggbb", Plex UltraBlur) and when the user last played it
+        "genres": [str(g)[:60] for g in (kw.get("genres") or []) if g][:10],
+        "added": int(ticks(kw.get("added"))) or None, "released": _date(kw.get("released")),
+        "colors": kw.get("colors"), "lastViewed": int(ticks(kw.get("lastViewed"))) or None,
     }
+
+
+def _date(v) -> Optional[str]:
+    s = str(v or "")[:10]
+    return s if re.fullmatch(r"(19|20)\d\d-\d\d-\d\d", s) else None
+
+
+def iso_time(v) -> Optional[int]:
+    """Unix seconds of an ISO 8601 time ("2024-05-01T12:00:00.0000000Z"), or None."""
+    s = str(v or "")
+    try:
+        return calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        return None
+
+
+_HEX = re.compile(r"^[0-9a-fA-F]{6}$")
+
+
+def colors(c1, c2) -> Optional[list]:
+    """["#rrggbb", "#rrggbb"] from two hex colours (with or without "#"), else None."""
+    out = []
+    for c in (c1, c2):
+        s = str(c or "").lstrip("#")
+        if not _HEX.match(s):
+            return None
+        out.append("#" + s.lower())
+    return out
 
 
 class Http:
@@ -257,6 +292,16 @@ class Connector:
 
     def mark_watched(self, item_id: str, watched: bool) -> None:
         raise NotImplementedError
+
+    # ---- the catalogue (orbit/catalog.py) ----
+    def collections(self) -> list:
+        """[{"id", "title", "kind": "movie"|"series"|None, "poster", "backdrop", "colors", "items": [item id]}]:
+        the server's own collections (Plex collections, Jellyfin box sets)."""
+        return []
+
+    def continue_items(self) -> list:
+        """[item]: films in progress and next episodes (with ``seriesId``) for this user, newest first."""
+        return []
 
     def image(self, path: str) -> tuple:
         """(bytes, content type) of an artwork path, fetched with the token; images only, capped."""

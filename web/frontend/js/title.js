@@ -7,7 +7,7 @@
 
 import { toggleMyList, inMyList } from './api.js';
 import { h, toast, spatialMove } from './util.js';
-import { heroEl, btn5, metaFor, srcBadge, emptyState, cachedTitle, legend, colorKey, fmtLeft } from './ui5.js';
+import { heroEl, btn5, metaFor, srcBadge, emptyState, cachedTitle, legend, colorKey, fmtLeft, listEntry } from './ui5.js';
 import { setScene, plainScene } from './backdrop.js';
 import { sceneOf } from './feed.js';
 
@@ -23,7 +23,7 @@ export function titleScreen(main, nav, key) {
     return { onKey: (e) => { if (e.key.startsWith('Arrow')) { if (!spatialMove(scr, e.key)) nav.focusActive(); return true; } return false; }, focusIn() { const f = scr.querySelector('.focusable'); if (f) f.focus(); } };
   }
   setScene(sceneOf(it));
-  const entry = () => ({ key: it.key, kind: it.kind === 'show' ? 'series' : 'movie', name: it.title, poster: it.poster, id: it.key, rating: it.rating, year: it.year, source: it.source });
+  const entry = () => listEntry(it);
   const toggle = () => { const a = toggleMyList(entry()); toast(a ? 'Added to My list' : 'Removed from My list'); draw(); };
   function draw() {
     const where = { plex: 'Plex', jellyfin: 'Jellyfin' }[it.source] || 'your media server';

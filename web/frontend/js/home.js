@@ -6,7 +6,7 @@
 
 import { catalog } from './catalog.js';
 import { h, spatialMove } from './util.js';
-import { heroEl, rowEl, posterCard, skHero, skRow, emptyState, btn5, colorKey } from './ui5.js';
+import { heroEl, rowEl, posterCard, skHero, skRow, emptyState, btn5, colorKey, listEntry } from './ui5.js';
 import { featured, heroParts, continueItems, myListItems, latestItems, cwCard, favChannelCards, playItem } from './feed.js';
 import { plainScene } from './backdrop.js';
 import { toggleMyList, inMyList } from './api.js';
@@ -26,7 +26,7 @@ export function homeScreen(main, nav) {
   const onFocus = (it) => feat.feature(it);
   const isCw = (id, title) => /continue|resume/i.test(id + ' ' + title);
 
-  function build(list) {
+  function build(list, heroes = []) {
     if (!alive) return;
     rows.replaceChildren();
     hero.el.querySelectorAll('.skel').forEach((x) => x.remove());
@@ -37,6 +37,7 @@ export function homeScreen(main, nav) {
       rows.append(rowEl(r.title, cards, { posters: !cw && !r.cards, id: r.id }));
       if (!first && r.items && r.items.length) { first = r.items.find((x) => x.backdrop) || r.items[0]; first._label = cw ? 'Continue watching' : 'Featured tonight'; }
     }
+    if (heroes[0]) { first = heroes[0]; first._label = 'Featured tonight'; }
     if (first) feat.feature(first, true);
     else {
       hero.el.replaceChildren();
@@ -49,7 +50,7 @@ export function homeScreen(main, nav) {
     let data = null;
     try { data = await catalog.home(); } catch (e) { data = null; }
     if (!alive) return;
-    if (data && data.rows.length) { build(data.rows); return; }
+    if (data && (data.rows.length || data.hero.length)) { build(data.rows, data.hero); return; }
     // older server: the rows from /api
     const [cw, films, shows] = await Promise.all([
       continueItems().catch(() => []),
@@ -76,7 +77,7 @@ export function homeScreen(main, nav) {
       if ((e.key === 'm' || e.key === 'M' || e.key === 'ContextMenu') && document.activeElement && document.activeElement.classList.contains('has-menu')) {
         document.activeElement.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); return true; }
       const it = feat.current();
-      if (it && colorKey(e, [{ color: 'red', action: () => { const a = toggleMyList({ key: it.key, kind: it.vod ? it.vod.kind : it.kind, name: it.title, poster: it.poster, id: it.vod ? it.vod.id : it.key, rating: it.rating, year: it.year }); toast(a ? 'Added to My list' : 'Removed from My list'); } },
+      if (it && colorKey(e, [{ color: 'red', action: () => { const a = toggleMyList(listEntry(it)); toast(a ? 'Added to My list' : 'Removed from My list'); } },
         { color: 'green', action: () => playItem(it) }])) return true;
       return false;
     },

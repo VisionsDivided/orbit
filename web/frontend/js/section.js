@@ -7,11 +7,11 @@
 // from the /api catalogue (categories stand in for genres) and Collections says it needs the update.
 // Routes: #movies[:browse|:collections|:collection:<id>], the same with #series for shows.
 
-import { catalog, SORTS, SOURCES } from './catalog.js';
+import { catalog, SORTS, SOURCES, iptvRef } from './catalog.js';
 import { api, cacheGet, cacheSet, toggleMyList, inMyList } from './api.js';
 import { h, toast, spatialMove, menu, onItemMenu } from './util.js';
 import { uiLoad, uiSave } from './uistate.js';
-import { heroEl, rowEl, posterCard, landCard, skHero, skRow, skGrid, emptyState, btn5, ic, srcBadge, imgUrl, legend, colorKey, itemHref, fromVod } from './ui5.js';
+import { heroEl, rowEl, posterCard, landCard, skHero, skRow, skGrid, emptyState, btn5, ic, srcBadge, imgUrl, legend, colorKey, itemHref, fromVod, listEntry } from './ui5.js';
 import { featured, heroParts, continueItems, myListItems, latestItems, cwCard, playItem, enrich, sceneOf } from './feed.js';
 import { setScene, settle, plainScene } from './backdrop.js';
 import { markSeries, rememberItem } from './vod.js';
@@ -263,17 +263,17 @@ export function sectionScreen(main, kind, nav, arg = '') {
   }
 
   // ---------------------------------------------------------------- cards and keys
-  function myListEntry(it) { return { key: it.key, kind: it.vod ? it.vod.kind : (it.kind === 'show' ? 'series' : 'movie'), name: it.title, poster: it.poster, id: it.vod ? it.vod.id : it.key, ext: it.raw && it.raw.ext, rating: it.rating, year: it.year }; }
-  function toggleList(it) { const a = toggleMyList(myListEntry(it)); toast(a ? '★ Added to My list' : 'Removed from My list'); }
+  function toggleList(it) { const a = toggleMyList(listEntry(it)); toast(a ? '★ Added to My list' : 'Removed from My list'); }
   function itemMenu(it) {
     const items = [
       { label: 'Open', action: () => { location.hash = itemHref(it); } },
       { label: '▶ Play', action: () => playItem(it) },
       { label: inMyList(it.key) ? '★ Remove from My list' : '☆ Add to My list', action: () => toggleList(it) },
     ];
-    if (it.vod && it.vod.kind === 'series') {
-      items.push({ label: '✓ Mark the show as watched', action: () => markSeries(it.vod.id, true) });
-      items.push({ label: '↺ Mark the show as unwatched', action: () => markSeries(it.vod.id, false) });
+    const ref = it.vod || iptvRef(it);
+    if (ref && ref.kind === 'series') {
+      items.push({ label: '✓ Mark the show as watched', action: () => markSeries(ref.id, true) });
+      items.push({ label: '↺ Mark the show as unwatched', action: () => markSeries(ref.id, false) });
     }
     menu(it.title || '', items);
   }
