@@ -261,6 +261,11 @@ class Discover(unittest.TestCase):
             self.assertEqual(self.call(self.owner, "POST", "/v1/discover/settings",
                                        {"baseUrl": self.seerr.base + "/api/v1"})[0], 200)
             self.assertEqual(self.cfg.get()["apiKey"], KEY)
+            # another server without the key typed again: refused, so the saved key never goes to a new address
+            code, j = self.call(self.owner, "POST", "/v1/discover/settings", {"baseUrl": "http://seerr-other.example.com:5055"})
+            self.assertEqual(code, 400)
+            self.assertIn("API key again", j["error"])
+            self.assertTrue(self.cfg.get()["baseUrl"].startswith(self.seerr.base))
             # every answer and the file on disk are free of the key
             for who in (self.owner, self.sam):
                 for path in ("/v1/discover/status", "/v1/discover/rows", "/v1/discover/users"):

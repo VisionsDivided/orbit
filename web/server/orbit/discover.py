@@ -362,7 +362,12 @@ class Discover:
             base = S.clean_base_url(b.get("baseUrl"))
             key_in = b.get("apiKey")
             if (key_in is None or key_in == "") and old.get("apiKey"):
-                key = old["apiKey"]                          # keep the saved key when only the address changes
+                # the saved key is kept only for the same server: sending it to a new address needs it typed again
+                # (an admin could otherwise point it at their own server and read the key, which nobody may see)
+                if S.host_port(base) != S.host_port(old.get("baseUrl") or "") or \
+                        base.split(":", 1)[0].lower() != (old.get("baseUrl") or "").split(":", 1)[0].lower():
+                    raise ApiError(400, "enter the API key again for a new Seerr address")
+                key = old["apiKey"]
             else:
                 key = S.clean_api_key(key_in)
         except ValueError as e:
