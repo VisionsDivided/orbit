@@ -27,14 +27,16 @@ fun signingValue(key: String, env: String): String? =
     System.getenv(env)?.takeIf { it.isNotBlank() } ?: keystoreProps.getProperty(key)?.takeIf { it.isNotBlank() }
 
 // In-app update check against GitHub Releases. -Ptvbro.updateCheck=false builds it out (F-Droid builds).
+// Orbit: off by default until Orbit has its own release feed (tvBro's releases are a different app).
 val updateRepo = (findProperty("tvbro.updateRepo") as String?) ?: "kmmarin/tvBro"
-val updateCheck = ((findProperty("tvbro.updateCheck") as String?) ?: "true").toBoolean()
+val updateCheck = ((findProperty("tvbro.updateCheck") as String?) ?: "false").toBoolean()
 
 android {
     namespace = "io.github.kmmarin.tvbro"
     compileSdk = 34
     defaultConfig {
-        applicationId = "io.github.kmmarin.tvbro"
+        // Orbit's own app ID, so it installs beside tvBro. The Kotlin namespace stays tvBro's to keep upstream merges easy.
+        applicationId = "io.github.visionsdivided.orbit"
         minSdk = 24 // Android 7.0; Fire TV Stick (Fire OS 6 = Android 7.1, armv7) included
         targetSdk = 34
         versionCode = versionCodeOf(tvbroVersion)
@@ -54,6 +56,10 @@ android {
         }
     }
     buildTypes {
+        debug {
+            applicationIdSuffix = ".dev" // dev builds install beside a release build
+            resValue("string", "app_name", "Orbit Dev")
+        }
         release {
             isMinifyEnabled = true // R8
             isShrinkResources = true
