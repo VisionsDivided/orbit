@@ -64,6 +64,7 @@ from orbit import discover as ODISC, seerr as OSEERR    # Orbit: Seerr discover 
 from orbit import sync as OSYNC                          # Orbit: cheap change check and batches for TVs
 from orbit.media import MediaServers, TokenVault                # Orbit: Plex / Jellyfin links per account
 from orbit import facade as OFACADE                      # Orbit: hidden provider logins for linked TVs (/xt/)
+from orbit import catalog as OCAT                        # Orbit: Home / Movies / Shows catalogue (Phase 5)
 
 try:                                    # deterministic authenticated encryption for /seg URLs
     from cryptography.hazmat.primitives.ciphers.aead import AESSIV
@@ -1030,6 +1031,15 @@ class App:
         self.discover = ODISC.Discover(self.orbit, OSEERR.SeerrConfig(DATA_DIR))
         self.v1.routes.update(self.discover.routes())
         self.v1.routes.update(OSYNC.routes(self.profiles.for_session))   # /v1/sync: revision check, batches
+        # Orbit: /v1/catalog (Home, Movies, Shows): IPTV VOD + the account's Plex / Jellyfin + the profile's state
+        self.catalog = OCAT.Catalog(
+            lambda: [(p.sid, p.vod) for p in self.sources.enabled()], self.profiles.for_session, media=self.media,
+            kids=lambda pid: bool((self.orbit.db.one("SELECT kids FROM profiles WHERE id=?", (pid,)) or (0,))[0]),
+            locked=self._catalog_locked,
+            tmdb=OCAT.TmdbCollections(os.path.join(DATA_DIR, "catalog-tmdb.json"), self._seerr_client),
+            ensure_iptv=lambda: [p.ensure_vod() for p in self.sources.enabled()])
+        self.v1.routes.update(self.catalog.routes())
+        self.v1.prefix_routes.update(self.catalog.prefix_routes())
         NET.set_allow_private(lambda: bool(self.settings.get("allowLanSources")))
         # Orbit: the LAN servers the household configured (Plex / Jellyfin links, Seerr), exact host and port only
         NET.set_private_hosts(lambda: self.media.private_hosts() | self.discover.private_hosts())
@@ -1045,6 +1055,26 @@ class App:
         if not ch:
             return []
         return [(p.start, p.stop, p.title) for p in self.sources.programmes(ch, frm, to)]
+
+    def _catalog_locked(self) -> frozenset:
+        """Orbit catalogue: {(kind, source id, category name)} of the VOD categories locked with the parental PIN
+        (the same rule as Handler._vod_lock_pred), or empty while no PIN is set."""
+        PA = self.parental
+        if not PA.active() or not PA.data["vodCats"]:
+            return frozenset()
+        lv = set(PA.data["vodCats"])
+        out = set()
+        for p in self.sources.enabled():
+            for kind, ck in (("movie", "movie_cats"), ("show", "series_cats")):
+                for c in p.vod.get(ck, []):
+                    if group_id(p.sid, c.category_id) in lv:
+                        out.add((kind, p.sid, c.category_name))
+        return frozenset(out)
+
+    def _seerr_client(self):
+        """Orbit catalogue: a Seerr client for TMDb collections, or None while Seerr is not set up."""
+        d = self.discover.cfg.get()
+        return OSEERR.SeerrClient(d["baseUrl"], d["apiKey"]) if d.get("baseUrl") and d.get("apiKey") else None
 
     def _device_playlists(self) -> list[dict]:
         """Orbit: the enabled playlists with their logins, for a linked TV (orbit/api.py checks that)."""
@@ -3135,6 +3165,7 @@ def main():
             time.sleep(60)
             try:
                 APP.sources.tick()
+                APP.catalog.check()             # Orbit: re-index the catalogue (in the background) when it changed
             except Exception:                       # noqa: BLE001
                 LOG.exception("scheduler")
     threading.Thread(target=scheduler, daemon=True, name="scheduler").start()

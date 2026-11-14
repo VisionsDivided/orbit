@@ -12,10 +12,12 @@ import urllib.parse
 from typing import Optional
 
 from .base import (DEVICE_NAME, LIST_KINDS, PAGE, PRODUCT, STATES, VERSION, Connector, ConnectorError, Http, Linked,
-                   item, normalize_base_url, safe_id, ticks)
+                   iso_time, item, normalize_base_url, safe_id, ticks)
 
 TICKS = 10_000_000                     # Jellyfin times are 100 ns ticks
-FIELDS = "Overview,ProviderIds,ProductionYear,CommunityRating,RunTimeTicks,UserData,ImageTags,BackdropImageTags"
+FIELDS = ("Overview,ProviderIds,ProductionYear,CommunityRating,RunTimeTicks,UserData,ImageTags,BackdropImageTags,"
+          "Genres,DateCreated,PremiereDate")
+MAX_COLLECTIONS = 300                 # box sets, for the catalogue
 KIND = {"Movie": "movie", "Series": "series", "Season": "season", "Episode": "episode"}
 LIST_TYPES = {"movie": "Movie", "series": "Series"}
 LIB_KIND = {"movies": "movie", "tvshows": "series"}
@@ -130,7 +132,10 @@ class Jellyfin(Connector):
                               "watched": ud.get("Played")},
                     seriesId=series,
                     season=d.get("ParentIndexNumber") if kind == "episode" else (d.get("IndexNumber") if kind == "season" else None),
-                    episode=d.get("IndexNumber") if kind == "episode" else None)
+                    episode=d.get("IndexNumber") if kind == "episode" else None,
+                    genres=d.get("Genres") if isinstance(d.get("Genres"), list) else None,
+                    added=iso_time(d.get("DateCreated")), released=d.get("PremiereDate"),
+                    lastViewed=iso_time(ud.get("LastPlayedDate")))
 
     def _items(self, ans) -> list:
         return [self._norm(d) for d in ((ans or {}).get("Items") or []) if isinstance(d, dict) and d.get("Id")]
@@ -173,6 +178,30 @@ class Jellyfin(Connector):
             raise ConnectorError(404, "Jellyfin: that season has no series")
         return self._items(self._get(f"/Shows/{safe_id(season['seriesId'])}/Episodes",
                                      {"seasonId": season_id, "userId": self.user_id, "Fields": FIELDS}))
+
+    # ---- the catalogue ----
+    def collections(self) -> list:
+        ans = self._get(f"/Users/{self._user()}/Items", {"IncludeItemTypes": "BoxSet", "Recursive": "true",
+                                                         "Fields": FIELDS, "Limit": MAX_COLLECTIONS})
+        out = []
+        for d in (ans or {}).get("Items") or []:
+            if not isinstance(d, dict) or not d.get("Id"):
+                continue
+            box = self._norm(d)
+            kids = self._items(self._get(f"/Users/{self._user()}/Items", {"ParentId": safe_id(d["Id"]), "Fields": FIELDS}))
+            kinds = {i["kind"] for i in kids}
+            out.append({"id": box["id"], "title": box["title"][:200],
+                        "kind": "movie" if kinds == {"movie"} else ("series" if kinds == {"series"} else None),
+                        "poster": box["poster"], "backdrop": box["backdrop"], "colors": None,
+                        "items": [i["id"] for i in kids if i["kind"] in ("movie", "series")]})
+        return out
+
+    def continue_items(self) -> list:
+        """Films and episodes in progress (Resume), then the next episode of each show being watched (NextUp)."""
+        res = self._items(self._get(f"/Users/{self._user()}/Items/Resume", {"Fields": FIELDS, "Limit": 50,
+                                                                           "MediaTypes": "Video"}))
+        nxt = self._items(self._get("/Shows/NextUp", {"userId": self.user_id, "Fields": FIELDS, "Limit": 50}))
+        return [i for i in res + nxt if i["kind"] in ("movie", "episode")]
 
     # ---- playing ----
     def playback(self, item_id: str) -> dict:

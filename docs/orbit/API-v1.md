@@ -231,7 +231,9 @@ Objects:
 - `Library`: `{"id", "title", "kind": "movie"|"series"|"other", "conn", "source", "serverName"}`
 - `Item`: `{"id", "conn", "source": "plex"|"jellyfin", "kind": "movie"|"series"|"season"|"episode", "title", "year", "overview",
   "poster", "backdrop", "runtime", "rating", "guids": {"tmdb", "imdb", "tvdb"}, "progress": {"secs", "dur", "watched"},
-  "seriesId", "season", "episode"}`. Times in seconds; missing values are `null`. `poster` / `backdrop` are
+  "seriesId", "season", "episode", "genres": [..], "added", "released", "colors", "lastViewed"}`. Times in seconds; missing values are `null`.
+  `genres`, `added` (Unix seconds), `released` (`"YYYY-MM-DD"`), `colors` (Plex UltraBlur, see the catalogue) and
+  `lastViewed` (Unix seconds) were added for the catalogue (Phase 5). `poster` / `backdrop` are
   `/v1/media/image?...` URLs on this server (or `null`). Ids are the media server's, opaque; they are only meaningful
   together with `conn`.
 
@@ -342,3 +344,76 @@ How it works:
 - **Privacy note:** `poster` and `backdrop` are full `https://image.tmdb.org/t/p/...` URLs, so clients load artwork
   straight from TMDB's public image CDN (no key, but TMDB sees the client's address and which artwork it loads). A
   later option can proxy them through the server's image cache.
+
+## Catalogue: Home, Movies and Shows (Phase 5)
+
+The redesign's Home, Movies and Shows screens. Server code: `web/server/orbit/catalog.py` (indexes, rows, routes)
+and `web/server/orbit/franchise.py` (IPTV film collections). All routes are `GET`, signed in, and answer for the
+**session's profile** (409 `"no profile selected"` without one).
+
+Sources: the household's IPTV films and series (the playlists' VOD catalogues, as the web app already loads and
+stores them), the signed-in **account's** Plex / Jellyfin libraries (`/v1/media` connections; every profile of the
+account sees the same media-server user), and the profile's My list, film resume points and show progress.
+
+`Item`:
+`{"key", "kind": "movie"|"show", "title", "year", "poster", "backdrop", "rating", "genres": [..], "source": "iptv"|"plex"|"jellyfin",
+"added", "released", "colors": [c1, c2]|null, "progress": {"secs", "dur"}|null, "id", "conn", "locked", "next"?}`
+
+- `key`: the My list / resume key. IPTV: `m|p0|7` (film), `s|p0|7` (show), as the TV and web already use.
+  Plex / Jellyfin: `m|<connection id>|<item id>`, `s|<connection id>|<item id>` (the middle part is a `/v1/media`
+  connection id instead of a playlist id `p<N>`). Put an Item in My list with exactly this key.
+- `id`: the item's own id: the IPTV VOD id of `/api/vod/*` and `/v1/progress` (`7`, or `p1~7` for other playlists),
+  or the media server's item id. `conn`: the media connection id (Plex / Jellyfin), else `null`. Play IPTV with `id`,
+  Plex / Jellyfin with `POST /v1/media/playback {"conn", "id"}`.
+- `title`: a trailing `(YYYY)` is dropped. `year`: integer or null. `rating`: 0–10 (one decimal) or null.
+  `added`: Unix seconds (the provider's `added` / series `last_modified`, Plex `addedAt`, Jellyfin `DateCreated`)
+  or null. `released`: `"YYYY-MM-DD"` when known, else null (sorting falls back to `year`).
+- `poster` / `backdrop`: IPTV artwork comes as the server's signed `/img?...` URLs (like the rest of the web API);
+  Plex / Jellyfin as `/v1/media/image?...`. IPTV films have no backdrop; IPTV series often do.
+- `colors`: the two backdrop colours (`"#rrggbb"`) for the colour-matched background, from Plex's
+  `UltraBlurColors` (top-left, bottom-right) when the server sends them; otherwise `null` and clients compute
+  them from the image (Palette on Android, canvas on web).
+- `progress`: a film's resume point (the profile's resume scope, or Plex / Jellyfin's own); a show's next episode
+  (`secs` is where that episode stopped, 0 if not started). `null` otherwise.
+- `next` (shows only): `{"id", "season", "num", "title"}` of the next episode to watch, or null.
+- `locked`: true for an IPTV item in a VOD category locked with the parental PIN (playing still asks for it).
+
+| Path | Query → Answer |
+|---|---|
+| `/v1/catalog/home` | → `{"hero": [Item], "rows": [Row]}`: rows `continue` (films with a resume point and shows with a next episode, newest first), `mylist`, `recent`, `released`, up to two `genre:<name>`, `unwatched`. Films and shows mixed. |
+| `/v1/catalog/movies/recommended`, `/v1/catalog/shows/recommended` | → `{"hero": [Item], "rows": [Row]}`: rows `continue`, `recent` (Recently added), `released` (Recently released), up to three `genre:<name>` ("Top in Drama"), `unwatched` (Top unwatched). |
+| `/v1/catalog/movies/browse`, `/v1/catalog/shows/browse` | `?source=all\|local\|iptv` (also `plex`, `jellyfin`; default `all`) `&genre=` (a name from `genres`, case-insensitive) `&sort=added\|released\|title\|rating` (default `added`) `&offset=` (default 0) `&limit=` (1–200, default 60) → `{"total", "genres": [..], "items": [Item]}`. `total` counts every match; `genres` lists the genres of the kind and source (before the genre filter), A to Z. 400 for an unknown source or sort, or limit / offset out of range. |
+| `/v1/catalog/movies/collections`, `/v1/catalog/shows/collections` | → `{"collections": [Collection]}`, A to Z |
+| `/v1/catalog/collections/{id}` | → `{"collection": Collection, "items": [Item]}` in release order. 404 when the id is unknown *for you* (another account's Plex collection, or one a kids profile may not see). |
+
+- `Row`: `{"id", "title", "items": [Item]}`, at most 24 items. Rows without items are left out. Ids: `continue`,
+  `mylist`, `recent`, `released`, `genre:<genre in lower case>`, `unwatched`.
+- `hero`: up to 6 Items for the cinematic header: recently added ones with a backdrop, best rated first.
+- `Collection`: `{"id", "name", "count", "poster", "backdrop", "colors", "source", "kind": "movie"|"show"}`. Artwork
+  is the collection's own (Plex / Jellyfin, TMDb) or that of its first item. Ids are opaque (`[A-Za-z0-9._-]`).
+
+How rows are chosen:
+- **Recently added**: newest `added` first (items without one are left out). **Recently released**: newest `released`
+  / `year` first.
+- **Top in <genre>**: best rated items of a genre. The genres are the profile's most watched ones (genres of films it
+  has watched or started and shows it has watched episodes of), filled up with the largest genres of the catalogue;
+  a genre needs at least 3 rated items.
+- **Top unwatched**: best rated items the profile has not watched or started.
+- **Collections**: Plex collections and Jellyfin box sets as the server has them. IPTV films are grouped by a shared
+  TMDb collection when the provider sends TMDb ids and Seerr is set up (Seerr's movie details carry the
+  collection; looked up in the background, one film at a time, and kept in `catalog-tmdb.json` in the data folder:
+  ids and names only). Other IPTV films are grouped by title, conservatively: `<Base> and the …` (3+ titles),
+  `<Base>: …`, numbered sequels (`<Base> 2`, `II`, `Part 2`, `Vol. 2`) and the film titled `<Base>` itself; the base
+  needs two significant words (one is enough only for a numbered series with both a 2 and a 3), and a group needs
+  2+ different titles. IPTV shows are not grouped.
+
+Kids profiles: IPTV items in VOD categories locked with the parental PIN are **left out** of every answer (rows,
+hero, browse totals and genres, collections) while a PIN is set. Other profiles get them with `"locked": true`.
+Plex and Jellyfin apply their own user's restrictions; the catalogue adds no filter for them.
+
+Speed: the server keeps an index of the IPTV catalogue (every sort order, per-genre top lists, collections) and
+rebuilds it in the background within a minute of a playlist refresh. An account's Plex / Jellyfin libraries are
+fetched in the background (again after 10 minutes; "continue watching" after 1 minute); the first request of an
+account waits up to 3 seconds for them, later ones never wait. Answers are cached per profile for 30 seconds,
+keyed by the profile state's revision, so a change to My list or a resume point shows at once. With 20 000 titles
+a warm request takes a few milliseconds (`test_orbit_catalog.Benchmark`).

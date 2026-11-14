@@ -26,6 +26,7 @@ Orbit is a private media app built on tvBro (see the note at the top of the main
 
 | Later phases | Status |
 |---|---|
+| 5. Catalogue for Home / Movies / Shows (`/v1/catalog/*`) | server done (API-v1.md "Catalogue"); no UI yet |
 | 6. Discover and requests through Seerr (`/v1/discover/*`, `/v1/requests`) | server done (API-v1.md "Discover and requests"); no UI yet |
 
 Web app: Settings ▸ Accounts sets up accounts (owner, with the one-time code from the server's data folder),
