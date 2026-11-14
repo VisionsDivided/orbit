@@ -32,6 +32,7 @@ It is written so another implementation (for example Rust) could replace the ser
 
 | Method | Path | Who | Body → Answer |
 |---|---|---|---|
+| GET | `/v1/hello` | anyone (public, **any Host**) | → `{"app": "orbit", "api": 1, "hostOk": bool}`. Recognises an Orbit server (the TV's "Find my server" scan). It is answered before the Host check, so a scan by IP address works; `hostOk` says whether the Host the client used is allowed (else the address must be added to `TVBRO_ALLOWED_HOSTS` before the TV can link). It names no version, account or setting. |
 | GET | `/v1/status` | anyone (public) | → `{"accounts": bool, "setup": bool}`. `setup` is true while the first owner can be created. |
 | POST | `/v1/setup` | anyone, only while no account exists | `{"token", "username", "password", "displayName"?}` → `Me` + session cookie. `token` is the one-time setup token from the server's data folder (`orbit-setup-token`). |
 | POST | `/v1/auth/login` | anyone | `{"username", "password", "device"?}` → `Me` + session cookie. Wrong username or password: 403, the same message either way. Throttled like tvBro's login. |
@@ -63,6 +64,12 @@ link again.
 
 The server checks the `Host` header, so the address the TV uses (for example `192.0.2.10:8750`) must be listed in
 `TVBRO_ALLOWED_HOSTS`.
+
+**Find my server.** Next to the address field the TV offers "Find my server": it asks `GET /v1/hello` on port 8750 of
+every address of its own /24 network (TCP, 48 at a time, ~0.5 s connect and 1 s read timeout; about 3 s in all) and
+lists the servers that answer `"app": "orbit"`. Picking one fills the field. UDP broadcast is not used: the server
+runs in Docker behind a TCP port mapping, which broadcasts do not reach. A server whose `hostOk` is false is listed
+with a note that its address must be added to `TVBRO_ALLOWED_HOSTS`.
 
 ## Playlists for linked TVs (step 7)
 

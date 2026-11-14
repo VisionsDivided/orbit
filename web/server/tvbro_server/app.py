@@ -1409,6 +1409,11 @@ class Handler(BaseHTTPRequestHandler):
         self.q = urllib.parse.parse_qs(u.query)
         self.sess = None
         try:
+            if u.path == "/v1/hello":
+                # Orbit: lets a TV's "Find my server" recognise this server (API-v1.md). Answered before the Host
+                # check, so a scan by IP address finds it even when that address is not in TVBRO_ALLOWED_HOSTS yet
+                # (hostOk tells the TV); it says nothing else, so a DNS-rebinding page learns nothing from it.
+                return self._json({"app": "orbit", "api": 1, "hostOk": self._host_ok()})
             if not self._host_ok():
                 return self._err(421, "unknown host name")
             self.sess = self._session()
