@@ -25,32 +25,20 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.focusGroup
 import io.github.kmmarin.tvbro.update.updateSection
 
+/** The pre-Orbit settings row, still used by the full-screen Add source page (device density). */
 @Composable
-private fun SettingRow(title: String, value: String, onLeft: (() -> Unit)? = null, onRight: (() -> Unit)? = null, mod: Modifier = Modifier, onClick: () -> Unit) {
-    Row(
-        mod.fillMaxWidth().padding(vertical = 2.dp)
-            .onPreviewKeyEvent { e ->
-                if (e.type != KeyEventType.KeyDown) false
-                else when (e.key) {
-                    Key.DirectionLeft -> onLeft?.let { it(); true } ?: false
-                    Key.DirectionRight -> onRight?.let { it(); true } ?: false
-                    else -> false
-                }
-            }
-            .tvFocus(onClick = onClick).padding(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+private fun LegacySettingRow(title: String, value: String, mod: Modifier = Modifier, onClick: () -> Unit) {
+    Row(mod.fillMaxWidth().padding(vertical = 2.dp).tvFocus(onClick = onClick).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(title, color = TextMain, fontSize = 18.sp, modifier = Modifier.weight(1f))
         Text(value, color = Accent, fontSize = 18.sp)
     }
 }
 
-private fun <T> cycle(opts: List<T>, cur: T, d: Int): T = opts[(opts.indexOf(cur).let { if (it < 0) 0 else it } + d).mod(opts.size)]
+internal fun <T> cycle(opts: List<T>, cur: T, d: Int): T = opts[(opts.indexOf(cur).let { if (it < 0) 0 else it } + d).mod(opts.size)]
 
-private fun LazyListScope.head(s: String) { item { Text(s, color = TextDim, fontSize = 15.sp, modifier = Modifier.padding(top = 8.dp, bottom = 6.dp)) } }
-private fun LazyListScope.note(s: String) { item { Text(s, color = TextDim, fontSize = 14.sp, modifier = Modifier.padding(vertical = 3.dp)) } }
 
-private fun LazyListScope.general(m: AppModel) {
+
+internal fun LazyListScope.general(m: AppModel) {
     head("General")
     item {
         val n = io.github.kmmarin.tvbro.data.TimeFmt.names
@@ -68,7 +56,7 @@ private fun LazyListScope.general(m: AppModel) {
     }
 }
 
-private fun LazyListScope.playlists(m: AppModel) {
+internal fun LazyListScope.playlists(m: AppModel) {
     head("Playlists")
     for (s in m.sources) item(key = s.id) {
         val t = m.store.lastRefresh(s.id)
@@ -102,7 +90,7 @@ private fun took(ms: Long) = if (ms < 60_000) "${ms / 1000} s" else "${ms / 60_0
 private fun SyncCard(m: AppModel, s: Source, k: io.github.kmmarin.tvbro.data.SyncKind, intervalH: Int, extra: String?) {
     val r = io.github.kmmarin.tvbro.data.SyncStatus.recs["${s.id}|${k.name}"] ?: io.github.kmmarin.tvbro.data.SyncRec()
     val prog = io.github.kmmarin.tvbro.data.SyncStatus.running["${s.id}|${k.name}"]
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).background(Surface, androidx.compose.foundation.shape.RoundedCornerShape(8.dp)).padding(8.dp)) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp).background(io.github.kmmarin.tvbro.ui.orbit5.O5.ChipBg, androidx.compose.foundation.shape.RoundedCornerShape(16.dp)).padding(bottom = 18.dp)) {
         SettingRow(k.label, if (prog != null) "Syncing..." else "Sync now") { m.syncNow(s, k) }
         val lines = ArrayList<String>()
         lines += if (r.lastOk > 0) "Last successful sync: ${whenFmt.format(java.util.Date(r.lastOk))} · ${ago(r.lastOk)} · took ${took(r.tookMs)}" else "Not synced yet on this device"
@@ -118,28 +106,28 @@ private fun SyncCard(m: AppModel, s: Source, k: io.github.kmmarin.tvbro.data.Syn
             else -> 0L
         }
         lines += if (next == 0L) "Next sync: after the first one" else if (next <= System.currentTimeMillis()) "Next sync: due now (Wi-Fi/Ethernet)" else "Next sync: ${whenFmt.format(java.util.Date(next))}"
-        for (l in lines) Text(l, color = TextDim, fontSize = 13.sp, modifier = Modifier.padding(start = 14.dp))
+        for (l in lines) Text(l, color = io.github.kmmarin.tvbro.ui.orbit5.O5.Muted, fontSize = 19.sp, modifier = Modifier.padding(start = 28.dp))
         if (r.lastErr > 0) Text(
             if (r.lastErr >= r.lastOk) "Last error ${whenFmt.format(java.util.Date(r.lastErr))}: ${r.err}. The previous data is kept; retry ${if (r.failures >= 3) "every 15 min" else "in ${io.github.kmmarin.tvbro.data.SyncRules.retryDelayMin(r.failures)} min"}."
             else "Last error ${whenFmt.format(java.util.Date(r.lastErr))}: ${r.err} (a later sync succeeded)",
-            color = if (r.lastErr >= r.lastOk) androidx.compose.ui.graphics.Color(0xFFE57373) else TextDim, fontSize = 13.sp, modifier = Modifier.padding(start = 14.dp, top = 2.dp))
+            color = if (r.lastErr >= r.lastOk) androidx.compose.ui.graphics.Color(0xFFE57373) else io.github.kmmarin.tvbro.ui.orbit5.O5.Muted, fontSize = 19.sp, modifier = Modifier.padding(start = 28.dp, top = 4.dp))
         if (prog != null) {
-            Text(prog, color = Accent, fontSize = 13.sp, modifier = Modifier.padding(start = 14.dp, top = 4.dp))
+            Text(prog, color = io.github.kmmarin.tvbro.ui.orbit5.O5.Accent, fontSize = 19.sp, modifier = Modifier.padding(start = 28.dp, top = 6.dp))
             // indeterminate bar: sizes are often unknown (no Content-Length on provider APIs)
             val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "sync")
             val p by t.animateFloat(0f, 0.65f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1200), androidx.compose.animation.core.RepeatMode.Reverse), label = "p")
-            BoxWithConstraints(Modifier.padding(start = 14.dp, top = 4.dp, end = 14.dp).fillMaxWidth().height(4.dp).background(Bg)) {
-                Box(Modifier.offset(x = maxWidth * p).width(maxWidth * 0.35f).height(4.dp).background(Accent))
+            BoxWithConstraints(Modifier.padding(start = 28.dp, top = 8.dp, end = 28.dp).fillMaxWidth().height(6.dp).background(io.github.kmmarin.tvbro.ui.orbit5.O5.ProgressTrack)) {
+                Box(Modifier.offset(x = maxWidth * p).width(maxWidth * 0.35f).height(6.dp).background(io.github.kmmarin.tvbro.ui.orbit5.O5.Accent))
             }
         }
     }
 }
 
-private fun LazyListScope.syncSection(m: AppModel) {
+internal fun LazyListScope.syncSection(m: AppModel) {
     head("Sync")
     note("Each kind syncs on its own schedule in the background (Wi-Fi/Ethernet). A sync that fails or returns nothing never replaces stored data.")
     for (s in m.sources.filter { it.enabled }) {
-        item(key = "sh" + s.id) { Text(s.name + if (s.isXtream) "  (Xtream)" else "  (M3U)", color = TextMain, fontSize = 18.sp, modifier = Modifier.padding(top = 10.dp)) }
+        item(key = "sh" + s.id) { Text(s.name + if (s.isXtream) "  (Xtream)" else "  (M3U)", color = io.github.kmmarin.tvbro.ui.orbit5.O5.Text, fontSize = 25.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp, start = 4.dp)) }
         item(key = "sc" + s.id) { SyncCard(m, s, io.github.kmmarin.tvbro.data.SyncKind.CHANNELS, m.store.chHours, "${m.channels.count { it.sourceId == s.id }} channels in ${m.channels.filter { it.sourceId == s.id }.map { it.group }.distinct().size} groups loaded") }
         item(key = "sg" + s.id) { SyncCard(m, s, io.github.kmmarin.tvbro.data.SyncKind.GUIDE, m.epgHours, remember(io.github.kmmarin.tvbro.data.SyncStatus.recs["${s.id}|GUIDE"]) { m.guideStats(s) }) }
         if (s.isXtream) item(key = "sv" + s.id) { SyncCard(m, s, io.github.kmmarin.tvbro.data.SyncKind.CATALOGUE, m.vodHours, null) }
@@ -168,7 +156,7 @@ private fun LazyListScope.syncSection(m: AppModel) {
     }
 }
 
-private fun LazyListScope.epgSection(m: AppModel) {
+internal fun LazyListScope.epgSection(m: AppModel) {
     head("EPG")
     item {
         val hours = listOf(6, 12, 24, 48, 96)
@@ -183,10 +171,10 @@ private fun LazyListScope.epgSection(m: AppModel) {
     note("Guide window: the longest catch-up period of the source (at least 1 day) back, up to 7 days ahead.")
     item { SettingRow("Map channels to guide", "channels without guide data") { m.screen = Screen.MAPPING } }
     head("Reminders")
-    item { ReminderRows(m) }
+    item { io.github.kmmarin.tvbro.ui.orbit5.LegacyDensity { Column { ReminderRows(m) } } }
 }
 
-private fun LazyListScope.appearance(m: AppModel) {
+internal fun LazyListScope.appearance(m: AppModel) {
     head("Appearance")
     item { SettingRow("Channel numbers", if (m.numberMode == 0) "Provider numbers" else "Numbers per group (1, 2, 3...)") { m.changeNumberMode(1 - m.numberMode) } }
     item { SettingRow("Live preview in the TV screen", if (m.previewOn) "On" else "Off") { m.changePreviewOn(!m.previewOn) } }
@@ -204,7 +192,7 @@ private fun LazyListScope.appearance(m: AppModel) {
     note("tvBro always uses its dark theme.")
 }
 
-private fun LazyListScope.playback(m: AppModel) {
+internal fun LazyListScope.playback(m: AppModel) {
     head("Playback")
     item {
         val bufs = listOf(5, 10, 15, 30, 60)
@@ -224,7 +212,7 @@ private fun LazyListScope.playback(m: AppModel) {
     item { SettingRow("Use external player", if (m.external) "On (needs a video player app)" else "Off") { m.changeExternal(!m.external) } }
 }
 
-private fun LazyListScope.remote() {
+internal fun LazyListScope.remote() {
     head("Remote control")
     for (l in listOf(
         "Live TV: Up / Down change channel, number keys jump to a channel.",
@@ -238,14 +226,14 @@ private fun LazyListScope.remote() {
     )) note(l)
 }
 
-private fun LazyListScope.parental(m: AppModel) {
+internal fun LazyListScope.parental(m: AppModel) {
     head("Parental controls")
     item { SettingRow("Set / change PIN", if (m.prefs.pinHash.isEmpty()) "not set" else "set") { m.setPin() } }
     item { if (m.prefs.pinHash.isNotEmpty()) SettingRow("Remove PIN (clears locks)", "") { m.removePin() } }
     note("Long-press a group or a Movies/Shows category to lock it. Locked items need the PIN.")
 }
 
-private fun LazyListScope.recording(m: AppModel) {
+internal fun LazyListScope.recording(m: AppModel) {
     head("Recording")
     item {
         val label = remember(m.storageTick) { m.storageLabel() }
@@ -269,7 +257,7 @@ private fun LazyListScope.recording(m: AppModel) {
     }
 }
 
-private fun LazyListScope.other(m: AppModel) {
+internal fun LazyListScope.other(m: AppModel) {
     head("Channels and groups")
     item { SettingRow("Open the channels and groups editor", "rename, hide, reorder, own groups") { m.screen = Screen.EDITOR } }
     item { SettingRow("New custom group", "") { m.newGroup() } }
@@ -278,79 +266,19 @@ private fun LazyListScope.other(m: AppModel) {
     item { SettingRow("Restore from backup", "") { m.restore() } }
 }
 
-private fun LazyListScope.about() {
+internal fun LazyListScope.about() {
     head("About")
     note("tvBro ${io.github.kmmarin.tvbro.BuildConfig.VERSION_NAME} - open source, Apache-2.0. A player only: it ships no channels or content.")
-    updateSection()
-    playbackStatsSection()   // Orbit: playback statistics (OrbitScreens.kt)
+    legacy { updateSection() }          // (device density inside the page: these rows are not restyled yet)
+    legacy { playbackStatsSection() }   // Orbit: playback statistics (OrbitScreens.kt)
     item {
         var tick by remember { mutableIntStateOf(0) }
         SettingRow("Diagnostics (OK to refresh)", "last load counts and errors") { tick++ }
         val lines = remember(tick) { io.github.kmmarin.tvbro.data.Diag.snapshot().takeLast(25) }
-        for (l in lines) Text(l, color = TextDim, fontSize = 12.sp, maxLines = 2)
+        for (l in lines) Text(l, color = io.github.kmmarin.tvbro.ui.orbit5.O5.Muted, fontSize = 17.sp, maxLines = 2, modifier = Modifier.padding(start = 28.dp))
     }
 }
 
-/** Settings as a panel sliding in from the right over the current screen. */
-@Composable
-fun SettingsScreen(m: AppModel) {
-    // Back returns where Settings was opened from (full-screen live TV or the home screen)
-    BackHandler { m.screen = m.settingsBack; m.settingsBack = Screen.LIST }
-    var shown by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { shown = true }
-    val x by androidx.compose.animation.core.animateDpAsState(if (shown) 0.dp else 820.dp, label = "panel")
-    val names = listOf("Home server" /* Orbit */, "General", "Playlists", "Sync", "EPG", "Appearance", "Playback", "Remote control", "Parental controls", "Recording", "Channels and groups", "About")
-    var sec by m::settingsSec // remembered (also across restarts): Settings reopens on the same page
-    val firstSec = remember { sec.coerceIn(0, names.size - 1) }
-    val fr = remember { androidx.compose.ui.focus.FocusRequester() }
-    // The remembered page can be below the bottom of the names list: an item that is not composed yet cannot take focus
-    // (the request failed quietly and the remote kept moving the screen behind the panel). Scroll to it first, then
-    // focus it, trying again briefly while the panel slides in.
-    val namesState = androidx.compose.foundation.lazy.rememberLazyListState()
-    LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(250)
-        runCatching { namesState.scrollToItem((firstSec + 1 - 4).coerceAtLeast(0)) }    // +1: the title is item 0
-        repeat(10) {
-            kotlinx.coroutines.delay(60)
-            if (runCatching { fr.requestFocus() }.isSuccess && FocusMemory.anyFocus) return@LaunchedEffect
-        }
-    }
-    Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(0x99000000))) {
-        Row(Modifier.align(Alignment.CenterEnd).offset(x = x).width(820.dp).fillMaxHeight().focusTrap().background(androidx.compose.ui.graphics.Color(0xFF141A22))) {
-            // Left from a setting goes back to its page's name, not to whichever name is level with it (that would
-            // switch pages)
-            val selFr = remember { SafeFocus() }
-            // Right from a page name enters the page at its first row (it went to the row level with the name: "Add
-            // source" under the user's playlist, the middle of a long page)
-            val pageFr = remember { androidx.compose.ui.focus.FocusRequester() }
-            val pageState = androidx.compose.foundation.lazy.rememberLazyListState()
-            val pageScope = rememberCoroutineScope()
-            LaunchedEffect(sec) { runCatching { pageState.scrollToItem(0) } }
-            LazyColumn(Modifier.width(230.dp).fillMaxHeight().padding(12.dp).enterAt(selFr), state = namesState) {
-                item { Text("Settings", color = Accent, fontSize = 24.sp, modifier = Modifier.padding(10.dp)) }
-                itemsIndexed(names) { i, n ->
-                    Text((if (i == sec) "> " else "  ") + n, color = if (i == sec) Accent else TextMain, fontSize = 16.sp, maxLines = 1,
-                        modifier = Modifier.fillMaxWidth().then(if (i == firstSec) Modifier.focusRequester(fr) else Modifier).safeFocus(if (i == sec) selFr else null)
-                            .onFocusChanged { if (it.isFocused) sec = i }
-                            .onPreviewKeyEvent { e ->
-                                if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionRight) {
-                                    pageScope.launch { runCatching { pageState.scrollToItem(0) }; runCatching { pageFr.requestFocus() } }
-                                    true
-                                } else false
-                            }
-                            .tvFocus { sec = i }.padding(10.dp))
-                }
-            }
-            LazyColumn(Modifier.weight(1f).fillMaxHeight().padding(16.dp).focusRequester(pageFr).focusGroup(), state = pageState) {
-                when (sec) {
-                    0 -> orbitSection(m)
-                    1 -> general(m); 2 -> playlists(m); 3 -> syncSection(m); 4 -> epgSection(m); 5 -> appearance(m); 6 -> playback(m)
-                    7 -> remote(); 8 -> parental(m); 9 -> recording(m); 10 -> other(m); else -> about()
-                }
-            }
-        }
-    }
-}
 @Composable
 fun AddSourceScreen(m: AppModel) {
     val ls = m.link
@@ -396,7 +324,7 @@ fun AddSourceScreen(m: AppModel) {
         if (ol == null) item(key = "orbit") { TvButton("Link to your Orbit home server") { m.orbit.clearMessage(); m.screen = Screen.ORBIT_LINK } }
         else item(key = "orbit") { Text("Linked to Orbit as ${ol.account}, profile ${ol.profile}", color = TextDim, fontSize = 15.sp) }
         if (ls == null) item(key = "phone") { TvButton("Use your phone (scan a QR code, type on the phone)") { m.startLink(null) } }
-        item(key = "type") { SettingRow("Type", if (xtream) "Xtream login (server, username, password)" else "M3U URL", mod = Modifier.focusRequester(typeFr)) { xtream = !xtream } }
+        item(key = "type") { LegacySettingRow("Type", if (xtream) "Xtream login (server, username, password)" else "M3U URL", mod = Modifier.focusRequester(typeFr)) { xtream = !xtream } }
         item(key = "name") { TvField("Name (optional)", name, { name = it }) }
         if (xtream) {
             item(key = "server") { TvField("Server (http://host:port)", server, { server = it }, requester = firstFr) }

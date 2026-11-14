@@ -25,55 +25,33 @@ import kotlinx.coroutines.launch
 
 private val Ok = Color(0xFFA5D6A7)
 
-/** Settings ▸ Home server: link this TV to an Orbit account, or show and end the link. */
+/**
+ * Settings ▸ Sources ▸ Home server: link this TV to an Orbit account, or show and end the link. (Profiles and this
+ * TV's name are in Settings ▸ Profiles.)
+ */
 fun LazyListScope.orbitSection(m: AppModel) {
     val o = m.orbit
-    item { Text("Orbit home server", color = TextDim, fontSize = 15.sp, modifier = Modifier.padding(top = 8.dp, bottom = 6.dp)) }
+    head("Orbit home server")
     val l = o.link
     if (l == null) {
-        item {
-            Text("Link this TV to your Orbit account on your home server. Each profile then has its own My list, favourite " +
-                "channels and resume points, shared with your other devices.", color = TextDim, fontSize = 14.sp, modifier = Modifier.padding(vertical = 3.dp))
-        }
-        if (o.signedOut) item { Text("This TV was signed out from another device. Link it again to use your account.", color = Accent, fontSize = 14.sp) }
-        item { TvButton("Link this TV…", Modifier.padding(vertical = 6.dp)) { o.clearMessage(); m.screen = Screen.ORBIT_LINK } }
+        note("Link this TV to your Orbit account on your home server. Each profile then has its own My list, favourite " +
+            "channels and resume points, shared with your other devices.")
+        if (o.signedOut) note("This TV was signed out from another device. Link it again to use your account.")
+        item { SettingRow("Link this TV…", "", desc = "Shows a code to approve on your phone or computer") { o.clearMessage(); m.screen = Screen.ORBIT_LINK } }
     } else {
-        item { Text("Linked to ${l.server}", color = TextMain, fontSize = 17.sp, modifier = Modifier.padding(vertical = 3.dp)) }
-        item {
-            Text("Signed in as ${l.account} (${l.username}), profile ${l.profile}${if (l.kids) " (kids)" else ""}",
-                color = TextMain, fontSize = 17.sp, modifier = Modifier.padding(vertical = 3.dp))
-        }
-        item { NameThisTv(m) }
-        item {
-            Text("Change the profile or sign this TV out from Orbit on a phone or computer (Settings ▸ Accounts ▸ Your devices), " +
-                "or unlink it here.", color = TextDim, fontSize = 14.sp, modifier = Modifier.padding(vertical = 3.dp))
-        }
-        item {
-            Text("Playlists come from the home server; My list, favourite channels and film resume points sync with your " +
-                "profile. ${o.syncStatus}", color = TextDim, fontSize = 14.sp, modifier = Modifier.padding(vertical = 3.dp))
-        }
-        // Profiles (simple rows for now; the Settings restyle gives them the segmented control and toggle of the spec)
-        val pp = m.profiles
-        item { TvButton("Who's watching? Switch profile…", Modifier.padding(vertical = 4.dp)) { pp.open() } }
-        item {
-            TvButton("Profile picker style: ${pp.style.label}  (OK: ${if (pp.style == io.github.kmmarin.tvbro.orbit.PickerStyle.ORBIT) "Classic" else "Orbit"})", Modifier.padding(vertical = 4.dp)) {
-                pp.changeStyle(if (pp.style == io.github.kmmarin.tvbro.orbit.PickerStyle.ORBIT) io.github.kmmarin.tvbro.orbit.PickerStyle.CLASSIC else io.github.kmmarin.tvbro.orbit.PickerStyle.ORBIT)
-            }
-        }
-        item {
-            TvButton("Ask who's watching when Orbit starts: ${if (pp.askOnStart) "On" else "Off"}", Modifier.padding(vertical = 4.dp)) { pp.changeAskOnStart(!pp.askOnStart) }
-        }
-        item { TvButton("Unlink this TV", Modifier.padding(vertical = 6.dp)) { o.unlink() } }
+        item { SettingRow("Linked to", l.server, desc = "Signed in as ${l.account} (${l.username}), profile ${l.profile}${if (l.kids) " (kids)" else ""}") { } }
+        note("Playlists come from the home server; My list, favourite channels and film resume points sync with your profile. ${o.syncStatus}")
+        note("Sign this TV out from Orbit on a phone or computer (Settings ▸ Accounts ▸ Your devices), or unlink it here.")
+        item { SettingRow("Unlink this TV", "", desc = "Removes the account's data from this TV; the playlists stay") { o.unlink() } }
     }
-    if (o.message.isNotEmpty()) item { Text(o.message, color = Ok, fontSize = 15.sp, modifier = Modifier.padding(vertical = 4.dp)) }
+    if (o.message.isNotEmpty()) item { Text(o.message, color = Ok, fontSize = 21.sp, modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp)) }
 }
-
 /**
- * Settings ▸ Home server ▸ Name this TV: the name other devices see in the stream-limit prompt ("Stop Kitchen and
+ * Settings ▸ Profiles ▸ Name this TV: the name other devices see in the stream-limit prompt ("Stop Kitchen and
  * watch") and in the device lists. Empty until named; the field then offers the TV's model.
  */
 @Composable
-private fun NameThisTv(m: AppModel) {
+internal fun NameThisTv(m: AppModel) {
     val o = m.orbit
     val l = o.link ?: return
     var name by remember(l.deviceName) { mutableStateOf(l.deviceName.ifEmpty { o.defaultName }) }
@@ -101,7 +79,7 @@ private fun OrbitNameStep(m: AppModel, close: () -> Unit) {
     Column(Modifier.fillMaxSize().background(Bg).padding(40.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Linked. Name this TV?", color = Accent, fontSize = 28.sp)
         Text("Give it the name of its room, like Kitchen or Bedroom. When every stream is in use, other devices offer " +
-            "\"Stop Kitchen and watch\" by this name. You can change it later in Settings ▸ Home server.", color = TextMain, fontSize = 17.sp)
+            "\"Stop Kitchen and watch\" by this name. You can change it later in Settings ▸ Profiles.", color = TextMain, fontSize = 17.sp)
         TvField("Name (${io.github.kmmarin.tvbro.data.DeviceName.HELP})", name, { name = it.take(io.github.kmmarin.tvbro.data.DeviceName.MAX + 8) },
             requester = fieldFr, modifier = Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

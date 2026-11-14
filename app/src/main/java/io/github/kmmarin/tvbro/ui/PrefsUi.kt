@@ -4,6 +4,8 @@ package io.github.kmmarin.tvbro.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Text
@@ -18,6 +20,11 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import io.github.kmmarin.tvbro.*
 
+// Pop-ups in direction 5 (spec section 1, "dialog"): rgba(10,12,22,.95), a 12 % white border, radius 20
+private val DialogBg = Color(0xF20A0C16)
+private val DialogBorder = Color(0x1FFFFFFF)
+private val DialogShape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp)
+
 class MenuState(val title: String, val items: List<Pair<String, () -> Unit>>)
 class PromptState(val title: String, val initial: String, val password: Boolean, val onOk: (String) -> Unit)
 
@@ -31,8 +38,8 @@ fun ActionMenu(m: AppModel) {
     LaunchedEffect(s) { delay(100); runCatching { fr.requestFocus() } }
     Box(Modifier.fillMaxSize().background(Color(0xCC000000)), contentAlignment = Alignment.Center) {
         // long menus scroll with the focus (the TV screen is only ~540 dp tall)
-        Column(Modifier.width(520.dp).heightIn(max = 520.dp).focusTrap().background(Surface).verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(24.dp)) {
-            Text(s.title, color = Accent, fontSize = 20.sp, maxLines = 1, modifier = Modifier.padding(bottom = 10.dp))
+        Column(Modifier.width(520.dp).heightIn(max = 520.dp).focusTrap().background(DialogBg, DialogShape).border(1.dp, DialogBorder, DialogShape).verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(24.dp)) {
+            Text(s.title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, modifier = Modifier.padding(bottom = 10.dp))
             s.items.forEachIndexed { i, (label, act) ->
                 TvButton(label, Modifier.fillMaxWidth().then(if (i == 0) Modifier.focusRequester(fr) else Modifier)) { m.menu = null; act() }
             }
@@ -48,7 +55,7 @@ fun PromptDialog(m: AppModel) {
     RestoreFocusOnClose(s) { m.menu != null || m.prompt != null || m.progMenu != null }
     var v by remember(s) { mutableStateOf(s.initial) }
     Box(Modifier.fillMaxSize().background(Color(0xCC000000)), contentAlignment = Alignment.Center) {
-        Column(Modifier.width(480.dp).focusTrap().background(Surface).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.width(480.dp).focusTrap().background(DialogBg, DialogShape).border(1.dp, DialogBorder, DialogShape).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             TvField(s.title, v, { v = it }, password = s.password, focusFirst = true)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 TvButton("OK") { m.prompt = null; s.onOk(v) }

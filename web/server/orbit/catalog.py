@@ -786,6 +786,34 @@ class Catalog:
     def prefix_routes(self) -> dict:
         return {("GET", "/v1/catalog/collections/"): self._collection}
 
+    # ---- Discover: "Play instead of Request" ----
+    def tmdb_finder(self, c: Call) -> Optional[Callable[[str, int], Optional[dict]]]:
+        """For orbit/discover.py: a function (Seerr type "movie" | "tv", TMDb id) -> this profile's catalogue Item
+        with that TMDb id (IPTV first, then the account's Plex / Jellyfin; titles a kids profile may not see are left
+        out), or None. None while the catalogue is not loaded or no profile is selected."""
+        try:
+            v = self._view(c)
+        except ApiError:
+            return None
+        idx = v.idx
+        m = getattr(idx, "by_tmdb", None)
+        if m is None:
+            m = {}
+            for it in idx.items:
+                t = str(it.tmdb).strip() if it.tmdb is not None else ""
+                if t.isdigit():
+                    m.setdefault((it.kind, int(t)), []).append(it)
+            for lst in m.values():
+                lst.sort(key=lambda i: i.source != "iptv")
+            idx.by_tmdb = m                   # built once per index (an Index never changes once built)
+
+        def find(kind: str, tmdb: int) -> Optional[dict]:
+            for it in m.get(("movie" if kind == "movie" else "show", tmdb), ()):
+                if v.visible(it):
+                    return v.out(it)
+            return None
+        return find
+
     def _home(self, c: Call) -> Reply:
         v = self._view(c)
 

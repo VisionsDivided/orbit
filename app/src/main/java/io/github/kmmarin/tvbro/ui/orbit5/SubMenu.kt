@@ -26,6 +26,11 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.draw.clip
 import io.github.kmmarin.tvbro.ui.SafeFocus
 
 /** Movies / Shows source toggle values (catalog `source=` parameter). */
@@ -59,6 +64,7 @@ fun SubMenuRow(
     tabs: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier,
     browseTab: Int = -1, browse: BrowseControls? = null,
 ) {
+    if (io.github.kmmarin.tvbro.ui.shell.LocalIsPhone.current) { PhoneSubMenu(tabs, selected, onSelect, modifier); return }
     val sel = remember { SafeFocus() }
     val wide = browse != null && selected == browseTab
     Row(
@@ -124,5 +130,22 @@ fun Dropdown(text: String, onClick: () -> Unit) {
         Text(text, style = O5Type.Dropdown, maxLines = 1)
         Spacer(Modifier.width(10.dp))
         Icon(Icons.Filled.KeyboardArrowDown, null, tint = O5.MetaText, modifier = Modifier.size(20.dp))
+    }
+}
+
+/** The sub-menu on a phone (spec section 13): scrolling chips (13 px, 7 x 13), white when selected, 20 px margins. */
+@Composable
+private fun PhoneSubMenu(tabs: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier) {
+    Row(
+        modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+    ) {
+        tabs.forEachIndexed { i, t ->
+            val on = i == selected
+            Box(
+                Modifier.clip(O5Shape.Pill).background(if (on) Color.White else Color(0x1AFFFFFF)).clickable { onSelect(i) }
+                    .padding(horizontal = 13.dp, vertical = 9.dp),
+            ) { Text(t, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (on) O5.Bg else Color.White, maxLines = 1) }
+        }
     }
 }

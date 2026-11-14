@@ -409,6 +409,28 @@ class Permissions(Base):
         self.assertEqual(self.get("/v1/catalog/collections/" + hp, self.sess(PA)).code, 200)
 
 
+class TmdbFinder(Base):
+    """Discover's "Play instead of Request": Catalog.tmdb_finder (wired in app.py as discover.local_finder)."""
+    media = False
+
+    def test_finds_the_profiles_title_by_tmdb_id(self):
+        self.vod["movies"] = self.vod["movies"] + [mv(20, "A New Hope", 1977, tmdb="11"),
+                                                   mv(21, "Night Two", 2021, cat="Adults only", tmdb=12)]
+        find = self.cat.tmdb_finder(V1.Call("GET", "/v1/discover/rows", self.sess()))
+        self.assertEqual(find("movie", 11)["key"], "m|p0|20")
+        self.assertEqual(find("movie", 12)["key"], "m|p0|21", "an int id in the provider data matches too")
+        self.assertTrue({"key", "kind", "title", "progress", "locked"} <= set(find("movie", 11)))
+        self.assertIsNone(find("tv", 11), "a show never matches a film")
+        self.assertIsNone(find("movie", 999))
+        # a kids profile does not get titles of locked categories
+        self.locks = frozenset({("movie", "p0", "Adults only")})
+        kid = self.cat.tmdb_finder(V1.Call("GET", "/v1/discover/rows", self.sess(PK)))
+        self.assertIsNone(kid("movie", 12))
+        self.assertEqual(kid("movie", 11)["key"], "m|p0|20")
+        # no profile selected: no finder (Discover then shows Request as before)
+        self.assertIsNone(self.cat.tmdb_finder(V1.Call("GET", "/v1/discover/rows", {"account_id": ACC1, "profile_id": None})))
+
+
 class TmdbGrouping(Base):
     media = False
 

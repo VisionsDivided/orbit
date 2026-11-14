@@ -56,6 +56,8 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
     val profiles = io.github.kmmarin.tvbro.orbit.OrbitProfiles(app, viewModelScope, orbit)
     /** Home's rows: the catalog when linked, else this TV's own data (ui/home/HomeFeed.kt). */
     val home by lazy { io.github.kmmarin.tvbro.ui.home.HomeFeed(this) }
+    /** Discover's rows and requests (Seerr through the home server). */
+    val discover by lazy { io.github.kmmarin.tvbro.ui.discover.DiscoverFeed(this) }
     private val repo = Repository(app)
 
     var sources by mutableStateOf<List<Source>>(emptyList())

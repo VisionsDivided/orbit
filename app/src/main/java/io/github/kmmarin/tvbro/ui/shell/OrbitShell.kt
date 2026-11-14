@@ -66,8 +66,8 @@ fun openTab(m: AppModel, t: NavTab) {
 }
 
 /**
- * The app's main screen in direction 5 (docs/orbit/TV-UI.md): the top bar over the current section, the colour-key
- * legend, and Settings as a panel over it. Replaces tvBro's side menu.
+ * The app's main screen in direction 5 (docs/orbit/TV-UI.md): the top bar over the current section (or the Settings
+ * page), and the colour-key legend. Replaces tvBro's side menu. On a phone it is [PhoneShell] instead.
  *
  * Focus: Up from the top of a section reaches the top bar at the current section's item; Down from the bar returns
  * to the item the user was on. Back from a section goes to Home; Back on Home leaves the app (Home itself first
@@ -76,6 +76,8 @@ fun openTab(m: AppModel, t: NavTab) {
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun OrbitShell(m: AppModel) {
+    // the same APK on a phone: the 5b layout (PhoneShell.kt)
+    if (rememberIsPhone()) { PhoneShell(m); return }
     OrbitCanvas {
         val overlay = m.menu != null || m.prompt != null || m.progMenu != null
         BackHandler(enabled = m.screen == Screen.LIST && !overlay && m.section != Section.HOME) { m.section = Section.HOME }
@@ -89,7 +91,9 @@ fun OrbitShell(m: AppModel) {
             settingsActive = m.screen == Screen.SETTINGS,
             legend = m.screen == Screen.LIST,
         ) {
-            when (m.section) {
+            // Settings is a page under the bar (spec section 12), reached from the avatar
+            if (m.screen == Screen.SETTINGS) SettingsScreen(m)
+            else when (m.section) {
                 Section.HOME -> HomeSection(m)
                 Section.MOVIES, Section.SHOWS -> MoviesShowsSection(m)
                 Section.TV, Section.RECORDINGS, Section.MYLIST -> LiveTvSection(m)
@@ -97,7 +101,6 @@ fun OrbitShell(m: AppModel) {
                 Section.SEARCH -> LegacyPage(O5Space.TopBar) { SearchScreen(m) { m.section = Section.HOME } }
             }
         }
-        if (m.screen == Screen.SETTINGS) LegacyDensity { SettingsScreen(m) }
     }
 }
 
@@ -140,5 +143,11 @@ fun ShellFrame(
  */
 @Composable
 fun LegacyPage(top: Dp, modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
+    if (LocalIsPhone.current) {
+        // phone: below the header (or [top] when the page sits under a sub-menu) and above the bottom bar
+        val i = LocalPhoneInsets.current
+        Box(modifier.fillMaxSize().padding(top = if (top > O5Space.TopBar) top else i.top, bottom = i.bottom), content = content)
+        return
+    }
     Box(modifier.fillMaxSize().padding(top = top)) { LegacyDensity { Box(Modifier.fillMaxSize(), content = content) } }
 }

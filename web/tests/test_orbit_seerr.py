@@ -437,6 +437,65 @@ class Discover(unittest.TestCase):
         self.assertEqual((t["status"], t["play"]), ("available", {"source": "plex"}))
         self.assertIsNone(D.availability_override(550, "movie"), "no-op until the Phase 5 catalogue merge")
 
+    def test_catalogue_finder_turns_request_into_play(self):
+        self.configure()
+        seen = []
+
+        def finder(c):
+            seen.append(c.sess["account_id"])
+            return lambda kind, tmdb: {"key": "m|p0|7", "kind": "movie"} if (kind, tmdb) == ("movie", 550) else None
+        self.disc.local_finder = finder
+        code, j = self.call(self.sam, "GET", "/v1/discover/rows")
+        self.assertEqual(code, 200, j)
+        film = next(t for r in j["rows"] for t in r["items"] if t["tmdb"] == 550)
+        self.assertEqual((film["status"], film["play"]), ("available", {"key": "m|p0|7", "kind": "movie"}))
+        self.assertNotIn("play", next(t for r in j["rows"] for t in r["items"] if t["tmdb"] == 603))
+        self.assertEqual(seen, [self.sam_acc["id"]], "one finder per call")
+        code, t = self.call(self.sam, "GET", "/v1/discover/title", type="movie", tmdb=550)
+        self.assertEqual(t["play"]["key"], "m|p0|7")
+        # a broken catalogue never breaks Discover
+        self.disc.local_finder = lambda c: 1 / 0
+        self.assertEqual(self.call(self.sam, "GET", "/v1/discover/rows")[0], 200)
+
+    def test_download_progress_from_sonarr_radarr(self):
+        dl = [{"externalId": 1, "size": 4_000_000_000, "sizeLeft": 1_000_000_000, "status": "downloading",
+               "timeLeft": "00:18:00", "estimatedCompletionTime": "2026-11-14T10:18:00.000Z", "title": "x"},
+              {"externalId": 2, "size": 1_000_000_000, "sizeLeft": 1_000_000_000, "status": "queued",
+               "estimatedCompletionTime": "2026-11-14T10:30:00.000Z", "title": "y"}]
+        self.assertEqual(S.download_status({"downloadStatus": dl}),
+                         {"percent": 60, "size": 5_000_000_000, "sizeLeft": 2_000_000_000,
+                          "eta": "2026-11-14T10:30:00.000Z", "items": 2})
+        self.assertEqual(S.download_status({"downloadStatus": [], "downloadStatus4k": dl[:1]})["percent"], 75)
+        for none in (None, {}, {"downloadStatus": []}, {"downloadStatus": "x"}, {"downloadStatus": [1, None]}):
+            self.assertIsNone(S.download_status(none), none)
+        odd = S.download_status({"downloadStatus": [{"size": 0, "sizeLeft": 5, "estimatedCompletionTime": "soon"}]})
+        self.assertEqual((odd["percent"], odd["sizeLeft"], odd["eta"]), (0, 0, None))
+        # Seerr's media objects carry it: discover rows, the title and the request list
+        self.configure()
+        self.link_sam()
+        self.seerr.titles[("movie", 680)]["mediaInfo"].update(status=3, downloadStatus=dl[:1])
+        code, j = self.call(self.sam, "GET", "/v1/discover/rows")
+        film = next(t for r in j["rows"] for t in r["items"] if t["tmdb"] == 680)
+        self.assertEqual(film["download"]["percent"], 75)
+        self.assertNotIn("download", next(t for r in j["rows"] for t in r["items"] if t["tmdb"] == 550))
+        self.seerr.requests[0]["media"].update(status=3, downloadStatus=dl)
+        code, j = self.call(self.sam, "GET", "/v1/requests")
+        self.assertEqual(code, 200, j)
+        r = j["requests"][0]
+        self.assertEqual((r["tmdb"], r["mediaStatus"], r["download"]["percent"]), (680, "processing", 60))
+        self.assertEqual(r["title"]["download"], r["download"], "the request list's progress, not the cached title's")
+        self.assertEqual(r["title"]["status"], "processing")
+        # the progress moves on: the next listing shows it although the title is still cached
+        self.seerr.requests[0]["media"]["downloadStatus"] = [dict(dl[0], sizeLeft=0)]
+        r = self.call(self.sam, "GET", "/v1/requests")[1]["requests"][0]
+        self.assertEqual((r["download"]["percent"], r["title"]["download"]["percent"]), (100, 100))
+        # finished: no download object any more
+        self.seerr.requests[0]["media"].update(status=5, downloadStatus=[])
+        r = self.call(self.sam, "GET", "/v1/requests")[1]["requests"][0]
+        self.assertNotIn("download", r)
+        self.assertNotIn("download", r["title"])
+        self.assertEqual(r["title"]["status"], "available")
+
     # ---- requests ----
     def test_request_as_the_mapped_user(self):
         self.configure()

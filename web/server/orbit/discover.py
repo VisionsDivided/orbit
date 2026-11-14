@@ -100,6 +100,9 @@ class Discover:
         self._client_factory = client_factory
         self.cache = S.TTLCache(256, clock)
         self.availability_override: Callable[[int, str], Optional[dict]] = availability_override
+        # "Play instead of Request" from the catalogue (app.py: Catalog.tmdb_finder): for a call, a function
+        # (type, tmdb) -> the profile's catalogue Item for that TMDb id, or None
+        self.local_finder: Optional[Callable[[Call], Callable[[str, int], Optional[dict]]]] = None
         self._lock = threading.Lock()
         self._reach: tuple = (0.0, None)          # (when, status dict or None when down)
         self._down_until = 0.0
@@ -179,7 +182,16 @@ class Discover:
         self.cache.put(key, v)
         return v, False
 
-    def _merge(self, t: Optional[dict]) -> Optional[dict]:
+    def _finder(self, c: Call) -> Optional[Callable[[str, int], Optional[dict]]]:
+        if self.local_finder is None:
+            return None
+        try:
+            return self.local_finder(c)
+        except Exception:                          # noqa: BLE001 (the catalogue must not break discovery)
+            LOG.exception("catalogue lookup failed")
+            return None
+
+    def _merge(self, t: Optional[dict], find: Optional[Callable[[str, int], Optional[dict]]] = None) -> Optional[dict]:
         if t is None:
             return None
         try:
@@ -187,7 +199,16 @@ class Discover:
         except Exception:                          # noqa: BLE001 (a broken hook must not break discovery)
             LOG.exception("availability_override failed")
             local = None
-        return {**t, **local} if isinstance(local, dict) else t
+        out = {**t, **local} if isinstance(local, dict) else t
+        if find is not None:
+            try:
+                item = find(t["type"], t["tmdb"])
+            except Exception:                      # noqa: BLE001
+                LOG.exception("catalogue lookup failed")
+                item = None
+            if isinstance(item, dict):
+                out = {**out, "status": "available", "play": item}
+        return out
 
     @staticmethod
     def _down(e: Exception) -> ApiError:
@@ -237,6 +258,7 @@ class Discover:
 
     def _rows(self, c: Call) -> Reply:
         cl = self._client()
+        find = self._finder(c)
         rows, stale, failed = [], False, 0
         specs = [(rid, title, [(path, kind)]) for rid, title, path, kind in ROWS]
         specs.append(("upcoming", "Coming soon", list(UPCOMING)))
@@ -259,7 +281,7 @@ class Discover:
                 LOG.warning("Seerr row %s: %s", rid, e.code)  # e.g. an older Seerr without this list
                 items, st = [], False
             stale = stale or st
-            rows.append({"id": rid, "title": title, "items": [self._merge(t) for t in items]})
+            rows.append({"id": rid, "title": title, "items": [self._merge(t, find) for t in items]})
         if failed == len(specs):
             raise ApiError(503, "Seerr cannot be reached right now")
         return Reply({"rows": rows, "stale": stale})
@@ -277,7 +299,8 @@ class Discover:
             raise self._down(e)
         except S.SeerrError as e:
             raise self._seerr_error(e)
-        return Reply({"results": [self._merge(t) for t in items], "stale": stale})
+        find = self._finder(c)
+        return Reply({"results": [self._merge(t, find) for t in items], "stale": stale})
 
     @staticmethod
     def _kind_tmdb(kind, tmdb) -> tuple:
@@ -340,7 +363,7 @@ class Discover:
             raise self._down(e)
         except S.SeerrError as e:
             raise self._seerr_error(e)
-        return Reply({**self._merge(t), "stale": stale})
+        return Reply({**self._merge(t, self._finder(c)), "stale": stale})
 
     # ---- requests ----
     def _requests(self, c: Call) -> Reply:
@@ -368,8 +391,18 @@ class Discover:
                 continue
             out.append(r)
         titles = self._lookup_many(cl, [(r["type"], r["tmdb"]) for r in out])
+        find = self._finder(c)
         for r in out:
-            r["title"] = self._merge(titles.get((r["type"], r["tmdb"])))
+            t = self._merge(titles.get((r["type"], r["tmdb"])), find)
+            if t is not None:
+                # the request list is fetched fresh each time, the title may be cached: its download progress and
+                # media status are the list's
+                t = {k: v for k, v in t.items() if k != "download"}
+                if "download" in r:
+                    t["download"] = r["download"]
+                if "play" not in t and r["mediaStatus"] != "requestable":
+                    t["status"] = r["mediaStatus"]
+            r["title"] = t
         if every:
             back = {v: k for k, v in self.cfg.mapping().items()}
             for r in out:
@@ -399,7 +432,7 @@ class Discover:
         body = {"mediaType": kind, "mediaId": tmdb}
         if kind == "movie":
             if cur["status"] != "requestable" or cur.get("requestStatus") in ("pending", "approved"):
-                return Reply({"created": False, "title": self._merge(cur)})
+                return Reply({"created": False, "title": self._merge(cur, self._finder(c))})
         else:
             open_ = [s["season"] for s in cur.get("seasons") or [] if s["status"] == "requestable"]
             want = open_ if seasons in (None, "all") else [n for n in sorted(set(seasons)) if n in open_]
@@ -408,7 +441,7 @@ class Discover:
                 if any(n not in known for n in seasons):
                     raise ApiError(400, "seasons: this show has no such season")
             if not want:
-                return Reply({"created": False, "title": self._merge(cur)})
+                return Reply({"created": False, "title": self._merge(cur, self._finder(c))})
             body["seasons"] = want
         try:
             raw = cl.post("/request", body, user=user)
@@ -416,7 +449,7 @@ class Discover:
             raise self._down(e)
         except S.SeerrError as e:
             if e.code == 409:                                # Seerr's own duplicate check
-                return Reply({"created": False, "title": self._merge(cur)})
+                return Reply({"created": False, "title": self._merge(cur, self._finder(c))})
             raise self._seerr_error(e)
         self.cache.drop(lambda k: k in (("title", kind, tmdb), ("missing", kind, tmdb)) or k[0] == "rows")
         try:
@@ -425,7 +458,8 @@ class Discover:
         except (S.SeerrDown, S.SeerrError):
             pass
         LOG.info("Seerr request: %s %s by account %s", kind, tmdb, c.sess["account_id"])
-        return Reply({"created": True, "request": S.normalize_request(raw), "title": self._merge(cur)}, 201)
+        return Reply({"created": True, "request": S.normalize_request(raw),
+                      "title": self._merge(cur, self._finder(c))}, 201)
 
     # ---- admin ----
     def _settings(self, c: Call) -> Reply:

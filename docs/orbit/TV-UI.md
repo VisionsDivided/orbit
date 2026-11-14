@@ -37,7 +37,11 @@ are: `96.dp` side margin, `112.sp` hero title. Legacy tvBro screens, written in 
 | `ui/live/LiveParts.kt`, `LiveUi.kt` | Info block (`LiveInfo`), group tabs, channel tile, LIVE pill, HLS tag, ● REC, `flatFocus` | Live TV / player |
 | `ui/live/PlayerOverlay.kt` | Player overlay pieces: scrims, top line, info block, scrubber, "Try HLS?" chip, quick actions, `O5Popup` | Live TV / player |
 | `ui/live/StreamPrompt.kt` | Stream-limit dialog (`StreamPromptCard`), used by `OrbitStreamPrompt` | Live TV / player |
-| `ui/discover/DiscoverSection.kt` | Discover placeholder | **Discover / Settings / phone agent** |
+| `ui/discover/` | `DiscoverSection` (TV and phone), `DiscoverFeed` (rows, requests, live progress); client in `orbit/DiscoverApi.kt` | Discover / Settings / phone agent |
+| `ui/SettingsUi.kt` | Settings page: categories in the sub-menu, `SettingRow` / `ToggleRow` / `SegmentRow`, Profiles, Requests | Discover / Settings / phone agent |
+| `ui/shell/PhoneShell.kt` | Phone 5b: `LocalIsPhone`, `LocalPhoneInsets`, `PhoneShell`, `PhoneFrame` | Discover / Settings / phone agent |
+| `ui/orbit5/Phone.kt`, `StatusBadge.kt` | Phone bottom bar, header, buttons, cards; Discover status pills | shared |
+| `ui/home/PhoneHome.kt` | Home on a phone | Discover / Settings / phone agent |
 | `orbit/CatalogApi.kt` | Client for every `/v1/catalog` route (`home`, `recommended`, `browse`, `collections`, `collection`) | shared |
 | `orbit/OrbitProfiles.kt` | Profiles, the picker state, picker style and "ask at start" (settings of this TV) | shell agent |
 
@@ -192,3 +196,29 @@ through those servers is not built on the TV yet.
   `/v1/requests`). Restyle `SettingsScreen` as a page under the bar with the spec's sub-menu, including Settings ▸
   Profiles with `OrbitProfiles.style / changeStyle` and `askOnStart / changeAskOnStart`. Remove the three simple
   rows in `orbitSection` once that exists.
+
+## Discover
+
+`DiscoverFeed` asks `/v1/discover/rows` (cached by the server) and `/v1/requests` (fresh; download progress comes from
+there, again every 20 s while something downloads, 2 min otherwise). Rows: Your requests (landscape cards with a
+status badge), Trending movies, Trending shows, Upcoming movies, Upcoming shows, Popular; the sub-menu filters them
+(For you · Movies · Shows · Your requests). Badges: `DiscoverApi.badge` (Requested, Approved, Downloading N% · ~T,
+Available, Pending). A title with `play` (in the profile's catalogue) offers Play and opens like a Home card; the others
+offer Request (OK on a poster, the hero button, or red). Blue opens a menu. Green (trailer) and yellow (not
+interested) have no action yet. Not set up (409), not linked to Orbit and Seerr down each get a calm page.
+
+## Settings
+
+A page under the bar (the avatar gets the double ring). Categories: Profiles (picker style, ask at start, switch
+profile, PIN, Name this TV) · Playback · Live TV (general, guide, reminders, recording, channels and groups) · Sources
+(home server link, playlists, sync) · Requests (Seerr state) · Appearance · About (version, updates, stats,
+diagnostics, remote help). Rows not restyled yet (update check, playback stats, text fields, reminders) are drawn in
+the device density through `legacy { }`. On a phone it is the same page scaled down.
+
+## Phone 5b
+
+`OrbitShell` switches to `PhoneShell` when `isPhoneLayout` (touch, not leanback, smallest width < 600 dp or
+portrait). There is no `OrbitCanvas` on phones: 1 dp is the spec's phone px. Sections read `LocalIsPhone` and pad by
+`LocalPhoneInsets` (header, bottom bar). Home and Discover have phone layouts; `SubMenuRow` becomes scrolling chips;
+`LegacyPage` sits between header and bar. Movies / Shows and Live TV still show their TV pages until their owners add
+phone variants. The activity no longer forces landscape (`screenOrientation="unspecified"`).

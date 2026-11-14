@@ -89,6 +89,20 @@ import io.github.kmmarin.tvbro.ui.live.PlayerOverlayStill
 import io.github.kmmarin.tvbro.ui.live.QuickAction
 import io.github.kmmarin.tvbro.ui.live.RowMarks
 import io.github.kmmarin.tvbro.ui.live.StreamPromptCard
+import io.github.kmmarin.tvbro.ui.shell.PhoneFrame
+import io.github.kmmarin.tvbro.ui.home.HomeRow
+import io.github.kmmarin.tvbro.ui.home.PhoneHomeContent
+import io.github.kmmarin.tvbro.ui.home.Tile
+import io.github.kmmarin.tvbro.ui.discover.DiscoverActions
+import io.github.kmmarin.tvbro.ui.discover.DiscoverContent
+import io.github.kmmarin.tvbro.ui.discover.DiscoverState
+import io.github.kmmarin.tvbro.ui.SettingsFrame
+import io.github.kmmarin.tvbro.ui.PickerPreview
+import io.github.kmmarin.tvbro.ui.profileRows
+import io.github.kmmarin.tvbro.orbit.DiscoverRequest
+import io.github.kmmarin.tvbro.orbit.DiscoverRow
+import io.github.kmmarin.tvbro.orbit.DiscoverTitle
+import io.github.kmmarin.tvbro.orbit.DownloadInfo
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -384,6 +398,71 @@ class DesignShotsTest {
                 )
                 ColorKeyLegend(Modifier.align(Alignment.BottomStart).padding(start = 96.dp, bottom = 28.dp), hints = listOf("OK" to "Play"))
             }
+        }
+    }
+
+    // ---- Discover, Settings > Profiles, phone (orbit/tv-discover) ----
+
+    private fun iso(msFromNow: Long): String {
+        val f = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.ROOT).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+        return f.format(java.util.Date(System.currentTimeMillis() + msFromNow))
+    }
+
+    @Test fun discover() = shot("discover") {
+        fun t(i: Long, n: String, type: String = "movie", status: String = "requestable", req: String? = null, dl: DownloadInfo? = null) =
+            DiscoverTitle(type, i, n, "2025", rating = "8.0", status = status, requestStatus = req, download = dl)
+        val rows = listOf(
+            DiscoverRow("trending-movies", "Trending movies", listOf(t(1, "Starfall Ridge"), t(2, "The Last Cartographer"), t(3, "Mirror Lake", status = "available"),
+                t(4, "Saffron Engine", req = "pending", status = "pending"), t(5, "Halcyon Drift"), t(6, "Paper Comets"), t(7, "Orchid Protocol"), t(8, "The Long Meridian"), t(9, "Quiet Machines"))),
+            DiscoverRow("trending-shows", "Trending shows", listOf(t(11, "Tidewater", "tv"), t(12, "Undertow Club", "tv"))),
+        )
+        val dl = DownloadInfo(42, 100, 58, iso(18 * 60_000L + 20_000))
+        fun r(id: Long, n: String, type: String, st: String, ms: String, by: String, d: DownloadInfo? = null, seasons: List<Int> = emptyList()) =
+            DiscoverRequest(id, type, id, st, ms, "", seasons, by, d, DiscoverTitle(type, id, n, "2025", status = ms, requestStatus = st, download = d))
+        val reqs = listOf(
+            r(21, "Coldharbour", "movie", "pending", "pending", "Dani"),
+            r(22, "Tidewater", "tv", "approved", "processing", "Maya", seasons = listOf(1)),
+            r(23, "Lantern Season", "movie", "approved", "processing", "Dani", dl),
+            r(24, "The Amber Hour", "movie", "completed", "available", "Dani"),
+            r(25, "Undertow Club", "tv", "pending", "pending", "Dani", seasons = listOf(2)),
+        )
+        OrbitCanvas {
+            ColorKeyActions(red = KeyAction("Request") {}, blue = KeyAction("More") {})
+            ShellFrame(active = NavTab.DISCOVER, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani") {
+                DiscoverContent(DiscoverState.READY, rows, reqs, DiscoverActions())
+            }
+        }
+    }
+
+    @Test fun discoverNotSetUp() = shot("discover-not-set-up") {
+        OrbitCanvas {
+            ShellFrame(active = NavTab.DISCOVER, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani", legend = false) {
+                DiscoverContent(DiscoverState.NOT_CONFIGURED, emptyList(), emptyList(), DiscoverActions(), admin = true)
+            }
+        }
+    }
+
+    @Test fun settingsProfiles() = shot("settings-profiles") {
+        OrbitCanvas {
+            ShellFrame(active = null, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani", settingsActive = true, legend = false) {
+                SettingsFrame(0, {}, preview = { PickerPreview(PickerStyle.ORBIT, listOf("Dani", "Maya", "Leo", "Guest")) }) {
+                    profileRows(PickerStyle.ORBIT, {}, true, {}, linked = true, current = "Dani", onSwitch = {}, onLink = {})
+                }
+            }
+        }
+    }
+
+    @Config(sdk = [34], qualifiers = "w412dp-h915dp-port-xxhdpi")
+    @Test fun phoneHome() = shot("phone-home") {
+        val cont = listOf(Tile("a", "Fathom Station", "S2 E4 · 28 min left", progress = 0.46f), Tile("b", "Wildglass", "1h 02m left", progress = 0.38f),
+            Tile("c", "The Quiet Bureau", "S1 E6 · 9 min left", progress = 0.84f))
+        val posters = (1..6).map { Tile("p$it", "Title $it", "2024 · Drama") }
+        PhoneFrame(active = NavTab.HOME, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani") {
+            PhoneHomeContent(
+                hero = Tile("k", "Ember Line", year = "2025", rating = "7.9", genres = listOf("Thriller")), eyebrow = "Featured tonight",
+                rows = listOf(HomeRow("continue", "Continue watching", cont, landscape = true), HomeRow("recent", "Recently added", posters)),
+                backdrop = { BackdropStill(art().asImageBitmap(), MeshColors(Color(0xFFC3261B), Color.Black), Modifier.fillMaxSize()) },
+            )
         }
     }
 }
