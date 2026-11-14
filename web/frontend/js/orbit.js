@@ -6,8 +6,18 @@
 //   account's devices, and for the owner / admins the household's accounts).
 // Everything works with a remote: arrows move between fields and tiles, OK selects, Back / Escape closes.
 // Names are always set as text (never as HTML).
-import { apiReq, apiAuthPost, deviceLabel } from './api.js';
+import { apiReq, apiAuthPost, deviceLabel, endStream } from './api.js';
 import { h, toast } from './util.js';
+import { forgetAccountHere } from './signout.js';
+
+/** Sign out on this browser: the stream slot is given back, the session ends, and everything the browser
+ *  cached for this account and profile is removed (signout.js), so the next person starts clean. */
+export async function signOutHere() {
+  endStream();
+  try { await apiReq('/v1/auth/logout', { method: 'POST', body: '{}' }); } catch {}
+  await forgetAccountHere();
+  location.reload();
+}
 
 let status = null;
 let me = null;
@@ -201,7 +211,7 @@ const USERNAME_HELP = '3 to 32 letters, digits, ".", "_" or "-"';
  *  be put back into the page after Settings redraws. isAdmin(): this device has the admin role (setup). */
 export function orbitSettingsCard(isAdmin) {
   const card = h('section', { class: 'card glass orbit-card' });
-  let sessions = [], accounts = [];
+  let sessions = [], accounts = [], tvs = [];
   const row = (label, ...val) => h('div', { class: 'set-row' }, h('div', { class: 'set-k' }, label), h('div', { class: 'set-v' }, ...val));
   const btn = (text, k, fn) => h('button', { class: 'btn secondary focusable', 'data-k': k, onclick: fn }, text);
 
@@ -211,6 +221,8 @@ export function orbitSettingsCard(isAdmin) {
       try { sessions = (await apiReq('/v1/sessions')).sessions; } catch { sessions = []; }
       accounts = [];
       if (me.account.role !== 'member') { try { accounts = (await apiReq('/v1/accounts')).accounts; } catch { accounts = []; } }
+      tvs = [];
+      if (me.account.role !== 'member') { try { tvs = (await apiReq('/v1/devices')).devices; } catch { tvs = []; } }
     }
     draw();
   }
@@ -225,7 +237,7 @@ export function orbitSettingsCard(isAdmin) {
     } else if (me) {
       const a = me.account;
       kids.push(row('Signed in as', `${a.displayName} (${a.username}, ${ROLE[a.role] || a.role})`,
-        btn('Sign out on this device', 'orbit-logout', async () => { try { await post('/v1/auth/logout'); } catch {} location.reload(); })));
+        btn('Sign out on this device', 'orbit-logout', signOutHere)));
       kids.push(row('Profile', me.profile ? me.profile.name + (me.profile.kids ? ' (kids)' : '') : '—',
         btn('Switch profile…', 'orbit-switch', () => showProfilePicker(me))));
       kids.push(row('Profiles', h('div', { class: 'orbit-list' }, ...me.profiles.map((p) => h('div', { class: 'orbit-li' },
@@ -236,11 +248,12 @@ export function orbitSettingsCard(isAdmin) {
         }) : null)),
         me.profiles.length < 8 ? btn('Add profile…', 'orbit-padd', addProfile) : null)));
       kids.push(row('Your devices', h('div', { class: 'orbit-list' }, ...sessions.map((s) => h('div', { class: 'orbit-li' },
-        h('span', {}, (s.device || 'Unnamed device') + (s.current ? ' (this device)' : '')), h('span', { class: 'hint' }, 'last used ' + fmtSeen(s.lastSeen)),
+        h('span', {}, (s.name ? `${s.name} (${s.device || 'device'})` : s.device || 'Unnamed device') + (s.current ? ' (this device)' : '')), h('span', { class: 'hint' }, 'last used ' + fmtSeen(s.lastSeen)),
         s.current ? null : btn('Sign out', 'orbit-rev-' + s.id, async () => {
           try { await post('/v1/sessions/revoke', { id: s.id }); toast('That device is signed out'); refresh(); } catch (e) { toast(e.message); }
         }))),
         btn('Link a TV…', 'orbit-pair', async () => { if (await approveTvDialog('')) refresh(); }))));
+      if (a.role !== 'member') kids.push(row('Linked TVs', linkedTvs()));
       if (a.role !== 'member') {
         kids.push(row('Household accounts', h('div', { class: 'orbit-list' }, ...accounts.map((x) => h('div', { class: 'orbit-li' },
           h('span', {}, `${x.displayName} (${x.username})`), h('span', { class: 'hint' }, (ROLE[x.role] || x.role) + (x.disabled ? ', disabled' : '')),
@@ -255,6 +268,29 @@ export function orbitSettingsCard(isAdmin) {
     }
     card.replaceChildren(...kids);
     if (focusKey) { const f = card.querySelector(`[data-k="${focusKey}"]`); if (f) f.focus(); }
+  }
+
+  /** Owner / admin: every linked TV of the household, with Rename and Unlink (the server says which may be
+   *  unlinked: the owner any, admins their own and members'). The name is what the stream prompt shows. */
+  function linkedTvs() {
+    if (!tvs.length) return h('span', { class: 'hint' }, 'No TV is linked yet. Link one with "Link a TV…" above.');
+    return h('div', { class: 'orbit-list' }, ...tvs.map((d) => h('div', { class: 'orbit-li' },
+      h('span', {}, d.name || d.device || 'TV', d.current ? ' (this device)' : ''),
+      h('span', { class: 'hint' }, [d.name ? d.device : 'not named', `${d.account.displayName}${d.profile ? ', profile ' + d.profile : ''}`,
+        'last used ' + fmtSeen(d.lastSeen)].filter(Boolean).join(' · ')),
+      btn('Rename', 'orbit-tvren-' + d.id, () => renameTv(d)),
+      d.canUnlink ? btn('Unlink', 'orbit-tvunl-' + d.id, async () => {
+        if (!confirm(`Unlink "${d.name || d.device}"? It is signed out and removes ${d.account.displayName}'s playlists, My list and watch progress from that TV.`)) return;
+        try { await post('/v1/devices/unlink', { id: d.id }); toast('That TV is unlinked'); refresh(); } catch (e) { toast(e.message); }
+      }) : null)));
+  }
+
+  async function renameTv(d) {
+    const v = await formDialog('Name this TV', [{ name: 'name', label: 'Name (1 to 32 letters, digits or spaces)', value: d.name || '', max: '32' }],
+      'Other devices see this name when every stream is in use ("Stop Kitchen and watch").', 'Save',
+      (x) => (x.name.trim() ? null : 'Give it a name, like Kitchen or Bedroom'));
+    if (!v) return;
+    try { await post('/v1/devices/rename', { id: d.id, name: v.name.trim() }); toast('Renamed'); refresh(); } catch (e) { toast(e.message); }
   }
 
   async function setup() {
