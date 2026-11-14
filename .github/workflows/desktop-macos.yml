@@ -1,0 +1,60 @@
+# Copyright 2026 The Orbit authors
+# SPDX-License-Identifier: Apache-2.0
+# macOS build of the desktop app: unit tests (also against a real Homebrew libmpv) and an unsigned DMG.
+# Not running yet: the repository is private and not on GitHub. Publishes nothing.
+name: Desktop macOS
+
+on:
+  push:
+    branches: [dev, main, orbit/macos]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop-macos:
+    name: Desktop tests and DMG (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is Apple Silicon (arm64); macos-13 is the last Intel (x86_64) runner image
+        os: [macos-latest, macos-13]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      # libmpv for the loader test (MpvLoaderTest.realLibmpv): never bundled, only used by the tests
+      - run: brew install mpv
+      - name: Tests
+        run: |
+          export TVBRO_TEST_LIBMPV="$(brew --prefix)/lib/libmpv.2.dylib"
+          ls -l "$TVBRO_TEST_LIBMPV"
+          ./gradlew --no-daemon :desktop:test
+      - name: DMG (unsigned)
+        run: ./gradlew --no-daemon :desktop:packageDmg
+      - name: No libmpv in the DMG's app
+        run: |
+          app="desktop/build/compose/binaries/main/app/Orbit.app"
+          test -d "$app"
+          if find "$app" -iname '*mpv*' | grep -q .; then echo "libmpv must not be bundled"; exit 1; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orbit-macos-${{ matrix.os }}-dmg
+          path: desktop/build/compose/binaries/main/dmg/*.dmg
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: desktop-macos-test-reports-${{ matrix.os }}
+          path: desktop/build/reports/tests
