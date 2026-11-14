@@ -793,32 +793,69 @@ def parse_xmltv(source, resolve: Callable[[str, Optional[list]], Optional[str]],
 
 def normalize_programmes(progs: list[Programme]) -> list[Programme]:
     """One channel's programmes made drawable: providers send overlapping entries (two titles printed over each
-    other in a guide). Sorted by start, then stop (of two that start together the longer one comes last and is
-    kept); exact duplicates and entries fully inside a longer one with the same title are dropped; an entry that
-    runs into the next one ends where the next one starts; what is left with no length is dropped. Trimmed entries
-    are copies; the input is not changed. The web app does the same on its side (guide.js normalizeProgs)."""
-    ps = sorted((p for p in progs if p is not None and p.stop > p.start), key=lambda p: (p.start, p.stop))
-    kept = []
-    for i, p in enumerate(ps):
-        drop = False
-        # only entries starting at or before p can contain it, and the list is sorted by start
-        for j, o in enumerate(ps):
-            if o.start > p.start:
-                break
-            if j == i or o.title != p.title or o.stop < p.stop:
+    other in a guide) and put fillers ("Next Game Today") or inner entries inside a live game. The rules (the same
+    in guide.js normalizeProgs and the Kotlin EpgIndex.tidy):
+    1. entries with stop <= start are dropped;
+    2. sorted by start, then the longer first (stable: equal ones keep their input order);
+    3. of entries starting at the same time only the first (the longest) is kept;
+    4. an entry lying fully inside an earlier kept entry with the same title is dropped (duplicates included);
+    5. timeline overlay: at any moment the entry shown is the kept one covering it with the latest start, so when an
+       inner entry ends the enclosing one resumes (Block 1-5, Match 2-3 -> Block 1-2, Match 2-3, Block 3-5; A 1-3,
+       B 2-4 -> A 1-2, B 2-4); adjacent pieces of one entry are merged;
+    6. zero-length pieces are dropped.
+    A piece is a copy of its entry with other start / stop; an entry shown whole is returned as it was, and the input
+    is not changed. O(n log n): one sweep with a stack of open entries."""
+    ps = sorted((p for p in progs if p is not None and p.stop > p.start), key=lambda p: (p.start, p.start - p.stop))
+    kept: list[Programme] = []
+    reach: dict[str, int] = {}  # latest stop of each title kept so far: all of them start no later than p
+    for p in ps:
+        if kept and kept[-1].start == p.start:
+            continue
+        r = reach.get(p.title)
+        if r is not None and r >= p.stop:
+            continue
+        reach[p.title] = p.stop if r is None else max(r, p.stop)
+        kept.append(p)
+    pieces: list[list] = []  # [entry index, start, stop]
+
+    def emit(i: int, a: int, b: int):
+        if b <= a:
+            return
+        if pieces and pieces[-1][0] == i and pieces[-1][2] == a:
+            pieces[-1][2] = b
+        else:
+            pieces.append([i, a, b])
+
+    stack: list[int] = []  # open entries, later starts on top; ones already ended are removed lazily
+    cur = 0
+
+    def advance(t: Optional[int]):
+        nonlocal cur
+        while stack:
+            top = kept[stack[-1]]
+            if top.stop <= cur:
+                stack.pop()
                 continue
-            drop = j < i if (o.start == p.start and o.stop == p.stop) else True
-            if drop:
+            end = top.stop if t is None or top.stop <= t else t
+            emit(stack[-1], cur, end)
+            cur = end
+            if t is not None and top.stop > t:
                 break
-        if not drop:
-            kept.append(p)
-    out = []
+            stack.pop()
+        if t is not None:
+            cur = max(cur, t)
+
     for i, p in enumerate(kept):
-        nx = kept[i + 1] if i + 1 < len(kept) else None
-        if nx is not None and nx.start < p.stop:
-            p = Programme(p.key, p.start, nx.start, p.title, p.desc, p.sub, p.ep)
-        if p.stop > p.start:
-            out.append(p)
+        if not stack:
+            cur = p.start
+        advance(p.start)
+        stack.append(i)
+    advance(None)
+    out = []
+    for i, a, b in pieces:
+        p = kept[i]
+        out.append(p if (a == p.start and b == p.stop) else
+                   Programme(p.key, a, b, p.title, p.desc, p.sub, p.ep))
     return out
 
 
