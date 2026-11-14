@@ -157,6 +157,9 @@ object FocusMemory {
 
     /** The newest remembered item outside the side menu still composed (Right from the side menu). */
     fun restoreContent(): Boolean = content.firstOrNull { it.attachedNow }?.request() == true
+
+    /** The newest remembered page item still composed, as a focus target (Down from the top bar); null when none. */
+    fun contentTarget(): FocusRequester? = content.firstOrNull { it.attachedNow }?.fr
 }
 
 /**

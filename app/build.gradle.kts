@@ -83,7 +83,10 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1,INDEX.LIST,DEPENDENCIES}" }
-    testOptions { unitTests.isReturnDefaultValues = true }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+        unitTests.isIncludeAndroidResources = true // Robolectric UI tests load the app's drawables
+    }
 }
 
 dependencies {
@@ -103,6 +106,8 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // Orbit TV design: the two backdrop colours of a title when the catalog sends none (ui/orbit5/TitleColors.kt)
+    implementation("androidx.palette:palette:1.0.0")
     val media3 = "1.4.1"
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-exoplayer-hls:$media3")
@@ -116,4 +121,9 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("net.sf.kxml:kxml2:2.3.0")
+    // Compose UI tests on the JVM (shell focus, design previews rendered to PNG): Robolectric, no device needed
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.test.ext:junit:1.2.1")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
