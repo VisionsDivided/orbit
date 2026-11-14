@@ -41,6 +41,11 @@ interface OrbitHost {
     fun describe(key: String): JsonObject?
     /** Another device took this TV's stream slot: stop live / film playback and say why. */
     fun stopPlayback(reason: String)
+    /**
+     * Unlinked: forget everything the account brought onto the TV (My list and favourites, recently watched and
+     * their title snapshots, the last channel, search history). The playlists and watch state are removed separately.
+     */
+    fun clearAccountData()
 }
 
 /** Every stream is in use: who uses them, and the answer (true = stop the oldest viewer and watch here). */
@@ -75,6 +80,7 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
     fun attach(h: OrbitHost) {
         host = h
         scope.launch(Dispatchers.IO) {
+            if (store.wipePending) forget(signedOutByServer = false)     // an unlink the app was closed during
             val l = store.load()
             withContext(Dispatchers.Main) { link = l }
             if (l != null && check(l)) startSyncLoop()
@@ -221,18 +227,33 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
         if (out.episodes.isNotEmpty()) api.pushEpisodes(l, out.episodes)
     }
 
-    /** Sign-out from the server or unlink: forget the session and remove the playlists that came from the server. */
+    /**
+     * Unlink, or the server ended this TV's session: everything the account brought onto the TV goes (session and
+     * tokens, the playlists from the server, My list and favourites, resume points, show progress, recently watched),
+     * so the next account starts clean. Marked first and finished at the next start if the app is closed half-way.
+     */
     private suspend fun forget(signedOutByServer: Boolean) = withContext(NonCancellable) {   // it may cancel its own caller (the loop)
+        store.wipePending = true
         withContext(Dispatchers.Main) {
             loop?.cancel(); loop = null
+            beat?.cancel(); beat = null
+            synchronized(holders) { holders.clear() }
             link = null; signedOut = signedOutByServer
         }
         syncLock.withLock {                       // after any sync still running, so nothing it fetched comes back
             cached = null; legacy = false
-            store.clear()
-            val ids = store.serverSources
-            store.serverSources = emptySet()
-            withContext(Dispatchers.Main) { if (ids.isNotEmpty()) host?.replaceSources(emptyList(), ids) }
+            val h = host
+            withContext(Dispatchers.Main) {
+                try { OrbitUnlink.wipe(object : OrbitUnlink.Steps {
+                    override fun setPending(on: Boolean) { store.wipePending = on }
+                    override fun clearSession() = store.clear()
+                    override fun serverSources() = store.serverSources
+                    override fun removeSources(ids: Set<String>) { h?.replaceSources(emptyList(), ids) }
+                    override fun forgetServerSources() { store.serverSources = emptySet() }
+                    override fun clearWatchState() = WatchDb.get(app).clearAll()
+                    override fun clearAccountData() { h?.clearAccountData() }
+                }) } catch (e: Exception) { Diag.log("Orbit: unlink cleanup stopped (${e.javaClass.simpleName}); finished at the next start") }
+            }
         }
     }
 
@@ -330,6 +351,8 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
                 when (r) {
                     PairPoll.Pending -> if (message.isNotEmpty()) withContext(Dispatchers.Main) { message = "" }
                     is PairPoll.Approved -> {
+                        // linked again without unlinking first: the previous account's data goes, as on unlink
+                        link?.let { old -> api.logout(old); forget(signedOutByServer = false) }
                         store.save(r.link)
                         store.listBase = emptySet()
                         cached = null; legacy = false
@@ -360,7 +383,7 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
         scope.launch(Dispatchers.IO) {
             api.logout(l)
             forget(signedOutByServer = false)
-            withContext(Dispatchers.Main) { message = "This TV is unlinked; the playlists from the home server were removed" }
+            withContext(Dispatchers.Main) { message = "This TV is unlinked; the playlists, My list and watch progress from the home server were removed" }
         }
     }
 

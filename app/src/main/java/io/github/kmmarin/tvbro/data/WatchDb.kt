@@ -160,6 +160,20 @@ class WatchDb private constructor(private val ctx: Context) : SQLiteOpenHelper(c
         rev.intValue++
     }
 
+    /** Orbit unlink: every position, watched mark and series row goes (memory at once, the database right after). */
+    fun clearAll() {
+        ensure()
+        eps.clear(); epSeries.clear(); series.clear()
+        exec.execute {
+            try {
+                val db = writableDatabase
+                db.beginTransaction()
+                try { db.delete("watch", null, null); db.delete("series", null, null); db.setTransactionSuccessful() } finally { db.endTransaction() }
+            } catch (e: Exception) { Diag.log("state: clear failed (${e.javaClass.simpleName})") }
+        }
+        rev.intValue++
+    }
+
     companion object {
         @Volatile private var inst: WatchDb? = null
         fun get(ctx: Context): WatchDb = inst ?: synchronized(this) { inst ?: WatchDb(ctx.applicationContext).also { inst = it } }

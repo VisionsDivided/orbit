@@ -71,7 +71,11 @@ The server checks the `Host` header, so the address the TV uses (for example `19
 | GET | `/v1/device/playlists` | a **linked TV** session only (403 for browser sign-ins) | → `{"playlists": [{"id", "name", "kind": "xtream"\|"m3u", "server", "user", "pass", "url", "epgUrl"}]}`: the household's enabled playlists with their logins, so the TV plays directly from the provider. Ids are the server's (`p0`, `p1` …), so channel and VOD keys are the same on every device. |
 
 Sessions have a kind (`orbit.db` migration 002): `web` for a browser sign-in, `tv` for a device linked with a pairing
-code. The TV keeps the playlists encrypted and removes them again when it is unlinked or signed out. It syncs My list
+code. The TV keeps the playlists encrypted. When it is unlinked, signed out from another device, or linked to
+another account, it removes everything the account brought: session and CSRF token, the server's playlists, My
+list and favourites, film resume points, episode marks and show progress, recently watched and search history, so
+the next account starts clean (data from before the first link was merged into that account then and goes too; it
+comes back when that account links again). It syncs My list
 (three-way merge, so offline changes on either side survive) and film resume points (newest wins) through the
 profile's state, every minute and shortly after a change: it downloads the state only when its revision changed and
 sends its own changes in one batch (`/v1/sync/*` below; the `/api/state` routes with older servers).

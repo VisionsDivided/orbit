@@ -42,10 +42,20 @@ class OrbitStore(private val ctx: Context) {
         } catch (e: Exception) { Diag.log("Orbit: encrypted write failed (${e.javaClass.simpleName})") }
     }
 
-    /** Forget the session (the last server address stays, to link again quickly). */
+    /** Forget the session, the sync base and this TV's stream id (the last server address stays, to link again quickly). */
     fun clear() {
-        try { prefs?.edit { listOf("server", "session", "csrf", "account", "username", "profile", "kids", "listBase").forEach { remove(it) } } } catch (e: Exception) { }
+        try { prefs?.edit { listOf("server", "session", "csrf", "account", "username", "profile", "kids", "listBase", "streamSid").forEach { remove(it) } } } catch (e: Exception) { }
+        sid = null
     }
+
+    /**
+     * An unlink has started and not finished (the app was closed half-way): finished at the next start. Plain
+     * preferences, not the encrypted file, so it still works when the Keystore key is gone.
+     */
+    var wipePending: Boolean
+        get() = plain.getBoolean("wipePending", false)
+        set(v) { plain.edit(commit = true) { putBoolean("wipePending", v) } }
+    private val plain by lazy { ctx.getSharedPreferences("orbit", Context.MODE_PRIVATE) }
 
     /** My list as it was after the last sync (the base of the three-way merge). */
     var listBase: Set<String>
@@ -57,14 +67,16 @@ class OrbitStore(private val ctx: Context) {
         get() = try { prefs?.getStringSet("serverSources", emptySet())?.toSet() ?: emptySet() } catch (e: Exception) { emptySet() }
         set(v) { try { prefs?.edit { putStringSet("serverSources", v) } } catch (e: Exception) { } }
 
-    /** This TV's stream id for the shared stream count (made once, so zapping never takes a second slot). */
-    val streamSid: String by lazy {
-        try {
-            prefs?.getString("streamSid", null) ?: ("tv" + java.util.UUID.randomUUID().toString().replace("-", "")).also { v ->
-                prefs?.edit { putString("streamSid", v) }
-            }
-        } catch (e: Exception) { "tv" + java.util.UUID.randomUUID().toString().replace("-", "") }
-    }
+    /** This TV's stream id for the shared stream count (made once per link, so zapping never takes a second slot). */
+    @Volatile private var sid: String? = null
+    val streamSid: String
+        get() = sid ?: synchronized(this) {
+            sid ?: try {
+                prefs?.getString("streamSid", null) ?: ("tv" + java.util.UUID.randomUUID().toString().replace("-", "")).also { v ->
+                    prefs?.edit { putString("streamSid", v) }
+                }
+            } catch (e: Exception) { "tv" + java.util.UUID.randomUUID().toString().replace("-", "") }
+        }.also { sid = it }
 
     var lastServer: String
         get() = try { prefs?.getString("lastServer", "") ?: "" } catch (e: Exception) { "" }
