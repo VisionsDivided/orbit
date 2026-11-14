@@ -31,7 +31,8 @@ enum class Screen { LIST, PLAYER, GUIDE, SETTINGS, ADD_SOURCE, GUIDE_SEARCH, MAP
     ORBIT_LINK /* Orbit: link this TV to the home server */ }
 
 data class CatchupPlay(val url: String, val title: String)
-data class VodPlay(val key: String, val url: String, val title: String)
+/** [media]: a Plex / Jellyfin title played through the home server (orbit/MediaPlayback.kt), else null. */
+data class VodPlay(val key: String, val url: String, val title: String, val media: io.github.kmmarin.tvbro.orbit.MediaPlay? = null)
 
 // Built-in Movies / Shows categories: keys no provider category can have (a provider "History" category collided
 // with the watch history: both showed as selected and choosing it showed the history); vodCatLabel() names them.
@@ -537,7 +538,7 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
     fun favShortcut(): Boolean {
         when (screen) {
             Screen.PLAYER -> current?.let { toggleFav(it); return true }
-            Screen.VODPLAY -> (epSeries?.takeIf { vodPlay?.key?.startsWith("e|") == true } ?: detail)?.let { toggleFavKey(it); return true }
+            Screen.VODPLAY -> (epSeries?.takeIf { vodPlay?.key?.startsWith("e|") == true && vodPlay?.media == null } ?: detail)?.let { toggleFavKey(it); return true }
             Screen.LIST -> favAction?.let { it(); return true }
             else -> {}
         }
@@ -1455,7 +1456,7 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /** Series of the playing episode, when it is one. */
-    fun playingSeries(): VodItem? = epSeries?.takeIf { vodPlay?.key?.startsWith("e|") == true }
+    fun playingSeries(): VodItem? = epSeries?.takeIf { vodPlay?.key?.startsWith("e|") == true && vodPlay?.media == null }
 
     /** The user picked a subtitle (or off) or audio track while an episode plays: remember it for the series. */
     fun rememberTrack(audio: Boolean, lang: String?, on: Boolean) {

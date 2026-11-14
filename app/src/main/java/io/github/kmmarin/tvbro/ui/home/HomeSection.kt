@@ -206,11 +206,15 @@ internal fun open(m: AppModel, t: Tile, play: Boolean, unlocked: Boolean = false
     // a catalog title of a PIN-locked category (its category name is not known here, so the PIN is asked each time)
     if (t.locked && !unlocked && m.prefs.pinHash.isNotEmpty()) { m.askPin { open(m, t, play, unlocked = true) }; return }
     val v: VodItem = t.vod ?: run {
-        // a Plex / Jellyfin title: its page (details, seasons, My list; playback on the TV comes later)
-        if (t.source == "plex" || t.source == "jellyfin") io.github.kmmarin.tvbro.ui.movies.openMediaTitle(m,
-            io.github.kmmarin.tvbro.ui.movies.Title(key = t.key, title = t.title, show = t.show, poster = t.poster,
+        // a Plex / Jellyfin title: its page (details, seasons, My list); [play] also starts the film from where it
+        // stopped, or the show's next episode, through the home server (Back from the player returns to the page)
+        if (t.source == "plex" || t.source == "jellyfin") {
+            val title = io.github.kmmarin.tvbro.ui.movies.Title(key = t.key, title = t.title, show = t.show, poster = t.poster,
                 backdrop = t.backdrop, colors = t.colors, year = t.year, rating = t.rating, genres = t.genres,
-                source = t.source, id = t.id, conn = t.conn))
+                source = t.source, progress = t.progress, id = t.id, conn = t.conn, next = t.next)
+            io.github.kmmarin.tvbro.ui.movies.openMediaTitle(m, title)
+            if (play) io.github.kmmarin.tvbro.ui.movies.playMediaTitle(m, title)
+        }
         else m.toast("${t.title} is not on this TV yet")
         return
     }

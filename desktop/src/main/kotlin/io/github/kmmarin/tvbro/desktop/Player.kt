@@ -193,6 +193,9 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
         val m = mpv
         if (r.url != loadedUrl) {
             saveResume()
+            // a Plex / Jellyfin title that stops playing here: "stopped" to the media server (not when the same one loads again)
+            if (mediaReq?.answer?.session != r.media?.answer?.session) mediaEnd()
+            if (r.media != null && mediaReq == null) { mediaReq = r.media; mediaClock = io.github.kmmarin.tvbro.orbit.MediaProgressClock(); fellBack = r.media.hlsOnly }
             req = r
             if (m != null) { if (start(m, r)) loadedUrl = r.url }
             upNextAt = 0; upNextCancelled = false; advancing = false
@@ -203,7 +206,11 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
     }
 
     /** Plays [r] in [m]; an address that may not be played ([PlayUrl]) is refused with a notice instead. */
-    private fun start(m: Mpv, r: PlayReq): Boolean = try { m.play(playUrl(r), r.startSec, trustedLocal = r.recording != null); true }
+    private fun start(m: Mpv, r: PlayReq): Boolean = try {
+        // the home server's relay wants this app's session cookie (Plex / Jellyfin titles); nothing else gets it
+        m.set("http-header-fields", if (r.media != null) DeskMediaPlay.headerFields(app.orbit.link, r.url) else "")
+        m.play(playUrl(r), r.startSec, trustedLocal = r.recording != null); true
+    }
         catch (e: IllegalArgumentException) { Diag.log("${r.title}: address refused"); app.toast(e.message ?: "Not played"); false }
 
     /** What mpv opens for [r]: live Xtream channels in their own format (TS / HLS, synced per profile); the rest as is. */
@@ -224,7 +231,7 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
         if (app.full) showBar()
     }
 
-    fun close() { saveResume(); stopRecovery(); sleepMin = 0; sleepJob?.cancel(); menu = false; info = false; upNextAt = 0; req = null; loadedUrl = null; mpv?.cmd("stop") }
+    fun close() { saveResume(); mediaEnd(); stopRecovery(); sleepMin = 0; sleepJob?.cancel(); menu = false; info = false; upNextAt = 0; req = null; loadedUrl = null; mpv?.cmd("stop") }
 
     // ---- live TV that errors or stalls: reconnect, then the channel's alternate sources, then rest (shared LiveRecovery) ----
     private var recovery: LiveRecovery? = null
@@ -288,6 +295,30 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
         if (alt != null) setNotice("Playing from another source: ${alt.name}", 6000) else if (was) setNotice("", 0)
     }
 
+    // ---- Plex / Jellyfin titles: progress to the media server (every 10 s, on pause, "stopped" at the end) ----
+    private var mediaReq: DeskMedia? = null
+    private var mediaClock: io.github.kmmarin.tvbro.orbit.MediaProgressClock? = null
+    /** The original file did not play and HLS was asked for (once per title). */
+    private var fellBack = false
+
+    private fun mediaEnd() {
+        val mr = mediaReq ?: return
+        mediaClock?.stop()?.let { app.media.report(mr, (pos() ?: 0) / 1000, it) }
+        mediaReq = null; mediaClock = null
+    }
+
+    /** The original file of [md] did not play: once, the same title as HLS from where it stopped. */
+    private fun mediaFallback(md: DeskMedia, r: PlayReq): Boolean {
+        if (md.answer.isHls || md.hlsOnly || fellBack) return false
+        fellBack = true
+        osd("Trying another format…")
+        app.media.play(md.conn, md.id, md.source, md.episode, md.item, hlsOnly = true, atSecs = pos()?.div(1000)?.takeIf { it > 0 } ?: r.startSec)
+        return true
+    }
+
+    /** [r] has a next episode (the playlist's, or the media server's). */
+    private fun hasNext(r: PlayReq): Boolean = r.nextEpisode() != null || r.media?.answer?.next != null
+
     private fun pos(): Long? = mpv?.num("time-pos")?.let { (it * 1000).toLong() }
     private fun dur(): Long = mpv?.num("duration")?.let { (it * 1000).toLong() } ?: 0
 
@@ -305,6 +336,8 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
     private fun onLoaded() {
         val r = req ?: return
         val m = mpv ?: return
+        // Plex / Jellyfin: the server's WebVTT subtitles next to the file's own tracks (S / quick action Subtitles)
+        r.media?.let { md -> for (s in md.answer.subtitles) m.cmd("sub-add", s.url, "auto", s.label, s.lang ?: "") }
         if (!r.isEpisode) return
         // captions and audio remembered for this series
         val row = app.watch.series(r.series!!.key) ?: return
@@ -322,9 +355,19 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
         val r = req ?: return
         // live: never a dialog; reconnect, then another source (the corner notice says what happens)
         if (recovery != null) return liveFailed(if (why.startsWith("error")) "error" else "ended")
-        if (why.startsWith("error")) { osd("Playback failed (${why.removePrefix("error: ")})"); app.toast("Playback failed: ${r.title}"); return }
+        if (why.startsWith("error")) {
+            val md = r.media
+            if (md != null && mediaFallback(md, r)) return
+            osd("Playback failed (${why.removePrefix("error: ")})")
+            app.toast(if (md != null) "Could not play ${r.title} from ${DeskMediaPlay.name(md.source)}: the home server stopped answering or this format cannot be played" else "Playback failed: ${r.title}")
+            return
+        }
         if (r.live != null && r.archive == null) return
         saveResume(ended = true)
+        r.media?.let { md ->
+            if (md.answer.next != null && app.settings.autoplayNext && !upNextCancelled) return playNext()
+            return app.stopPlayback()
+        }
         val next = r.nextEpisode()
         if (r.isEpisode && next != null && app.settings.autoplayNext && !upNextCancelled) return playNext()
         app.stopPlayback()
@@ -332,8 +375,14 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
 
     fun playNext() {
         val r = req ?: return
-        val n = r.nextEpisode() ?: return
         if (advancing) return
+        r.media?.let { md ->
+            val nx = md.answer.next ?: return
+            advancing = true
+            app.media.play(md.conn, nx.id, md.source, true, md.item)
+            return
+        }
+        val n = r.nextEpisode() ?: return
         advancing = true
         saveResume(ended = true)
         app.playEpisode(r.series!!, r.episodes, n)
@@ -350,13 +399,14 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
         val mute = !app.full && app.settings.previewMuted && !app.docked // the video that left full screen keeps its sound
         if (mute != muted) { muted = mute; m.set("mute", if (mute) "yes" else "no") }
         if (r.resumeKey != null && t - lastSave > 10_000 && app.full) saveResume()
+        mediaReq?.let { mr -> mediaClock?.tick(t, m.get("pause") != "yes" && pos() != null)?.let { app.media.report(mr, (pos() ?: 0) / 1000, it) } }
         if (recovery != null && recoverJob?.isActive != true) when (stall.tick(m.num("time-pos"), m.get("pause") == "yes", t)) {
             StallWatch.Event.STALL -> { noteStall(r); liveFailed("stalled") }
             StallWatch.Event.HEALTHY -> liveHealthy()
             StallWatch.Event.NONE -> {}
         }
         // Up next: during the credits, a card and a countdown; then the next episode plays
-        if (r.isEpisode && app.full && app.settings.autoplayNext && !upNextCancelled && r.nextEpisode() != null) {
+        if ((r.isEpisode || r.media?.episode == true) && app.full && app.settings.autoplayNext && !upNextCancelled && hasNext(r)) {
             val p = pos() ?: 0; val d = dur()
             if (Watch.upNextDue(p, d)) { if (upNextAt == 0L) { upNextAt = t; lastInput = t } }
             else upNextAt = 0
@@ -434,7 +484,7 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
             r.archive != null -> l += PlayerOsd.Qa("tolive", "Back to live", "»")
             !live && ch == null -> l += PlayerOsd.Qa("startover", "From start", "↺")
         }
-        if (r.isEpisode && r.nextEpisode() != null) l += PlayerOsd.Qa("next", "Next episode", "»")
+        if (hasNext(r)) l += PlayerOsd.Qa("next", "Next episode", "»")
         if (live) {
             val f = app.channelFormat(ch!!.key)
             val eff = if (f == io.github.kmmarin.tvbro.data.ChannelFormats.HLS) "HLS" else "TS"
@@ -570,7 +620,7 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
             out += PlayerOsd.text(side + 24, 64.0, ch.name.split(' ', '-').filter { it.isNotBlank() }.take(2).joinToString("") { it.take(1) }.uppercase(), 17.0, bold = true, an = 5)
             out += PlayerOsd.text(side + 62, 47.0, ch.name, 19.0, bold = true)
             out += PlayerOsd.text(side + 62, 71.0, listOfNotNull(if (ch.number > 0) "Channel ${ch.number}" else null, app.groupLabel(ch.group).takeIf { it.isNotBlank() }).joinToString(" · "), 15.0, PlayerOsd.MUTED, .64)
-        } else out += PlayerOsd.text(side, 47.0, if (r.isEpisode) "Episode" else if (r.recording != null) "Recording" else "Film", 15.0, PlayerOsd.MUTED, .64, bold = true)
+        } else out += PlayerOsd.text(side, 47.0, if (r.isEpisode || r.media?.episode == true) "Episode" else if (r.recording != null) "Recording" else "Film", 15.0, PlayerOsd.MUTED, .64, bold = true)
         out += PlayerOsd.text(w - side, 41.0, io.github.kmmarin.tvbro.data.TimeFmt.time(nowS), 27.0, an = 9, light = true)
         if (recordingNow() != null) out += PlayerOsd.text(w - side, 80.0, "● REC", 15.0, PlayerOsd.REC, bold = true, an = 9)
         // the info block (§10) at y ≈ 408
@@ -592,14 +642,15 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
             val sub = when {
                 r.archive != null -> "Catch-up · ${io.github.kmmarin.tvbro.data.TimeFmt.dayTime(r.archive.start * 1000, "EEE")}"
                 r.isEpisode -> r.series!!.name + " · " + Watch.code(r.episode!!)
+                r.media?.answer?.subtitle != null -> r.media.answer.title.ifBlank { null }
                 else -> null
             }
             if (sub != null) out += PlayerOsd.text(side, y0 + 10, sub, 16.0, PlayerOsd.MUTED, .64, an = 4)
-            val title = if (r.isEpisode) VodFmt.cleanTitle(r.series!!.name, r.episode!!.title) else r.archive?.title ?: r.title
+            val title = if (r.isEpisode) VodFmt.cleanTitle(r.series!!.name, r.episode!!.title) else r.media?.answer?.subtitle ?: r.archive?.title ?: r.title
             out += PlayerOsd.text(side, y0 + 30, title, 48.0, bold = true)
             out += PlayerOsd.scrubber(y0 + 104, w, if (d > 0) p.toDouble() / d else 0.0, Watch.clock(p), if (d > 0) "-" + Watch.clock((d - p).coerceAtLeast(0)) else "--:--")
             out += PlayerOsd.text(side, y0 + 122, if (m.get("pause") == "yes") "❚❚  Paused" else listOfNotNull(if (d > 0) "Ends ${io.github.kmmarin.tvbro.data.TimeFmt.time(nowS + (d - p) / 1000)}" else null,
-                r.nextEpisode()?.let { "Next · ${Watch.code(it)}" }).joinToString("   ·   "), 15.0, PlayerOsd.MUTED, .64)
+                r.nextEpisode()?.let { "Next · ${Watch.code(it)}" } ?: r.media?.answer?.next?.let { "Next · ${it.title}" }).joinToString("   ·   "), 15.0, PlayerOsd.MUTED, .64)
         }
         if (menu) out += PlayerOsd.quickActions(actions(), sel)
         else out += PlayerOsd.text(side, PlayerOsd.QA_Y + 20, "Enter quick actions · ↑↓ " + (if (ch != null && r.archive == null) "channel" else "show the bar") + " · ←→ " + (if (ch != null && r.archive == null) "seek" else "10 s") + " · right click for the actions", 14.0, PlayerOsd.MUTED, .5)
@@ -638,12 +689,13 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
     private fun upNextEvents(): List<String>? {
         val r = req ?: return null
         if (upNextAt == 0L) return null
-        val n = r.nextEpisode() ?: return null
+        val label = r.nextEpisode()?.let { n -> "${Watch.code(n)} · ${VodFmt.cleanTitle(r.series!!.name, n.title)}" }
+            ?: r.media?.answer?.next?.let { it.title.ifBlank { "Next episode" } } ?: return null
         val left = (Watch.UP_NEXT_COUNTDOWN_S - (System.currentTimeMillis() - upNextAt) / 1000).coerceAtLeast(0)
         val w = aw; val pw = 380.0; val x = w - PlayerOsd.SIDE - pw; val y = 300.0
         return listOf(PlayerOsd.panel(x, y, pw, 112.0),
             PlayerOsd.text(x + 18, y + 14, "UP NEXT · PLAYING IN $left S", 12.0, PlayerOsd.ACCENT, bold = true),
-            PlayerOsd.text(x + 18, y + 36, "${Watch.code(n)} · ${VodFmt.cleanTitle(r.series!!.name, n.title)}", 20.0, bold = true),
+            PlayerOsd.text(x + 18, y + 36, label, 20.0, bold = true),
             PlayerOsd.text(x + 18, y + 72, "Enter play now · Esc cancel", 14.0, PlayerOsd.MUTED, .64))
     }
 
@@ -722,7 +774,7 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
             KeyEvent.VK_R -> toggleRec()
             KeyEvent.VK_S -> cycleTrack("sub", true)
             KeyEvent.VK_A -> cycleTrack("audio", false)
-            KeyEvent.VK_N -> if (r?.isEpisode == true) { if (r.nextEpisode() != null) playNext() else osd("Last episode") }
+            KeyEvent.VK_N -> if (r != null && (r.isEpisode || r.media?.episode == true)) { if (hasNext(r)) playNext() else osd("Last episode") }
             KeyEvent.VK_B -> if (r?.isEpisode == true) playPrev()
             KeyEvent.VK_W -> app.dueReminder?.let { app.reminderDone(it, true) }
             KeyEvent.VK_Y -> act("fav", 1)

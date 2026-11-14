@@ -37,7 +37,7 @@ data class Tile(
     val rating: String? = null,
     val genres: List<String> = emptyList(),
     val show: Boolean = false,
-    /** The title as the TV plays it (null for Plex / Jellyfin titles, which the TV cannot play yet). */
+    /** The title as the TV plays it (null for Plex / Jellyfin titles: they play through the home server, [id] and [conn]). */
     val vod: VodItem? = null,
     val channel: Channel? = null,
     val seriesRow: SeriesRow? = null,
@@ -46,6 +46,8 @@ data class Tile(
     /** The catalog's own item id and media connection (Plex / Jellyfin titles open their page with these). */
     val id: String = "",
     val conn: String? = null,
+    /** A Plex / Jellyfin show's next episode (Play on Home plays it). */
+    val next: io.github.kmmarin.tvbro.orbit.CatalogNext? = null,
 )
 
 /** A row on Home; [landscape] rows use 16:9 cards (Continue watching, live channels). */
@@ -105,7 +107,7 @@ class HomeFeed(private val m: AppModel, private val api: CatalogApi = CatalogApi
         val ps = c.progressSecs; val pd = c.progressDur   // locals: CatalogItem is in shared (no smart cast across modules)
         val left = if (!c.isShow && ps != null && pd != null && pd > ps) "${(pd - ps) / 60} min left" else null
         val meta = next ?: left ?: listOfNotNull(c.year, c.genres.firstOrNull()).joinToString(" · ").ifEmpty { null }
-        return Tile(c.key, c.title, meta, c.poster, c.backdrop, c.colors, c.source, c.progress, c.year, c.rating, c.genres, c.isShow, vod, locked = c.locked, id = c.id, conn = c.conn)
+        return Tile(c.key, c.title, meta, c.poster, c.backdrop, c.colors, c.source, c.progress, c.year, c.rating, c.genres, c.isShow, vod, locked = c.locked, id = c.id, conn = c.conn, next = c.next)
     }
 
     // ---- local data ----

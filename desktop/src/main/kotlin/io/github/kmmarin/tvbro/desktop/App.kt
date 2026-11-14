@@ -20,6 +20,8 @@ data class PlayReq(
     val startSec: Long = 0, val archive: Programme? = null, val vod: VodItem? = null,
     val series: VodItem? = null, val episode: Episode? = null, val episodes: List<Episode> = emptyList(),
     val recording: Rec? = null,
+    /** A Plex / Jellyfin title through the home server (MediaDesk.kt): no stream slot, progress to the media server. */
+    val media: DeskMedia? = null,
 ) {
     val isEpisode: Boolean get() = series != null && episode != null
     fun nextEpisode(): Episode? = episode?.let { Watch.next(episodes, it.id) }
@@ -83,6 +85,8 @@ class AppState(private val scope: CoroutineScope, testSources: List<Source>? = n
     val orbit = OrbitDesktop(this, scope)
     /** Orbit: Home, Movies and Shows from the home server's catalogue while signed in (Catalog.kt). */
     val catalog = DeskCatalog(this)
+    /** Orbit: Plex / Jellyfin titles play through the home server (MediaDesk.kt). */
+    val media = DeskMediaPlay(this)
     /** A page inside a section (a collection, Manage profiles) that Esc closes first; null = none. */
     var pageBack by mutableStateOf<(() -> Unit)?>(null)
     /** Settings ▸ Profiles opens "Manage profiles" (set while Settings is on screen; Who's watching? uses it). */
@@ -450,7 +454,8 @@ class AppState(private val scope: CoroutineScope, testSources: List<Source>? = n
      */
     internal fun setPlaying(r: PlayReq?, ask: Boolean = true) {
         val gen = ++playGen
-        if (r == null || r.recording != null || !orbit.linked || orbit.holding) return applyPlaying(r)
+        // recordings and Plex / Jellyfin titles take no IPTV stream slot
+        if (r == null || r.recording != null || r.media != null || !orbit.linked || orbit.holding) return applyPlaying(r)
         scope.launch {
             val ok = orbit.claimStream(r.live?.name ?: r.title, ask)
             if (gen != playGen) return@launch
@@ -791,6 +796,8 @@ class AppState(private val scope: CoroutineScope, testSources: List<Source>? = n
     fun vodMenu(v: VodItem) {
         val items = ArrayList<Pair<String, () -> Unit>>()
         items += "Open" to { detail = v; full = false }
+        val mc = catalog.info[v.key]?.takeIf { CatalogMap.isMedia(it) }
+        if (mc != null && (v.kind != "series" || mc.next != null)) items += "Play" to { media.playTitle(v, mc) }
         if (v.kind == "series") {
             items += "Mark show as watched" to { markSeries(v, true) }
             items += "Mark show as unwatched" to { markSeries(v, false) }

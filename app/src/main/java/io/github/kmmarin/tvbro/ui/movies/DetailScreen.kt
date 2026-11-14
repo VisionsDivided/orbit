@@ -61,6 +61,11 @@ import io.github.kmmarin.tvbro.data.VodFmt
 import io.github.kmmarin.tvbro.data.VodItem
 import io.github.kmmarin.tvbro.data.Watch
 import io.github.kmmarin.tvbro.ui.MenuState
+import io.github.kmmarin.tvbro.orbit.MediaApi
+import io.github.kmmarin.tvbro.orbit.MediaEp
+import io.github.kmmarin.tvbro.orbit.MediaInfo
+import io.github.kmmarin.tvbro.orbit.MediaPlayback
+import io.github.kmmarin.tvbro.orbit.MediaSeason
 import io.github.kmmarin.tvbro.ui.SafeFocus
 import io.github.kmmarin.tvbro.ui.orbit5.BackdropSpec
 import io.github.kmmarin.tvbro.ui.orbit5.CardInfo
@@ -114,7 +119,7 @@ data class DetailData(
     val director: String? = null,
 )
 
-/** A button of the title page; [enabled] false draws it muted ("Play (coming soon)") and OK does nothing. */
+/** A button of the title page; [enabled] false draws it muted (Play of a title whose source is not here) and OK does nothing. */
 class DetailButton(val label: String, val icon: ImageVector? = null, val primary: Boolean = false, val enabled: Boolean = true, val onClick: () -> Unit = {})
 
 /** An episode card. */
@@ -233,7 +238,7 @@ private fun SeasonTabs(seasons: List<String>, selected: Int, onSelect: (Int) -> 
  * The title page of a film or show (Screen.DETAIL), under the top bar. IPTV titles: everything tvBro's page did
  * (play / resume / play from start, episodes by season with their marks, trailer, My list, watched marks, downloads,
  * external player, season options; the PIN was asked when the page opened). Plex / Jellyfin titles: their details,
- * seasons and episodes, with a disabled "Play (coming soon)" (playback through those servers is not on the TV yet).
+ * seasons and episodes, with Play / Resume through the home server (orbit/MediaPlayback.kt).
  */
 @Composable
 fun DetailScreen(m: AppModel) {
@@ -417,53 +422,96 @@ private fun IptvDetail(m: AppModel, item: VodItem, known: Title?) {
     }
 }
 
-/** Plex / Jellyfin (or a source not on this TV): details, seasons and episodes from `/v1/media`, no playback yet. */
+/**
+ * Plex / Jellyfin (or a source not on this TV): details, seasons and episodes from `/v1/media`; Play / Resume and
+ * Play from start like IPTV titles, played through the home server (orbit/MediaPlayback.kt).
+ */
 @Composable
 private fun MediaDetail(m: AppModel, item: VodItem, known: Title?) {
     val series = item.kind == "series"
     val conn = known?.conn ?: item.sourceId
     val id = known?.id?.ifEmpty { null } ?: item.id
     val src = known?.source?.takeIf { it == "plex" || it == "jellyfin" }
-    val info by produceState<MediaInfo?>(null, conn, id) {
+    // played: marks and resume points again (the media server has the new ones)
+    val rev = MediaPlayback.rev
+    val info by produceState<MediaInfo?>(null, conn, id, rev) {
         value = if (m.orbit.link == null || conn.isEmpty()) null else try { withContext(Dispatchers.IO) { MediaDetails.load(m, conn, id) } } catch (e: Exception) { null }
     }
     val seasons by produceState<List<MediaSeason>>(emptyList(), conn, id, series) {
         value = if (!series || m.orbit.link == null) emptyList() else try { withContext(Dispatchers.IO) { MediaDetails.seasons(MediaDetails.children(m, conn, id)) } } catch (e: Exception) { emptyList() }
     }
-    var season by remember(item.key) { mutableIntStateOf(0) }
+    val next = known?.next
+    var season by remember(item.key, seasons.size) { mutableIntStateOf(seasons.indexOfFirst { it.num == next?.season }.coerceAtLeast(0)) }
     val seasonId = seasons.getOrNull(season)?.id
-    val eps by produceState<List<MediaEp>>(emptyList(), seasonId) {
+    val eps by produceState<List<MediaEp>>(emptyList(), seasonId, rev) {
         value = if (seasonId == null) emptyList() else try { withContext(Dispatchers.IO) { MediaDetails.episodes(MediaDetails.children(m, conn, seasonId), m.orbit.link?.server ?: "") } } catch (e: Exception) { emptyList() }
     }
     val title = (known ?: Titles.of(item, null)).copy(vod = item, conn = conn, id = id)
     val inList = item.key in m.favourites
     val name = src?.let { sourceName(it) }
+    val i = info
+
+    // what Play does (as IPTV titles): a film from where it stopped; a show its next episode (the catalog's), else the
+    // first episode of this season stopped part-way or not watched yet
+    val nextEp = eps.firstOrNull { it.id == next?.id }
+    val target: MediaTarget? = when {
+        !series -> null
+        next != null && nextEp?.watched != true -> MediaTarget(next.id, if (next.season > 0) "S${next.season} E${next.num}" else "E${next.num}", next.title,
+            nextEp?.inProgress ?: resumable(known.progress))
+        else -> (eps.firstOrNull { it.inProgress } ?: eps.firstOrNull { !it.watched } ?: eps.firstOrNull())?.let { MediaTarget(it.id, it.code, it.title, it.inProgress) }
+    }
+    val filmResume = !series && if (i != null) !i.watched && MediaApi.startAt(i.progressSecs, i.durSecs ?: i.runtimeSecs ?: 0, false) > 0
+        else resumable(known?.progress)
+    val resume = if (series) target?.resume == true else filmResume
+    val canPlay = src != null && (!series || target != null)
+    val play = { fromStart: Boolean ->
+        if (src != null) {
+            if (series) target?.let { MediaPlayback.play(m, conn, it.id, src, episode = true, fromStart = fromStart) }
+            else MediaPlayback.play(m, conn, id, src, episode = false, fromStart = fromStart)
+        }
+        Unit
+    }
+    val epMenu = { e: MediaEp ->
+        if (src != null) m.menu = MenuState("${e.code} ${e.title}", listOf(
+            (if (e.inProgress) "Resume" else "Play") to { MediaPlayback.play(m, conn, e.id, src, episode = true) },
+            "Play from start" to { MediaPlayback.play(m, conn, e.id, src, episode = true, fromStart = true) },
+            (if (e.watched) "Mark as unwatched" else "Mark as watched") to { mediaWatched(m, title.copy(id = e.id), !e.watched) },
+        ))
+    }
     ColorKeyActions(
         red = KeyAction("My list") { m.toggleFavKey(item) },
         yellow = if (src != null) KeyAction("Mark watched") { mediaWatched(m, title, !(info?.watched ?: false)) } else null,
         blue = KeyAction("More") { titleMenu(m, title.copy(source = src ?: "plex")) },
         enabled = m.screen == Screen.DETAIL,
     )
-    val i = info
     val d = DetailData(
         title = item.name, eyebrow = if (series) "Series" else "Film", sources = listOfNotNull(src),
         year = i?.year ?: known?.year, rating = i?.rating ?: known?.rating,
         length = if (series) seasons.size.takeIf { it > 0 }?.let { "$it Season" + if (it > 1) "s" else "" } else i?.runtimeSecs?.takeIf { it > 0 }?.let { VodFmt.fmt(it) },
         genres = i?.genres?.ifEmpty { null } ?: known?.genres ?: emptyList(), synopsis = i?.overview,
         status = listOfNotNull(
-            i?.progressSecs?.takeIf { it > 0 && (i.durSecs ?: 0) > it }?.let { "${VodFmt.fmt(i.durSecs!! - it)} left" },
+            if (filmResume) i?.progressSecs?.let { p -> (i.durSecs ?: i.runtimeSecs)?.takeIf { it > p }?.let { "${VodFmt.fmt(it - p)} left" } } else null,
+            target?.let { listOfNotNull(it.code, it.title?.takeIf { s -> s.isNotBlank() }).joinToString(" · ") },
             if (inList) "My list ✓" else null, if (i?.watched == true) "Watched" else null,
         ).joinToString(" · "),
-        note = if (name != null) "Plays from $name. Playback through $name is not on the TV yet." else "This title's source is not on this TV.",
+        note = if (name == null) "This title's source is not on this TV." else m.detailMsg.takeIf { it.isNotEmpty() },
     )
-    val buttons = listOf(
-        DetailButton(if (name != null) "Play (coming soon)" else "Play", Icons.Filled.PlayArrow, primary = true, enabled = false),
-        DetailButton("My list", if (inList) Icons.Filled.Check else Icons.Filled.Add) { m.toggleFavKey(item) },
-        DetailButton("More", Icons.Filled.MoreVert) { titleMenu(m, title.copy(source = src ?: "plex")) },
-    )
+    val label = when {
+        MediaPlayback.starting -> "Starting…"
+        series -> target?.let { (if (it.resume) "Resume " else "Play ") + it.code } ?: "Play"
+        resume -> "Resume"
+        else -> "Play"
+    }
+    val buttons = buildList {
+        add(DetailButton(label, Icons.Filled.PlayArrow, primary = true, enabled = canPlay) { play(false) })
+        if (resume && canPlay) add(DetailButton("Play from start", Icons.Filled.Refresh) { play(true) })
+        add(DetailButton("My list", if (inList) Icons.Filled.Check else Icons.Filled.Add) { m.toggleFavKey(item) })
+        add(DetailButton("More", Icons.Filled.MoreVert) { titleMenu(m, title.copy(source = src ?: "plex")) })
+    }
     val cards = eps.map { e ->
-        EpCard(e.id, "E${e.num} · ${e.title}", if (e.watched) "Watched" else e.runtimeSecs?.let { "${it / 60} min" } ?: "", e.image,
-            e.progressSecs?.let { p -> e.runtimeSecs?.takeIf { it > 0 }?.let { p.toFloat() / it } }, e.watched)
+        val left = e.progressSecs?.let { p -> e.runtimeSecs?.takeIf { it > p }?.let { (it - p) / 60 } }
+        EpCard(e.id, "E${e.num} · ${e.title}", when { e.watched -> "Watched"; e.inProgress && left != null -> "$left min left"; else -> e.runtimeSecs?.let { "${it / 60} min" } ?: "" }, e.image,
+            if (e.inProgress) e.progressSecs?.let { p -> e.runtimeSecs?.takeIf { it > 0 }?.let { p.toFloat() / it } } else if (e.watched) 1f else null, e.watched)
     }
     val playFocus = remember { SafeFocus() }
     LaunchedEffect(item.key) { repeat(10) { delay(100); if (playFocus.request()) return@LaunchedEffect } }
@@ -471,9 +519,18 @@ private fun MediaDetail(m: AppModel, item: VodItem, known: Title?) {
         DetailBackdrop(BackdropSpec(i?.backdrop ?: known?.backdrop ?: item.poster, known?.colors))
         DetailView(
             d, buttons, seasons = seasons.map { it.title }, season = season, onSeason = { season = it },
-            episodes = cards, onEp = { m.toast("Playing from ${name ?: "this source"} is not on the TV yet") }, playFocus = playFocus,
+            episodes = cards,
+            onEp = { c -> if (src == null) m.toast("This title's source is not on this TV") else MediaPlayback.play(m, conn, c.key, src, episode = true) },
+            onEpLong = { c -> eps.firstOrNull { it.id == c.key }?.let { epMenu(it) } },
+            epFocusKey = target?.id, playFocus = playFocus,
             onBack = { m.screen = Screen.LIST },
             watched = if (src != null) DetailButton(if (i?.watched == true) "Unwatched" else "Watched", Icons.Filled.Check) { mediaWatched(m, title, !(i?.watched ?: false)) } else null,
         )
     }
 }
+
+/** The catalog's share watched (no seconds known yet): part-way, not at the credits. */
+private fun resumable(p: Float?) = p != null && p > 0.002f && p < 0.9f
+
+/** The episode a show's Play button plays: its id, "S1 E2", its title, and whether it resumes. */
+private data class MediaTarget(val id: String, val code: String, val title: String?, val resume: Boolean)

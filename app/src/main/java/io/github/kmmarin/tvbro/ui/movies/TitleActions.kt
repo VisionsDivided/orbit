@@ -6,24 +6,24 @@ import androidx.lifecycle.viewModelScope
 import io.github.kmmarin.tvbro.AppModel
 import io.github.kmmarin.tvbro.Screen
 import io.github.kmmarin.tvbro.data.VodItem
+import io.github.kmmarin.tvbro.orbit.MediaApi
+import io.github.kmmarin.tvbro.orbit.MediaEp
+import io.github.kmmarin.tvbro.orbit.MediaInfo
+import io.github.kmmarin.tvbro.orbit.MediaPlayback
+import io.github.kmmarin.tvbro.orbit.MediaSeason
 import io.github.kmmarin.tvbro.orbit.OrbitApi
 import io.github.kmmarin.tvbro.ui.MenuState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.doubleOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.longOrNull
 
 /*
  * What OK and the colour keys do with a title on the Movies / Shows pages (and the title page). IPTV titles open
- * tvBro's own title page and play as before; Plex / Jellyfin titles open the title page without playback (not built
- * on the TV yet).
+ * tvBro's own title page and play as before; Plex / Jellyfin titles open their title page and play through the home
+ * server (orbit/MediaPlayback.kt).
  */
 
 /**
@@ -35,7 +35,7 @@ fun openTitle(m: AppModel, t: Title, play: Boolean = false) {
     val feed = m.movies
     feed.remember(t)
     val v0 = t.vod
-    if (t.media || v0 == null) { openMediaTitle(m, t); return }
+    if (t.media || v0 == null) { openMediaTitle(m, t); if (play && t.media) playMediaTitle(m, t); return }
     m.viewModelScope.launch {
         val local = if (m.isDirect(v0)) null else feed.resolveLocal(t.key)
         val v = local ?: v0
@@ -49,7 +49,7 @@ fun openTitle(m: AppModel, t: Title, play: Boolean = false) {
     }
 }
 
-/** The title page of a Plex / Jellyfin title (details only; no playback on the TV yet). */
+/** The title page of a Plex / Jellyfin title (details, seasons, episodes; Play / Resume through the home server). */
 fun openMediaTitle(m: AppModel, t: Title) {
     m.movies.remember(t)
     val v = t.vod ?: VodItem(t.key, t.conn ?: "", if (t.show) "series" else "movie", t.id, t.title, t.poster, "", t.rating, "")
@@ -87,7 +87,7 @@ fun mediaWatched(m: AppModel, t: Title, watched: Boolean) {
             }; true
         } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { false }
         m.toast(if (!ok) "Could not reach ${sourceName(t.source)}" else if (watched) "Marked as watched" else "Marked as unwatched")
-        if (ok) m.movies.of(t.show).recAt = 0
+        if (ok) { m.movies.of(t.show).recAt = 0; MediaPlayback.rev++ }
     }
 }
 
@@ -99,6 +99,7 @@ fun titleMenu(m: AppModel, t: Title) {
     if (t.media || v == null) {
         m.menu = MenuState(t.title, listOfNotNull(
             "Details" to { openMediaTitle(m, t) },
+            if (t.media && (!t.show || t.next != null)) "Play" to { openMediaTitle(m, t); playMediaTitle(m, t) } else null,
             v?.let { (if (inMyList(m, t)) "Remove from My list" else "Add to My list") to { toggleMyList(m, t) } },
             (if (isWatched(m, t)) "Mark as unwatched" else "Mark as watched") to { toggleWatched(m, t) },
         ))
@@ -126,58 +127,31 @@ fun titleMenu(m: AppModel, t: Title) {
     m.menu = MenuState(t.title, items)
 }
 
-// ---------------------------------------------------------------- Plex / Jellyfin details
+// ---------------------------------------------------------------- Plex / Jellyfin details and playback
 
-/** What the title page shows of a Plex / Jellyfin title (`/v1/media/item`, `/v1/media/children`). */
-data class MediaInfo(
-    val overview: String? = null, val year: String? = null, val runtimeSecs: Long? = null, val rating: String? = null,
-    val genres: List<String> = emptyList(), val backdrop: String? = null, val progressSecs: Long? = null, val durSecs: Long? = null,
-    val watched: Boolean = false,
-)
-
-data class MediaEp(val id: String, val season: Int, val num: Int, val title: String, val image: String?, val runtimeSecs: Long?,
-                   val progressSecs: Long?, val watched: Boolean, val overview: String?)
-
-data class MediaSeason(val id: String, val num: Int, val title: String)
-
+/** The title page's loads (shared/MediaApi.kt: `/v1/media/item`, `/v1/media/children`). Off the main thread. */
 object MediaDetails {
-    private fun JsonObject.str(k: String) = (this[k] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull
-    private fun JsonObject.num(k: String) = (this[k] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.let { it.longOrNull ?: it.doubleOrNull?.toLong() }
-    private fun enc(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
+    fun seasons(a: JsonArray?): List<MediaSeason> = MediaApi.seasons(a)
+    fun episodes(a: JsonArray?, server: String): List<MediaEp> = MediaApi.episodes(a, server)
 
-    fun info(o: JsonObject, server: String): MediaInfo {
-        val prog = o["progress"] as? JsonObject
-        val r = (o["rating"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it > 0 }?.let { if (it == Math.floor(it)) it.toInt().toString() else String.format(java.util.Locale.ROOT, "%.1f", it) }
-        return MediaInfo(
-            o.str("overview")?.takeIf { it.isNotBlank() }, o.str("year")?.takeIf { it.isNotBlank() && it != "0" }, o.num("runtime"), r,
-            (o["genres"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull },
-            OrbitApi.absolute(server, o.str("backdrop")), prog?.num("secs"), prog?.num("dur"),
-            (prog?.get("watched") as? JsonPrimitive)?.contentOrNull == "true",
-        )
-    }
-
-    fun episodes(a: JsonArray?, server: String): List<MediaEp> = a.orEmpty().mapNotNull { e ->
-        val o = e as? JsonObject ?: return@mapNotNull null
-        val prog = o["progress"] as? JsonObject
-        MediaEp(o.str("id") ?: return@mapNotNull null, (o["season"] as? JsonPrimitive)?.intOrNull ?: 0, (o["episode"] as? JsonPrimitive)?.intOrNull ?: 0,
-            o.str("title") ?: "", OrbitApi.absolute(server, o.str("backdrop") ?: o.str("poster")), o.num("runtime"), prog?.num("secs"),
-            (prog?.get("watched") as? JsonPrimitive)?.contentOrNull == "true", o.str("overview"))
-    }
-
-    fun seasons(a: JsonArray?): List<MediaSeason> = a.orEmpty().mapIndexedNotNull { i, e ->
-        val o = e as? JsonObject ?: return@mapIndexedNotNull null
-        if (o.str("kind") != null && o.str("kind") != "season") return@mapIndexedNotNull null
-        MediaSeason(o.str("id") ?: return@mapIndexedNotNull null, (o["season"] as? JsonPrimitive)?.intOrNull ?: (i + 1), o.str("title") ?: "Season ${i + 1}")
-    }
-
-    /** Off the main thread. */
     fun load(m: AppModel, conn: String, id: String): MediaInfo? {
         val link = m.orbit.link ?: return null
-        return info(OrbitApi().getJson(link, "/v1/media/item?conn=${enc(conn)}&id=${enc(id)}"), link.server)
+        return MediaApi(OrbitApi()).item(link, conn, id)
     }
 
     fun children(m: AppModel, conn: String, id: String): JsonArray? {
         val link = m.orbit.link ?: return null
-        return OrbitApi().getJson(link, "/v1/media/children?conn=${enc(conn)}&id=${enc(id)}")["items"] as? JsonArray
+        return MediaApi(OrbitApi()).children(link, conn, id)
     }
+}
+
+/**
+ * Play on a Plex / Jellyfin title (Home's hero, the pages' Play): a film from its resume point, a show's next episode
+ * (the catalog's `next`); a show without one opens its page, where an episode is picked.
+ */
+fun playMediaTitle(m: AppModel, t: Title) {
+    val conn = t.conn ?: t.vod?.sourceId ?: return
+    if (!t.show) { MediaPlayback.play(m, conn, t.id, t.source, episode = false); return }
+    val n = t.next ?: return
+    MediaPlayback.play(m, conn, n.id, t.source, episode = true)
 }
