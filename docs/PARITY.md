@@ -11,6 +11,11 @@ Desktop "done" means built, unit-tested where the logic is shared, and rendered 
 (keyboard focus, the video moving between full screen and the preview, menus as windows over the video) has not
 been used on a real screen yet. See desktop/README.md.
 
+Desktop on macOS: **pending: in progress** (branch `orbit/macos`, 2026-11-14). libmpv loading (Homebrew / MacPorts /
+app bundle), Keychain secrets, `~/Library` folders and DMG packaging are written and unit-tested on Windows only;
+video is sound-only on macOS until the embedding spike. The Desktop column above is Windows / Linux. See
+[docs/orbit/MACOS.md](orbit/MACOS.md).
+
 ## Sources and sync
 
 | Feature | Android | Web | Desktop | Notes |

@@ -145,7 +145,7 @@ private fun GeneralPage(app: AppState) {
 private fun PlaybackPage(app: AppState) {
     val s = app.settings
     Row2("Autoplay next episode", if (s.autoplayNext) "On (Up next card, ${Watch.UP_NEXT_COUNTDOWN_S} s countdown)" else "Off") { app.update { it.copy(autoplayNext = !it.autoplayNext) } }
-    val hw = if (Platform.windows) listOf("auto-safe", "d3d11va", "no") else listOf("v4l2m2m-copy,auto-safe", "drm,auto-safe", "auto-safe", "no")
+    val hw = MpvVideo.hwdecChoices(Platform.os)
     Row2("Hardware decoding", s.hwdec) { app.update { it.copy(hwdec = hw[(hw.indexOf(it.hwdec) + 1) % hw.size]) } }
     Row2("Audio delay", "${s.audioDelayMs} ms (Enter resets; [ ] in the player)") { app.update { it.copy(audioDelayMs = 0) } }
     Row2("Caption size", listOf("Small", "Normal", "Large")[s.captionSize.coerceIn(0, 2)]) { app.update { it.copy(captionSize = (it.captionSize + 1) % 3) } }

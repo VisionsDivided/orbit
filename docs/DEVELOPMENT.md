@@ -6,7 +6,7 @@
 |---|---|
 | `shared/` | Platform-neutral Kotlin data layer: models, M3U / Xtream / XMLTV parsers, catch-up URLs, search index logic, watch state, guide window, focus rules. Used by `app/` and `desktop/`. |
 | `app/` | Android app (phones, Android TV, Google TV, Fire TV). Kotlin, Jetpack Compose, Media3 ExoPlayer. |
-| `desktop/` | Windows x64 and Linux arm64 app. Compose Multiplatform for Desktop, libmpv through JNA. |
+| `desktop/` | Windows x64 and Linux arm64 app; macOS (Apple Silicon / Intel) in progress, see `docs/orbit/MACOS.md`. Compose Multiplatform for Desktop, libmpv through JNA. |
 | `web/` | Self-hosted web app: Python server (`web/server`) and browser frontend (`web/frontend`). |
 | `docs/` | Install guide, architecture, feature parity matrix, third-party licenses, screenshots. |
 | `fastlane/metadata/android/` | Store texts used by F-Droid / Obtainium-style catalogues. |

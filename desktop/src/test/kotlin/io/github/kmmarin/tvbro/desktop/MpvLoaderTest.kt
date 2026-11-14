@@ -48,7 +48,7 @@ class MpvLoaderTest {
 
     @Test fun nothingAnywhere() {
         val app = tmp.newFolder("app").path
-        val r = MpvLocate.load(MpvLocate.candidates(true, null, app), true, "x64", nothingLoads)
+        val r = MpvLocate.load(MpvLocate.candidates(Os.WINDOWS, null, app), Os.WINDOWS, "x64", nothingLoads)
         assertNull(r.lib)
         assertEquals("libmpv-2.dll was not found next to tvBro.exe or on PATH", r.error)
         assertEquals(listOf("libmpv-2", "mpv-2", "mpv"), tried) // the absent file next to the app is not even tried
@@ -56,7 +56,7 @@ class MpvLoaderTest {
 
     @Test fun chosenFileGone() {
         val gone = File(tmp.root, "moved/libmpv-2.dll").path
-        val r = MpvLocate.load(MpvLocate.candidates(true, gone, null), true, "x64", nothingLoads)
+        val r = MpvLocate.load(MpvLocate.candidates(Os.WINDOWS, gone, null), Os.WINDOWS, "x64", nothingLoads)
         assertNull(r.lib)
         assertTrue(r.error!!, r.error!!.contains(gone) && r.error!!.contains("is not there"))
         assertFalse(gone in tried)
@@ -64,32 +64,32 @@ class MpvLoaderTest {
 
     @Test fun wrongArchIsRefusedBeforeLoading() {
         val x86 = pe("libmpv-2.dll", 0x14c)
-        val r = MpvLocate.load(MpvLocate.candidates(true, x86.path, null), true, "x64", nothingLoads)
+        val r = MpvLocate.load(MpvLocate.candidates(Os.WINDOWS, x86.path, null), Os.WINDOWS, "x64", nothingLoads)
         assertNull(r.lib)
         assertTrue(r.error!!, r.error!!.contains("32-bit") && r.error!!.contains("x86_64"))
         assertFalse(x86.path in tried)
         val arm = pe("arm.dll", 0xAA64)
-        assertTrue(MpvLocate.problem(arm, true, "x64")!!.contains("aarch64"))
-        assertNull(MpvLocate.problem(pe("ok.dll", 0x8664), true, "x64"))
+        assertTrue(MpvLocate.problem(arm, Os.WINDOWS, "x64")!!.contains("aarch64"))
+        assertNull(MpvLocate.problem(pe("ok.dll", 0x8664), Os.WINDOWS, "x64"))
     }
 
     @Test fun wrongKindOfFile() {
         val txt = tmp.newFile("libmpv-2.dll.txt").apply { writeText("x".repeat(100)) }
-        assertEquals("libmpv-2.dll.txt is not a Windows DLL", MpvLocate.problem(txt, true, "x64"))
-        assertEquals("a.dll is not a Linux shared library", MpvLocate.problem(pe("a.dll", 0xB7), false, "arm64"))
-        assertTrue(MpvLocate.problem(elf("libmpv.so.2", 0x3E), false, "arm64")!!.contains("x86_64"))
-        assertTrue(MpvLocate.load(MpvLocate.candidates(false, null, null), false, "arm64", nothingLoads).error!!.contains("apt install libmpv2"))
+        assertEquals("libmpv-2.dll.txt is not a Windows DLL", MpvLocate.problem(txt, Os.WINDOWS, "x64"))
+        assertEquals("a.dll is not a Linux shared library", MpvLocate.problem(pe("a.dll", 0xB7), Os.LINUX, "arm64"))
+        assertTrue(MpvLocate.problem(elf("libmpv.so.2", 0x3E), Os.LINUX, "arm64")!!.contains("x86_64"))
+        assertTrue(MpvLocate.load(MpvLocate.candidates(Os.LINUX, null, null), Os.LINUX, "arm64", nothingLoads).error!!.contains("apt install libmpv2"))
     }
 
     @Test fun badFileNextToAppFallsBackToPath() {
         val app = tmp.newFolder("app2")
         val dll = File(app, "libmpv-2.dll").apply { writeBytes(pe("x.dll", 0x14c).readBytes()) }
-        val r = MpvLocate.load(MpvLocate.candidates(true, null, app.path), true, "x64") { if (it == "mpv-2") fakeLib else nothingLoads(it) }
+        val r = MpvLocate.load(MpvLocate.candidates(Os.WINDOWS, null, app.path), Os.WINDOWS, "x64") { if (it == "mpv-2") fakeLib else nothingLoads(it) }
         assertSame(fakeLib, r.lib)
         assertEquals("mpv-2", r.from)
         assertFalse(dll.path in tried)
         // nothing on PATH either: the reason given is the file next to the app, not "not found"
-        val r2 = MpvLocate.load(MpvLocate.candidates(true, null, app.path), true, "x64", nothingLoads)
+        val r2 = MpvLocate.load(MpvLocate.candidates(Os.WINDOWS, null, app.path), Os.WINDOWS, "x64", nothingLoads)
         assertTrue(r2.error!!, r2.error!!.startsWith("libmpv-2.dll is built for 32-bit"))
     }
 
@@ -97,14 +97,14 @@ class MpvLoaderTest {
         val app = tmp.newFolder("app3")
         File(app, "libmpv-2.dll").writeBytes(pe("y.dll", 0x8664).readBytes())
         val mine = pe("mine.dll", 0x8664)
-        val r = MpvLocate.load(MpvLocate.candidates(true, mine.path, app.path), true, "x64") { tried += it; fakeLib }
+        val r = MpvLocate.load(MpvLocate.candidates(Os.WINDOWS, mine.path, app.path), Os.WINDOWS, "x64") { tried += it; fakeLib }
         assertEquals(mine.path, r.from)
         assertEquals(listOf(mine.path), tried)
         // a right-looking file the OS refuses (e.g. a missing dependency): its own message, never an exception
-        val r2 = MpvLocate.load(MpvLocate.candidates(true, mine.path, null), true, "x64") { throw UnsatisfiedLinkError("The specified module could not be found.\r\nmore") }
+        val r2 = MpvLocate.load(MpvLocate.candidates(Os.WINDOWS, mine.path, null), Os.WINDOWS, "x64") { throw UnsatisfiedLinkError("The specified module could not be found.\r\nmore") }
         assertNull(r2.lib)
         assertEquals("mine.dll could not be loaded: The specified module could not be found.", r2.error)
-        val r3 = MpvLocate.load(MpvLocate.candidates(true, mine.path, null), true, "x64") { throw IllegalStateException("this is not libmpv") }
+        val r3 = MpvLocate.load(MpvLocate.candidates(Os.WINDOWS, mine.path, null), Os.WINDOWS, "x64") { throw IllegalStateException("this is not libmpv") }
         assertEquals("mine.dll could not be loaded: this is not libmpv", r3.error)
     }
 
@@ -113,7 +113,7 @@ class MpvLoaderTest {
     @Test fun realWrongArchDll() {
         val wow = File(System.getenv("SystemRoot") ?: "C:\\Windows", "SysWOW64\\version.dll")
         assumeTrue(Platform.windows && BinArch.jvm() == "x64" && wow.isFile)
-        val r = MpvLocate.load(listOf(MpvCandidate(wow.path, file = true, chosen = true)), true, "x64", MpvLoader::open)
+        val r = MpvLocate.load(listOf(MpvCandidate(wow.path, file = true, chosen = true)), Os.WINDOWS, "x64", MpvLoader::open)
         assertNull(r.lib)
         assertTrue(r.error!!, r.error!!.contains("32-bit"))
     }
@@ -121,7 +121,7 @@ class MpvLoaderTest {
     @Test fun realDllThatIsNotLibmpv() {
         val sys = File(System.getenv("SystemRoot") ?: "C:\\Windows", "System32\\version.dll")
         assumeTrue(Platform.windows && sys.isFile)
-        val r = MpvLocate.load(listOf(MpvCandidate(sys.path, file = true, chosen = true)), true, BinArch.jvm(), MpvLoader::open)
+        val r = MpvLocate.load(listOf(MpvCandidate(sys.path, file = true, chosen = true)), Os.WINDOWS, BinArch.jvm(), MpvLoader::open)
         assertNull(r.lib)
         assertEquals("version.dll could not be loaded: this is not libmpv", r.error)
     }
@@ -130,7 +130,7 @@ class MpvLoaderTest {
     @Test fun realLibmpv() {
         val f = System.getenv("TVBRO_TEST_LIBMPV")?.let(::File)
         assumeTrue(f != null && f.isFile)
-        val r = MpvLocate.load(listOf(MpvCandidate(f!!.path, file = true, chosen = true)), Platform.windows, BinArch.jvm(), MpvLoader::open)
+        val r = MpvLocate.load(listOf(MpvCandidate(f!!.path, file = true, chosen = true)), Platform.os, BinArch.jvm(), MpvLoader::open)
         assertNotNull(r.error, r.lib)
         assertTrue(r.lib!!.mpv_client_api_version().toLong() ushr 16 >= 2)
     }

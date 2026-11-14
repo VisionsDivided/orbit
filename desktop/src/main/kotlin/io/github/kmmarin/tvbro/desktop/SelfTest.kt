@@ -45,7 +45,7 @@ fun selfTest(url: String, png: String?, play: Boolean = true) {
 fun renderMissing(png: String) {
     val err = MpvLoader.lib?.let { "(libmpv is loaded here; this is how the screen looks without it)" } ?: MpvLoader.error
     ImageComposeScene(1280, 760) {
-        MaterialTheme(colorScheme = darkColorScheme()) { MissingLibScreen(Platform.windows, MpvLoader.appDir, err, "", {}, {}, {}, {}) }
+        MaterialTheme(colorScheme = darkColorScheme()) { MissingLibScreen(Platform.os, MpvLoader.appDir, err, "", {}, {}, {}, {}) }
     }.use { s -> s.render(0); File(png).writeBytes(s.render(1_000_000_000L).encodeToData()!!.bytes) }
     println("rendered $png")
 }

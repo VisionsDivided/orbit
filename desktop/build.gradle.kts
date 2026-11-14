@@ -43,7 +43,8 @@ compose.desktop {
         mainClass = "io.github.kmmarin.tvbro.desktop.MainKt"
         jvmArgs += listOf("-Xmx1g", "-Dfile.encoding=UTF-8")
         nativeDistributions {
-            targetFormats(TargetFormat.Msi)
+            // each host builds only its own formats: Msi on Windows, Dmg on macOS (packageDmg)
+            targetFormats(TargetFormat.Msi, TargetFormat.Dmg)
             packageName = "tvBro"
             packageVersion = "0.1.0"
             description = "tvBro IPTV player"
@@ -51,6 +52,17 @@ compose.desktop {
             licenseFile.set(rootProject.file("LICENSE"))
             modules("java.naming", "jdk.crypto.ec", "java.net.http", "java.sql", "jdk.httpserver", "java.desktop")
             windows { menuGroup = "tvBro"; upgradeUuid = "6f3b8f63-2a43-4f7b-9a8e-2d6b0c1e7a51" }
+            // macOS app: Orbit.app in Orbit-<version>.dmg. Unsigned (signing / notarization need a paid Apple
+            // Developer account: docs/orbit/MACOS.md). orbit.icns is made from branding/orbit-app-icon.webp.
+            macOS {
+                packageName = "Orbit"
+                dockName = "Orbit"
+                bundleID = "io.github.visionsdivided.orbit.desktop"
+                appCategory = "public.app-category.entertainment"
+                iconFile.set(project.file("packaging/orbit.icns"))
+                // jpackage refuses a macOS version whose first number is 0 (CFBundleVersion), so 0.1.0 cannot be used
+                packageVersion = "1.0.0"
+            }
         }
     }
 }

@@ -8,6 +8,7 @@ Orbit is a private media app built on tvBro (see the note at the top of the main
 | [API-v1.md](API-v1.md) | The `/v1` home-server API contract (accounts, profiles, TV linking, sync, media servers) |
 | [phase1-plan.md](phase1-plan.md) | Phase 1 work, acceptance tests, and the Phase 2 buffering / stream-limit test designs |
 | [risks.md](risks.md) | Risk register |
+| [MACOS.md](MACOS.md) | Desktop app on macOS: status, MacBook steps, video spike plan, risks |
 
 ## Progress
 

@@ -34,6 +34,9 @@ class TvScreenUiTest {
         File(Paths.config, "settings.json").delete() // a clean start: no restored UI from another test run
         val app = AppState(scope, emptyList())
         rule.waitUntil(10_000) { app.status.startsWith("Add a source") } // the (empty) load is done
+        // and its UI restore (launched separately) has finished: otherwise it can see the channels and the last channel
+        // set below and play that channel full screen (an intermittent failure of resumesTheLastChannelInThePreviewFocused)
+        rule.waitUntil(10_000) { app.uiRestoreDone }
         val now = System.currentTimeMillis() / 1000
         val chs = (0 until 4).map { i -> Channel("s|c$i", "s", "C$i", null, "G", "http://127.0.0.1:9/c$i", "c$i", i + 1, Catchup("shift", null), 1) }
         val map = chs.associate { c ->
