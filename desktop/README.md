@@ -20,6 +20,7 @@ Android TV app.
   - `Recorder.kt` / `Storage.kt`: scheduled and series recordings (each in a headless mpv, `stream-record`), storage on this computer, a USB drive or an SMB share (jcifs-ng), loopback HTTP bridge to play share recordings
   - `Store.kt` / `WatchStore.kt`: settings JSON, encrypted secrets (sources, share password), watch state (`watch.json`)
   - `Mpv.kt`: JNA binding of libmpv (`MpvHardening` options; `MpvLocate` / `MpvLoader`: where libmpv is looked for, file checks, the user's chosen file); `MissingLib.kt`: the "Video library missing" screen; `PlayUrl.kt`: which addresses mpv and the external player may get; `SecureFiles.kt`: owner-only files (`Perms`), the encrypted cache format (`Sealed`), key-file and keyring rules; `SelfTest.kt`: headless check (`--selftest`)
+  - `Os.kt`: the running OS (`Platform`), decided in one place; `MacKeychain.kt`: the secrets key in the macOS Keychain; `MpvVideo` (in `Mpv.kt`): video output and hardware-decoding choices per OS
 
 Player keys: Up/Down or PgUp/PgDn channel (VOD: PgUp/PgDn ±1 min), digits pick a channel, Left/Right seek 10 s,
 Enter or M quick settings (audio, subtitles, video quality, audio delay, aspect, sleep timer, record, stream info),
