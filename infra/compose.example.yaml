@@ -1,0 +1,45 @@
+# Copyright 2026 The Orbit authors
+# SPDX-License-Identifier: Apache-2.0
+# Example Docker Compose file for the Orbit home server (see docs/orbit/DEPLOY.md). Copy it next to a checkout of the
+# repository (./src), replace 192.0.2.10 with the server's LAN address and the /srv/... paths with your own.
+services:
+  orbit:
+    build:
+      context: ./src
+      dockerfile: infra/docker/Dockerfile
+      args:
+        ORBIT_VERSION: ${ORBIT_VERSION:-dev}
+    image: orbit:local
+    container_name: orbit
+    restart: unless-stopped
+    user: "1000:1000"
+    ports:
+      - "192.0.2.10:8750:8080"          # LAN address only; never publish this to the internet
+    environment:
+      # every name / address devices use to reach the server (Host header check against DNS rebinding)
+      TVBRO_ALLOWED_HOSTS: "192.0.2.10"
+    volumes:
+      - /srv/orbit/data:/data
+    secrets:
+      - orbit_key                       # /run/secrets/orbit_key: kept outside the data folder
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - orbit
+
+secrets:
+  orbit_key:
+    file: /srv/orbit/secrets/orbit.key  # a Fernet key, mode 600, owned by uid 1000 (see DEPLOY.md)
+
+networks:
+  orbit:
+    driver: bridge

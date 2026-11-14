@@ -1,0 +1,9 @@
+# Orbit image (infra/docker/Dockerfile) needs only web/ and infra/docker/
+*
+!web/server/**
+!web/frontend/**
+!infra/docker/**
+web/frontend/vendor/
+**/__pycache__/
+**/*.pyc
+web/server/data/
