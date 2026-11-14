@@ -626,3 +626,6 @@ button.ed-name { cursor: pointer; }
 .orbit-li { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .orbit-li .btn { padding: 4px 12px; }
 .nav-profile .ic { margin: 0 auto 2px; }
+/* Orbit logos (branding/): side menu (#5) and sign-in (#4); the files are trimmed, so they sit tight */
+.brand .brand-img { display: block; width: 84px; height: auto; margin: 0 auto; }
+.signin-logo { display: block; width: 100%; max-width: 340px; height: auto; margin: 0 auto 4px; }

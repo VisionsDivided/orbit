@@ -102,7 +102,7 @@ export function showAccountSignIn() {
   const msg = h('div', { class: 'hint signin-msg', role: 'status' });
   const btn = h('button', { class: 'btn focusable', type: 'submit' }, 'Sign in');
   const form = h('form', { class: 'signin-card glass', autocomplete: 'on' },
-    h('div', { class: 'brand signin-brand' }, 'Orbit'),
+    h('img', { src: 'img/orbit-signin.webp', alt: 'Orbit, your media, in orbit', class: 'signin-logo' }),
     h('h1', {}, 'Sign in'),
     h('p', { class: 'hint' }, 'Sign in with your Orbit account. Ask the owner of this server if you do not have one yet.'),
     h('label', {}, 'Username'), user, h('label', {}, 'Password'), pw, msg, btn);

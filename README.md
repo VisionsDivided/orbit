@@ -1,5 +1,7 @@
 # Orbit
 
+![Orbit: your media, in orbit](branding/orbit-banner.webp)
+
 > **Orbit** is a private, independently developed media app based on [tvBro](https://github.com/kmmarin/tvBro)
 > (Apache-2.0). It adds a home server with accounts and profiles, Plex and Jellyfin libraries, Seerr requests
 > and a cinematic home screen on top of tvBro's IPTV player. Orbit installs as its own app
