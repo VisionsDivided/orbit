@@ -189,7 +189,7 @@ internal fun LazyListScope.appearance(m: AppModel) {
         val names = listOf("None (outline)", "Dimmed", "Box")
         SettingRow("Caption background", names[v.coerceIn(0, 2)], { v = (v + 2) % 3; m.store.captionBg = v }, { v = (v + 1) % 3; m.store.captionBg = v }) { v = (v + 1) % 3; m.store.captionBg = v }
     }
-    note("tvBro always uses its dark theme.")
+    note("Orbit always uses its dark theme.")
 }
 
 internal fun LazyListScope.playback(m: AppModel) {
@@ -206,7 +206,7 @@ internal fun LazyListScope.playback(m: AppModel) {
     }
     item { SettingRow("Live stream format (per channel: channel options)", if (m.liveHls) "HLS (.m3u8): steadier with some providers" else "MPEG-TS (.ts, default)") { m.changeLiveHls(!m.liveHls) } }   // Orbit
     item { SettingRow("Maximum simultaneous streams", "${m.maxStreams}", { m.changeMaxStreams(m.maxStreams - 1) }, { m.changeMaxStreams(m.maxStreams + 1) }) { m.changeMaxStreams(m.maxStreams % 3 + 1) } }
-    note("Keep this at or below what your provider account allows. A running recording holds one stream: with the limit reached the live preview stays off and tvBro warns before playing another channel.")
+    note("Keep this at or below what your provider account allows. A running recording holds one stream: with the limit reached the live preview stays off and Orbit warns before playing another channel.")
     item { SettingRow("Autoplay next episode", if (m.autoplayNext) "On (Up next card, 10 s countdown)" else "Off") { m.changeAutoplayNext(!m.autoplayNext) } }
     item { SettingRow("Match display frame rate", if (m.matchFps) "On (when seamless)" else "Off") { m.changeMatchFps(!m.matchFps) } }
     item { SettingRow("Use external player", if (m.external) "On (needs a video player app)" else "Off") { m.changeExternal(!m.external) } }
@@ -266,11 +266,43 @@ internal fun LazyListScope.other(m: AppModel) {
     item { SettingRow("Restore from backup", "") { m.restore() } }
 }
 
+/** Settings ▸ About: playback statistics of recent streams (start time, stalls, bitrate, reconnects), with export. */
+private fun LazyListScope.playbackStats() {
+    head("Playback stats")
+    item {
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        var tick by remember { mutableIntStateOf(0) }
+        var saved by remember { mutableStateOf("") }
+        val sessions = remember(tick) { io.github.kmmarin.tvbro.orbit.PlayStats.sessions().takeLast(8).reversed() }
+        androidx.compose.foundation.layout.Column {
+            if (sessions.isEmpty()) Text("Nothing yet: watch a channel or a film for a while.", color = io.github.kmmarin.tvbro.ui.orbit5.O5.Muted, fontSize = 19.sp, modifier = Modifier.padding(start = 4.dp, bottom = 6.dp))
+            for (s in sessions) {
+                Text("${hhmm(s.startedAt / 1000)}  ${s.label.ifEmpty { s.kind }}  (${s.durationMs / 60_000} min)", color = io.github.kmmarin.tvbro.ui.orbit5.O5.Text, fontSize = 21.sp, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
+                Text(s.line(), color = io.github.kmmarin.tvbro.ui.orbit5.O5.Muted, fontSize = 18.sp, modifier = Modifier.padding(start = 24.dp))
+            }
+            SettingRow("Refresh playback stats", "") { tick++ }
+            SettingRow("Export playback stats", saved, desc = "Saved in the app's diag folder: names and numbers only, no addresses or logins") {
+                saved = runCatching { io.github.kmmarin.tvbro.orbit.PlayStats.export(ctx).name }.getOrElse { "export failed" }
+            }
+        }
+    }
+}
+
+/** For the design shot (DesignShotsTest): the About page as the app shows it. */
+internal fun aboutForTest(scope: LazyListScope) = scope.about()
+
 internal fun LazyListScope.about() {
     head("About")
-    note("tvBro ${io.github.kmmarin.tvbro.BuildConfig.VERSION_NAME} - open source, Apache-2.0. A player only: it ships no channels or content.")
-    legacy { updateSection() }          // (device density inside the page: these rows are not restyled yet)
-    legacy { playbackStatsSection() }   // Orbit: playback statistics (OrbitScreens.kt)
+    item {
+        androidx.compose.foundation.layout.Column(Modifier.padding(start = 4.dp, top = 6.dp, bottom = 10.dp)) {
+            Text("Orbit ${io.github.kmmarin.tvbro.BuildConfig.VERSION_NAME}", style = io.github.kmmarin.tvbro.ui.orbit5.O5Type.RowHeading.copy(fontSize = 40.sp))
+            Text("Your household's films, shows and live TV in one place. A player only: it ships no channels or content.",
+                color = io.github.kmmarin.tvbro.ui.orbit5.O5.Muted, fontSize = 22.sp, lineHeight = 31.sp, modifier = Modifier.padding(top = 8.dp))
+            Text("Based on tvBro, Apache-2.0", color = io.github.kmmarin.tvbro.ui.orbit5.O5.Muted, fontSize = 19.sp, modifier = Modifier.padding(top = 6.dp))
+        }
+    }
+    legacy { updateSection() }          // (off in Orbit builds until Orbit has its own release feed)
+    playbackStats()
     item {
         var tick by remember { mutableIntStateOf(0) }
         SettingRow("Diagnostics (OK to refresh)", "last load counts and errors") { tick++ }

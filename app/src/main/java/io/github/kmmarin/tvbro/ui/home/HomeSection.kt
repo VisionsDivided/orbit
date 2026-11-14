@@ -66,7 +66,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Top of the rows area on Home (the first row's heading sits at y = 676 in the mockup). */
-private val RowsTop = 676.dp
+private val RowsTop = 656.dp   // (676 in the mockup; 20 px up keeps the captions clear of the legend footer)
 
 /**
  * Home: the cross-everything feed (spec section 6 and the mockup's Home). The hero shows the focused card's title
