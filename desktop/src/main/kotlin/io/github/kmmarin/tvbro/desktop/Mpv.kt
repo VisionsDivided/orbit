@@ -339,8 +339,27 @@ data class Track(val id: String, val type: String, val title: String, val lang: 
  * demuxes and writes `stream-record` (no decoding, no output). [onEnd] gets "eof" or "error: ..." (any thread);
  * [onLoaded] fires when a file is loaded and its tracks are known.
  */
+/**
+ * libmpv refuses to start (mpv_create returns NULL) unless the C library's LC_NUMERIC locale is "C"; the JVM on macOS
+ * and Linux takes the user's locale. Windows' libmpv builds do not check it. Set once, before the first mpv_create.
+ */
+internal object CLocale {
+    private interface LibC : Library { fun setlocale(category: Int, locale: String?): String? }
+    @Volatile private var done = false
+    fun numericC() {
+        if (done || Platform.windows) return
+        done = true
+        try {
+            val c = Native.load("c", LibC::class.java)
+            c.setlocale(if (Platform.mac) 4 else 1, "C")    // LC_NUMERIC: 4 on macOS / BSD, 1 on glibc
+        } catch (e: Throwable) {
+            Diag.log("mpv: could not set LC_NUMERIC=C (${e.javaClass.simpleName})")
+        }
+    }
+}
+
 class Mpv(private val lib: MpvLib, wid: Long, hwdec: String, recorder: Boolean = false, private val onLoaded: () -> Unit = {}, onEnd: (String) -> Unit) {
-    private var h: Pointer? = lib.mpv_create() ?: error("mpv_create failed")
+    private var h: Pointer? = run { CLocale.numericC(); lib.mpv_create() } ?: error("mpv_create failed (libmpv needs LC_NUMERIC=C)")
     @Volatile private var alive = true
     private val events: Thread
     /** The software renderer ([MpvVideo.SW]); null for the other outputs or when the render context failed. */
