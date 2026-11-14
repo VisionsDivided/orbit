@@ -75,6 +75,27 @@ code. The TV keeps the playlists encrypted and removes them again when it is unl
 (three-way merge, so offline changes on either side survive) and film resume points (newest wins) through the
 existing `/api/state` routes of its profile, every minute and shortly after a change.
 
+## The provider's stream limit (Phase 2)
+
+TVs, browsers and recordings share one count of provider streams (tvBro's `StreamRegistry`). Each device or tab
+has a random stream session id (`sid`, 32+ characters) that it keeps to itself.
+
+| Method | Path | Who | Body → Answer |
+|---|---|---|---|
+| GET | `/v1/streams` | signed in | → `{"max", "count", "active": [StreamUse]}`, oldest first. Only streams active in the last 20 seconds count. |
+| POST | `/api/stream/start` | signed in | `{"sid", "label", "what", "replace"?}` → `{"ok": true, "replaced": n}`. Takes a slot; when every slot is taken, another viewer is stopped: the stream whose `id` is `replace`, or else the oldest. `{"ok": false, "stopped": "recording"}` when every slot is held by a recording. `{"ok": false, "changed": true, "streams": {...}}` (the `/v1/streams` answer) when `replace` names a stream that has ended or is a recording and no slot is free: nothing was stopped; ask again with the new list. When the chosen stream has ended and a slot is free, the start simply goes ahead. |
+| POST | `/api/stream/heartbeat` | signed in | `{"sid"}` every ~10 s → `{"ok": true}`, or `{"stopped": "replaced"\|"recording"}` once another device took the slot. |
+| POST | `/api/stream/stop` | signed in | `{"sid"}` → `{"ok": true}`: the slot is free again. |
+
+- `StreamUse`: `{"id", "sid", "label", "what", "profile", "since", "idleSec", "recording": bool}`. `id` is a public
+  id of the stream (a hash of its `sid`, 12 hex characters) to pass as `replace`; knowing it does not let anyone send
+  that device's heartbeats. `sid` is the first 6 characters of the session id (kept for older clients to recognise
+  their own stream). `label` is the device as the client named it ("Chrome on Windows", "TV (…)"), `profile` the
+  Orbit profile that started it (empty in tvBro mode and for recordings), `what` what is playing.
+- The TV lists every active stream when the limit is full and offers one "Stop <name> and watch" per viewer
+  (recordings are listed but cannot be chosen), plus Cancel. The web app still stops the oldest without asking
+  (it never had a prompt).
+
 ## Show progress for devices (step 7b)
 
 | Method | Path | Who | Body → Answer |

@@ -210,6 +210,18 @@ class Server(unittest.TestCase):
         # another device takes the only slot: the TV's next heartbeat says it was stopped
         self.req("POST", "/api/stream/start", {"sid": "web" + "b" * 29, "label": "Chrome", "what": "Film"}, auth(alex))
         self.assertIn("stopped", self.req("POST", "/api/stream/heartbeat", {"sid": tv_sid}, auth(tvs))[2])
+        # the TV picks which stream to stop: every stream has a public id and the profile that started it
+        st = self.req("GET", "/v1/streams", headers=auth(tvs))[2]
+        web = st["active"][0]
+        self.assertEqual((web["label"], web["what"]), ("Chrome", "Film"))
+        self.assertTrue(web["profile"])                        # Alex's profile name
+        self.assertNotIn(web["id"], "web" + "b" * 29)
+        # a stale choice (that stream is gone, every slot still taken) changes nothing and returns the current list
+        r = self.req("POST", "/api/stream/start", {"sid": tv_sid, "label": "Living room TV", "what": "News", "replace": "0" * 12}, auth(tvs))[2]
+        self.assertEqual((r["ok"], r["changed"], r["streams"]["active"][0]["id"]), (False, True, web["id"]))
+        r = self.req("POST", "/api/stream/start", {"sid": tv_sid, "label": "Living room TV", "what": "News", "replace": web["id"]}, auth(tvs))[2]
+        self.assertEqual((r["ok"], r["replaced"]), (True, 1))
+        self.assertIn("stopped", self.req("POST", "/api/stream/heartbeat", {"sid": "web" + "b" * 29}, auth(alex))[2])
 
         # and it can be signed out from Alex's devices list
         dev = next(s for s in self.req("GET", "/v1/sessions", headers=auth(alex))[2]["sessions"] if s["device"] == "Living room TV")
