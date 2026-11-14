@@ -66,36 +66,73 @@ open class EpgIndex(private val map: Map<String, Array<Programme>> = emptyMap())
         val EMPTY = EpgIndex(emptyMap())
 
         /**
-         * One channel's programmes as a timeline: sorted by start, one programme per start time, and a programme that
-         * runs into the next one ends where the next one starts. Some providers send overlapping entries (10:00-14:00
-         * and 11:00-14:00); drawn as they were, blocks covered each other, focus went to a hidden block and the guide
-         * window jumped.
+         * One channel's programmes as a timeline with no overlaps. Some providers send overlapping entries (10:00-14:00
+         * and 11:00-14:00) and put fillers ("Next Game Today") or inner entries inside a live game; drawn as they were,
+         * blocks covered each other, focus went to a hidden block and the guide window jumped.
          *
-         * The rules (shared with the web app's guide, owner feedback 2026-11-14): sort by start; drop an entry that lies
-         * fully inside an earlier one with the same title (exact duplicates included); of entries starting at the same
-         * time keep the longest; trim each entry's end to the next one's start; drop what ends up zero-length.
+         * The rules (the same in the web app's guide.js normalizeProgs and the server's parsers.normalize_programmes):
+         * 1. entries with stop <= start are dropped;
+         * 2. sorted by start, then the longer first (stable: equal ones keep their input order);
+         * 3. of entries starting at the same time only the first (the longest) is kept;
+         * 4. an entry lying fully inside an earlier kept entry with the same title is dropped (duplicates included);
+         * 5. timeline overlay: at any moment the entry shown is the kept one covering it with the latest start, so when
+         *    an inner entry ends the enclosing one resumes (Block 1-5, Match 2-3 -> Block 1-2, Match 2-3, Block 3-5;
+         *    A 1-3, B 2-4 -> A 1-2, B 2-4); adjacent pieces of one entry are merged;
+         * 6. zero-length pieces are dropped.
+         * A piece is a copy of its entry with other start / stop; an entry shown whole is returned as it was. O(n log n):
+         * one sweep with a stack of open entries (the TV runs it for thousands of channels).
          */
         fun tidy(a: Array<Programme>): Array<Programme> {
-            if (a.size < 2) return a
-            val sorted = a.sortedWith(compareBy<Programme> { it.start }.thenByDescending { it.stop })
+            if (a.isEmpty()) return a
+            if (a.size == 1) return if (a[0].stop > a[0].start) a else emptyArray()
+            val sorted = a.filter { it.stop > it.start }
+                .sortedWith(compareBy<Programme> { it.start }.thenByDescending { it.stop - it.start })
             // the latest end of each title kept so far: a later-starting entry ending no later is inside one of them
             val reach = HashMap<String, Long>()
-            val s = ArrayList<Programme>(sorted.size)
+            val kept = ArrayList<Programme>(sorted.size)
             for (p in sorted) {
-                if (s.isNotEmpty() && s.last().start == p.start) continue        // same start: the longest came first
+                if (kept.isNotEmpty() && kept.last().start == p.start) continue  // same start: the longest came first
                 val r = reach[p.title]
                 if (r != null && r >= p.stop) continue                           // inside a longer one, same title
-                reach[p.title] = maxOf(r ?: Long.MIN_VALUE, p.stop)
-                s += p
+                reach[p.title] = if (r == null) p.stop else maxOf(r, p.stop)
+                kept += p
             }
-            val out = ArrayList<Programme>(s.size)
-            for (i in s.indices) {
-                val p = s[i]
-                val nx = s.getOrNull(i + 1)
-                val q = if (nx != null && p.stop > nx.start) p.copy(stop = nx.start) else p
-                if (q.stop > q.start) out += q
+            // pieces: entry index, start, stop
+            val pi = IntArray(kept.size * 2 + 1)
+            val ps = LongArray(pi.size)
+            val pe = LongArray(pi.size)
+            var n = 0
+            fun emit(i: Int, s: Long, e: Long) {
+                if (e <= s) return
+                if (n > 0 && pi[n - 1] == i && pe[n - 1] == s) { pe[n - 1] = e; return }
+                pi[n] = i; ps[n] = s; pe[n] = e; n++
             }
-            return out.toTypedArray()
+            val stack = IntArray(kept.size) // open entries, later starts on top; ones already ended go lazily
+            var top = 0
+            var cur = 0L
+            fun advance(t: Long) { // Long.MAX_VALUE: to the end
+                while (top > 0) {
+                    val i = stack[top - 1]
+                    val p = kept[i]
+                    if (p.stop <= cur) { top--; continue }
+                    val end = minOf(p.stop, t)
+                    emit(i, cur, end)
+                    cur = end
+                    if (p.stop > t) break
+                    top--
+                }
+                if (t > cur) cur = t
+            }
+            for (i in kept.indices) {
+                if (top == 0) cur = kept[i].start
+                advance(kept[i].start)
+                stack[top++] = i
+            }
+            advance(Long.MAX_VALUE)
+            return Array(n) { k ->
+                val p = kept[pi[k]]
+                if (ps[k] == p.start && pe[k] == p.stop) p else p.copy(start = ps[k], stop = pe[k])
+            }
         }
     }
 }

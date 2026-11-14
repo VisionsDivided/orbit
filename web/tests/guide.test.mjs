@@ -126,30 +126,63 @@ test('paging chunks and merge', () => {
 const P = (s, e, title) => ({ start: T0 + s * 60, stop: T0 + e * 60, title });
 const spans = (l) => l.map((p) => [(p.start - T0) / 60, (p.stop - T0) / 60, p.title]);
 
-test('normalizeProgs: sorted, exact duplicates dropped', () => {
-  const l = [P(60, 90, 'B'), P(0, 60, 'A'), P(60, 90, 'B'), P(0, 60, 'A')];
-  assert.deepEqual(spans(G.normalizeProgs(l)), [[0, 60, 'A'], [60, 90, 'B']]);
-});
+// The same table is in web/tests/test_programme_overlaps.py and shared/src/test/.../EpgNormalizeTest.kt (minutes)
+const CASES = [
+  ["owner's hockey: two 10:00-15:00 entries and a duplicate; post-game inside post-game",
+    [[600, 900, 'NHL Hockey on Arena'], [600, 900, 'Next Game Today'], [600, 900, 'NHL Hockey on Arena'],
+      [900, 1020, 'Post-game'], [930, 960, 'Post-game']],
+    [[600, 900, 'NHL Hockey on Arena'], [900, 1020, 'Post-game']]],
+  ["owner's hockey: a filler inside the game, the game resumes",
+    [[600, 900, 'NHL Hockey on Arena'], [720, 750, 'Next Game Today'], [900, 1020, 'Post-game']],
+    [[600, 720, 'NHL Hockey on Arena'], [720, 750, 'Next Game Today'], [750, 900, 'NHL Hockey on Arena'],
+      [900, 1020, 'Post-game']]],
+  ['Block / Match: the block resumes',
+    [[60, 300, 'Block'], [120, 180, 'Match']],
+    [[60, 120, 'Block'], [120, 180, 'Match'], [180, 300, 'Block']]],
+  ['partial overlap: the later one wins',
+    [[120, 240, 'B'], [60, 180, 'A']],
+    [[60, 120, 'A'], [120, 240, 'B']]],
+  ['nested three levels',
+    [[0, 600, 'Outer'], [100, 400, 'Mid'], [200, 300, 'Inner']],
+    [[0, 100, 'Outer'], [100, 200, 'Mid'], [200, 300, 'Inner'], [300, 400, 'Mid'], [400, 600, 'Outer']]],
+  ['same start: the longest, then the first in input order',
+    [[0, 30, 'Short'], [0, 300, 'Long'], [0, 300, 'Twin'], [300, 360, 'X'], [300, 360, 'Y']],
+    [[0, 300, 'Long'], [300, 360, 'X']]],
+  ['same title inside (and an exact duplicate) dropped',
+    [[60, 300, 'Marathon'], [120, 180, 'Marathon'], [60, 300, 'Marathon'], [300, 360, 'Late']],
+    [[60, 300, 'Marathon'], [300, 360, 'Late']]],
+  ['zero-length and backwards entries dropped',
+    [[60, 60, 'Empty'], [60, 120, 'Real'], [180, 150, 'Backwards']],
+    [[60, 120, 'Real']]],
+  ['a messy day',
+    [[0, 300, 'NHL Hockey on Arena'], [0, 300, 'NHL Hockey on Arena'], [30, 60, 'NHL Hockey on Arena'],
+      [120, 180, 'Next Game Today'], [170, 240, 'Analysis'], [240, 240, 'Zero']],
+    [[0, 120, 'NHL Hockey on Arena'], [120, 170, 'Next Game Today'], [170, 240, 'Analysis'],
+      [240, 300, 'NHL Hockey on Arena']]],
+  ['a gap stays a gap',
+    [[0, 60, 'A'], [120, 180, 'B'], [130, 140, 'C']],
+    [[0, 60, 'A'], [120, 130, 'B'], [130, 140, 'C'], [140, 180, 'B']]],
+];
 
-test('normalizeProgs: an entry inside a longer one with the same title is dropped', () => {
-  const l = [P(0, 300, 'NHL Hockey'), P(60, 120, 'NHL Hockey'), P(300, 360, 'Post-game')];
-  assert.deepEqual(spans(G.normalizeProgs(l)), [[0, 300, 'NHL Hockey'], [300, 360, 'Post-game']]);
-});
+for (const [name, inp, want] of CASES) {
+  test(`normalizeProgs: ${name}`, () => {
+    assert.deepEqual(spans(G.normalizeProgs(inp.map(([s, e, t]) => P(s, e, t)))), want);
+  });
+}
 
-test('normalizeProgs: overlaps are trimmed to the next start (no titles drawn over each other)', () => {
-  // the owner's case: "NHL Hockey on ..." 10:00-15:00 and "Next Game Today" inside it
-  const l = [P(0, 300, 'NHL Hockey on Arena'), P(120, 150, 'Next Game Today'), P(150, 200, 'Analysis')];
-  const out = G.normalizeProgs(l);
-  assert.deepEqual(spans(out), [[0, 120, 'NHL Hockey on Arena'], [120, 150, 'Next Game Today'], [150, 200, 'Analysis']]);
-  for (let i = 1; i < out.length; i++) assert.ok(out[i].start >= out[i - 1].stop, 'no overlap');
-  assert.equal(l[0].stop, T0 + 300 * 60, 'input not changed');
-});
-
-test('normalizeProgs: same start keeps the longer one; zero-length and broken entries go', () => {
-  const l = [P(0, 30, 'Next Game Today'), P(0, 300, 'NHL Hockey'), P(400, 400, 'Empty'), P(500, 450, 'Backwards'), null];
-  assert.deepEqual(spans(G.normalizeProgs(l)), [[0, 300, 'NHL Hockey']]);
+test('normalizeProgs: empty and broken input', () => {
   assert.deepEqual(G.normalizeProgs([]), []);
   assert.deepEqual(G.normalizeProgs(null), []);
+  assert.deepEqual(spans(G.normalizeProgs([null, P(0, 30, 'A')])), [[0, 30, 'A']]);
+});
+
+test('normalizeProgs: a resumed piece is a copy of the original; the input is not changed', () => {
+  const block = { ...P(0, 300, 'Block'), desc: 'desc', sub: 'sub', ep: 'S1 E2' };
+  const l = [block, P(120, 180, 'Match')];
+  const out = G.normalizeProgs(l);
+  for (const p of [out[0], out[2]]) assert.deepEqual([p.title, p.desc, p.sub, p.ep], ['Block', 'desc', 'sub', 'S1 E2']);
+  assert.equal(l[0].start, T0);
+  assert.equal(l[0].stop, T0 + 300 * 60);
 });
 
 test('normalizeProgs: a clean list comes back as it was', () => {
@@ -157,6 +190,60 @@ test('normalizeProgs: a clean list comes back as it was', () => {
   const out = G.normalizeProgs(l);
   assert.deepEqual(out, l);
   assert.ok(out.every((p, i) => p === l[i]), 'same objects');
+});
+
+/** The rules written the slow, obvious way: minute -> the kept entry shown then. */
+function reference(l) {
+  const ps = l.filter((p) => p.stop > p.start).sort((a, b) => a.start - b.start || (b.stop - b.start) - (a.stop - a.start));
+  const kept = [];
+  for (const p of ps) {
+    if (kept.some((k) => k.start === p.start)) continue;
+    if (kept.some((k) => k.title === p.title && k.start <= p.start && k.stop >= p.stop)) continue;
+    kept.push(p);
+  }
+  const out = new Map();
+  for (const k of kept) {
+    for (let m = (k.start - T0) / 60; m < (k.stop - T0) / 60; m++) {
+      if (!out.has(m) || out.get(m).start < k.start) out.set(m, k);
+    }
+  }
+  return out;
+}
+
+test('normalizeProgs: random lists stay sorted, never overlap, cover exactly the input and match the rules', () => {
+  let seed = 7;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  for (let run = 0; run < 300; run++) {
+    const l = [];
+    const n = rnd(31);
+    for (let i = 0; i < n; i++) {
+      const s = rnd(97) * 15;
+      l.push(P(s, s + (rnd(18) - 1) * 15, `t${rnd(5)}`));
+    }
+    const out = G.normalizeProgs(l);
+    for (let i = 1; i < out.length; i++) assert.ok(out[i - 1].stop <= out[i].start, 'sorted, no overlap');
+    assert.ok(out.every((p) => p.stop > p.start));
+    const covered = new Set();
+    for (const p of l) for (let m = (p.start - T0) / 60; m < (p.stop - T0) / 60; m++) covered.add(m);
+    const got = new Map();
+    for (const p of out) for (let m = (p.start - T0) / 60; m < (p.stop - T0) / 60; m++) got.set(m, p);
+    assert.deepEqual([...got.keys()].sort((a, b) => a - b), [...covered].sort((a, b) => a - b), 'same minutes covered');
+    const ref = reference(l);
+    for (const [m, p] of got) assert.equal(p.title, ref.get(m).title);
+    for (let i = 1; i < out.length; i++) {
+      const a = out[i - 1], b = out[i];
+      if (a.stop === b.start) assert.notEqual(ref.get((a.start - T0) / 60), ref.get((b.start - T0) / 60), 'adjacent pieces merged');
+    }
+  }
+});
+
+test('normalizeProgs: a big channel is fast', () => {
+  const l = [];
+  for (let i = 0; i < 20000; i++) l.push(P(i * 30, i * 30 + 30 + (i % 7) * 45, `t${i % 11}`));
+  const t = Date.now();
+  const out = G.normalizeProgs(l);
+  assert.ok(Date.now() - t < 2000);
+  for (let i = 1; i < out.length; i++) assert.ok(out[i - 1].stop <= out[i].start);
 });
 
 test('programme state: now / future / catch-up / past', () => {

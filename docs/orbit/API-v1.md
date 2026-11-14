@@ -325,9 +325,15 @@ Preference keys written by Orbit clients (scope `prefs`):
 - `liveRecent`: the web app's Live TV "Recent" tab, the last channels watched: a JSON array of
   `{key, name, logo, number, group}`, most recent first, at most 12.
 
-Guide data (`/api/guide`, now/next, recordings, search) is normalised on the server: per channel the programmes are
-sorted, exact duplicates and entries lying inside a longer one are dropped (a filler inside a game never cuts the game short), an entry that runs into the next one
-ends at the next one's start, and zero-length entries are dropped (providers send overlapping entries).
+Guide data (`/api/guide`, now/next, recordings, search) is normalised on the server (providers send overlapping
+entries, and fillers or inner entries inside a live game). Per channel: entries with stop <= start are dropped; the
+rest are sorted by start, longer first; of entries starting together only the longest is kept (for equal length the
+first in input order); an entry lying fully inside an earlier kept one with the same title is dropped (duplicates
+included). Then the timeline is overlaid: at any moment the programme shown is the kept entry covering it with the
+latest start, so when an inner entry ends the enclosing one resumes (Block 1–5 with Match 2–3 gives Block 1–2,
+Match 2–3, Block 3–5; A 1–3 with B 2–4 gives A 1–2, B 2–4). The result is sorted and never overlaps; a resumed piece
+has the original's title, description and other fields with its own start and stop, and zero-length pieces are
+dropped. The web app (`guide.js normalizeProgs`) and the TV and desktop apps (`EpgIndex.tidy`) apply the same rules.
 
 At setup, the household's data so far (its `state.db`) is copied into the owner's first profile; the household
 file is left as it was. Deleting a profile deletes its data; sessions on it move to the account's first profile.
