@@ -77,7 +77,7 @@ object PhoneType {
 
 /**
  * Phone primary / secondary button (spec section 13): primary (Play, Resume) = the brand gradient with white text and
- * a violet shadow; secondary = 14 % white. 15 px bold, 11 x 18, radius 10; at least 44 dp high for touch.
+ * a violet shadow; secondary = 14 % white. 15 px bold, 11 x 18, radius 10; at least 48 dp high for touch.
  */
 @Composable
 fun PhoneButton(text: String, modifier: Modifier = Modifier, icon: ImageVector? = null, primary: Boolean = false, onClick: () -> Unit) {
@@ -87,7 +87,7 @@ fun PhoneButton(text: String, modifier: Modifier = Modifier, icon: ImageVector? 
             .then(if (primary) Modifier.shadow(14.dp, shape, ambientColor = Color(0x738A5CFF), spotColor = Color(0x738A5CFF)) else Modifier)
             .background(if (primary) O5.BrandGradient else SolidColor(Color(0x24FFFFFF)), shape)
             .clickable(onClick = onClick)
-            .defaultMinSize(minHeight = 44.dp)
+            .defaultMinSize(minHeight = PhoneTouch)
             .padding(horizontal = 18.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp, Alignment.CenterHorizontally),
     ) {
@@ -165,7 +165,7 @@ private fun PhoneTabItem(t: PhoneTab, on: Boolean, onClick: () -> Unit) {
 
 /**
  * Phone header (spec section 13): the planet logo (40 px) or a page title (28 px / 800) on the left, search (22 px)
- * and the avatar (32 px) on the right. 20 px side margins; touch targets at least 44 dp.
+ * and the avatar (32 px) on the right. 20 px side margins; touch targets at least 48 dp.
  */
 @Composable
 fun PhoneHeader(title: String?, profileName: String, onSearch: () -> Unit, onAvatar: () -> Unit, modifier: Modifier = Modifier, settingsActive: Boolean = false) {
@@ -173,10 +173,10 @@ fun PhoneHeader(title: String?, profileName: String, onSearch: () -> Unit, onAva
         if (title == null) Image(painterResource(R.drawable.orbit_planet), "Orbit", Modifier.width(40.dp).height(30.dp))
         else Text(title, style = PhoneType.H1, maxLines = 1)
         Spacer(Modifier.weight(1f))
-        Box(Modifier.size(44.dp).clickable(onClick = onSearch).testTag("phone-search"), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(PhoneTouch).clickable(onClick = onSearch).testTag("phone-search"), contentAlignment = Alignment.Center) {
             Icon(Icons.Filled.Search, "Search", tint = Color.White, modifier = Modifier.size(22.dp))
         }
-        Box(Modifier.size(44.dp).clickable(onClick = onAvatar).testTag("phone-avatar"), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(PhoneTouch).clickable(onClick = onAvatar).testTag("phone-avatar"), contentAlignment = Alignment.Center) {
             Box(if (settingsActive) Modifier.drawBehind { drawCircle(Color.White, size.minDimension / 2 + 4.dp.toPx()); drawCircle(O5.Bg, size.minDimension / 2 + 2.dp.toPx()) } else Modifier) {
                 Avatar(profileName, 32.dp)
             }

@@ -39,6 +39,7 @@ import io.github.kmmarin.tvbro.ui.orbit5.ColorKeyActions
 import io.github.kmmarin.tvbro.ui.orbit5.KeyAction
 import io.github.kmmarin.tvbro.ui.orbit5.O5Space
 import io.github.kmmarin.tvbro.ui.orbit5.SubMenuRow
+import io.github.kmmarin.tvbro.ui.shell.LocalIsPhone
 import io.github.kmmarin.tvbro.vodCatLabel
 import kotlinx.coroutines.delay
 
@@ -64,18 +65,9 @@ fun MoviesShowsSection(m: AppModel) {
     key(shows) { KindPage(m, feed, k, local) }
 }
 
+/** Loads what the page shows (TV and phone). */
 @Composable
-private fun KindPage(m: AppModel, feed: MoviesFeed, k: KindState, local: Boolean) {
-    val ctx = LocalContext.current
-    var focused by remember { mutableStateOf<Title?>(null) }
-    var focusedColl by remember { mutableStateOf<Coll?>(null) }
-    var eyebrow by remember { mutableStateOf("") }
-    var inRows by remember { mutableStateOf(false) }
-    val restoreFocus = remember { SafeFocus() }
-    val playFocus = remember { SafeFocus() }
-    val overlay = m.menu != null || m.prompt != null || m.progMenu != null
-
-    // loading what the page shows
+internal fun KindLoading(m: AppModel, feed: MoviesFeed, k: KindState, local: Boolean) {
     LaunchedEffect(k.tab, local, k.recLoaded, k.browseLoaded, k.collLoaded) {
         when (k.tab) {
             SubTab.RECOMMENDED -> feed.refreshRecommended(k)
@@ -87,6 +79,23 @@ private fun KindPage(m: AppModel, feed: MoviesFeed, k: KindState, local: Boolean
     LaunchedEffect(local, k.tab, m.vodCatNames) {
         if (local && k.tab == SubTab.BROWSE && m.vodCatNames.isNotEmpty() && !k.pickedCategory && m.vodCat != VOD_ALL) m.selectVodCat(VOD_ALL)
     }
+}
+
+@Composable
+private fun KindPage(m: AppModel, feed: MoviesFeed, k: KindState, local: Boolean) {
+    // the same APK on a phone: touch layout (PhoneMoviesPage.kt)
+    if (LocalIsPhone.current) { PhoneKindPage(m, feed, k, local); return }
+    val ctx = LocalContext.current
+    var focused by remember { mutableStateOf<Title?>(null) }
+    var focusedColl by remember { mutableStateOf<Coll?>(null) }
+    var eyebrow by remember { mutableStateOf("") }
+    var inRows by remember { mutableStateOf(false) }
+    val restoreFocus = remember { SafeFocus() }
+    val playFocus = remember { SafeFocus() }
+    val overlay = m.menu != null || m.prompt != null || m.progMenu != null
+
+    // loading what the page shows
+    KindLoading(m, feed, k, local)
     val events = TitleEvents(
         onFocus = { t -> focused = t; k.lastKey = t.key; m.favAction = { toggleMyList(m, t) } },   // bookmark / Y keep toggling My list
         onOpen = { t -> k.lastKey = t.key; k.restore = true; openTitle(m, t) },
@@ -229,7 +238,7 @@ fun playLabel(m: AppModel, t: Title?): String = when {
     else -> "Play"
 }
 
-private fun browseControls(m: AppModel, feed: MoviesFeed, k: KindState, local: Boolean): BrowseControls {
+internal fun browseControls(m: AppModel, feed: MoviesFeed, k: KindState, local: Boolean): BrowseControls {
     val onSource: (BrowseSource) -> Unit = { s -> if (s != k.source) { k.source = s; if (!local) feed.loadBrowse(k) } }
     if (local) {
         val cats = listOf(VOD_ALL, CAT_MYLIST, CAT_RECENT) + m.vodCatNames
