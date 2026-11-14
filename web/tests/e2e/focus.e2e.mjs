@@ -45,7 +45,11 @@ test('focus navigation, guide window, preview and full screen in a real browser'
   const focusVisible = () => page.evaluate(() => {
     const a = document.activeElement, vis = (el) => { const cs = getComputedStyle(el); return (cs.boxShadow && cs.boxShadow !== 'none') || (cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0); };
     if (a && a !== document.body && a.closest('#topbar, #main, .modal, #player-layer')) {
-      if (a.closest('.tv2')) { /* the guide uses its own marks */ } else { const pic = a.querySelector(':scope > .pic'); return vis(a) || (pic && vis(pic)) ? 'dom' : 'dom-invisible:' + a.className; }   // cards ring their picture
+      if (a.closest('.tv2')) { /* the guide uses its own marks */ } else {
+        // cards ring their picture; the search field rings its rounded frame
+        const pic = a.querySelector(':scope > .pic'), frame = a.closest('.srch5-field');
+        return vis(a) || (pic && vis(pic)) || (frame && getComputedStyle(frame).outlineStyle !== 'none') ? 'dom' : 'dom-invisible:' + a.className;
+      }
     }
     const marks = document.querySelectorAll('.gitem.kf, .g-row.lf .g-label, .g-blk.foc');
     return marks.length === 1 ? 'guide' : 'guide-marks:' + marks.length;
