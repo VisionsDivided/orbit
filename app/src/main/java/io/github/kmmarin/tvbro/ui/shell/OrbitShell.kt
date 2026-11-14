@@ -105,7 +105,10 @@ fun OrbitShell(m: AppModel) {
                 Section.MOVIES, Section.SHOWS -> MoviesShowsSection(m)
                 Section.TV, Section.RECORDINGS, Section.MYLIST -> LiveTvSection(m)
                 Section.DISCOVER -> DiscoverSection(m)
-                Section.SEARCH -> LegacyPage(O5Space.TopBar) { SearchScreen(m) { m.section = Section.HOME } }
+                Section.SEARCH -> Box(Modifier.fillMaxSize()) {
+                    io.github.kmmarin.tvbro.ui.orbit5.CinematicBackdrop(null, Modifier.fillMaxSize(), dim = true)
+                    io.github.kmmarin.tvbro.ui.search.SearchSection(m) { m.section = Section.HOME }
+                }
             }
         }
     }
