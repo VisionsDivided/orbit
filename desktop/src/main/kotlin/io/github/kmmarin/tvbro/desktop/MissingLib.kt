@@ -22,13 +22,13 @@ import java.io.File
 object MissingLibText {
     const val TITLE = "Video library missing"
 
-    fun intro(windows: Boolean) = if (windows)
+    fun intro(os: Os) = if (os == Os.WINDOWS)
         "tvBro plays video with libmpv, a separate library that is not included in the tvBro download (the common " +
             "Windows builds of it are GPL-licensed; tvBro is Apache-2.0). Add your own copy once and tvBro remembers it. " +
             "tvBro never downloads it for you."
     else "tvBro plays video with libmpv, the system's mpv library. It is not part of the tvBro download. tvBro never installs it for you."
 
-    fun steps(windows: Boolean, appDir: String?): List<String> = if (windows) listOf(
+    fun steps(os: Os, appDir: String?): List<String> = if (os == Os.WINDOWS) listOf(
         "In your web browser, open the releases page of a Windows libmpv build: github.com/zhongfly/mpv-winbuild/releases " +
             "offers LGPL builds (prefer those), github.com/shinchiro/mpv-winbuild-cmake/releases GPL builds. Your own " +
             "copy of a GPL build is fine for personal use.",
@@ -39,6 +39,10 @@ object MissingLibText {
         "Put libmpv-2.dll next to tvBro.exe" + (appDir?.let { " (in $it)" } ?: "") + ", or in any folder you like and " +
             "press \"Choose file…\" to point tvBro at it.",
         "Press \"Check again\".",
+    ) else if (os == Os.MAC) listOf(
+        "Install mpv with Homebrew (brew.sh): open Terminal and run brew install mpv. MacPorts works too: sudo port install mpv.",
+        "Press \"Check again\". tvBro looks in /opt/homebrew/lib (Apple Silicon), /usr/local/lib (Intel) and " +
+            "/opt/local/lib (MacPorts); a libmpv.2.dylib elsewhere can be picked with \"Choose file…\".",
     ) else listOf(
         "Install the library: sudo apt install libmpv2 (Debian 12 / Raspberry Pi OS bookworm).",
         "Press \"Check again\". A libmpv.so.2 of your own build can be picked with \"Choose file…\".",
@@ -55,7 +59,7 @@ object MissingLibText {
  */
 @Composable
 fun MissingLibScreen(
-    windows: Boolean, appDir: String?, error: String?, note: String,
+    os: Os, appDir: String?, error: String?, note: String,
     onChoose: () -> Unit, onRetry: () -> Unit, onDocs: () -> Unit, onSkip: () -> Unit,
 ) {
     val first = remember { FocusRequester() }
@@ -73,9 +77,9 @@ fun MissingLibScreen(
                 androidx.compose.foundation.Image(AppIcon, null, Modifier.size(40.dp)); Spacer(Modifier.width(12.dp))
                 T(MissingLibText.TITLE, 28, bold = true)
             }
-            T(MissingLibText.intro(windows), 15, Theme.dim, maxLines = 5)
+            T(MissingLibText.intro(os), 15, Theme.dim, maxLines = 5)
             Column(Modifier.fillMaxWidth().background(Theme.surface, RoundedCornerShape(8.dp)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                MissingLibText.steps(windows, appDir).forEachIndexed { i, s ->
+                MissingLibText.steps(os, appDir).forEachIndexed { i, s ->
                     Row {
                         T("${i + 1}.", 15, Theme.accent, bold = true, modifier = Modifier.width(28.dp))
                         T(s, 15, maxLines = 6)
@@ -98,7 +102,7 @@ fun MissingLibScreen(
 
 /** The file picker for libmpv (a native dialog; nothing is downloaded). */
 fun pickLibmpv(): File? {
-    val d = java.awt.FileDialog(null as java.awt.Frame?, "Choose ${if (Platform.windows) MpvLocate.WIN_DLL else "libmpv.so.2"}", java.awt.FileDialog.LOAD)
+    val d = java.awt.FileDialog(null as java.awt.Frame?, "Choose ${MpvLocate.fileName(Platform.os)}", java.awt.FileDialog.LOAD)
     if (Platform.windows) d.file = "*.dll" else d.setFilenameFilter { _, n -> n.startsWith("libmpv") }
     MpvLoader.appDir?.let { d.directory = it }
     d.isVisible = true

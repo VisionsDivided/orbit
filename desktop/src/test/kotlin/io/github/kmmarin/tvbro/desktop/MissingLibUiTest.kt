@@ -18,7 +18,7 @@ class MissingLibUiTest {
         val calls = mutableListOf<String>()
         var note = ""
         rule.setContent {
-            MissingLibScreen(true, "C:\\Apps\\tvBro", "libmpv-2.dll was not found next to tvBro.exe or on PATH", note,
+            MissingLibScreen(Os.WINDOWS, "C:\\Apps\\tvBro", "libmpv-2.dll was not found next to tvBro.exe or on PATH", note,
                 onChoose = { calls += "choose" }, onRetry = { calls += "retry" }, onDocs = { calls += "docs" }, onSkip = { calls += "skip" })
         }
         rule.onNodeWithText("Video library missing").assertExists()
@@ -41,9 +41,9 @@ class MissingLibUiTest {
     }
 
     @Test fun linuxScreenAndNote() {
-        rule.setContent { MissingLibScreen(false, null, null, "Still not found. Check the steps above.", {}, {}, {}, {}) }
+        rule.setContent { MissingLibScreen(Os.LINUX, null, null, "Still not found. Check the steps above.", {}, {}, {}, {}) }
         rule.onNodeWithText("sudo apt install libmpv2", substring = true).assertExists()
         rule.onNodeWithTag("missing-lib-note").assertExists()
-        assertTrue(MissingLibText.steps(false, null).none { "libmpv-2.dll" in it })
+        assertTrue(MissingLibText.steps(Os.LINUX, null).none { "libmpv-2.dll" in it })
     }
 }

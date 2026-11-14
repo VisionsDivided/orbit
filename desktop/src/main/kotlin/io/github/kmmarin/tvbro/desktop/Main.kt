@@ -115,7 +115,7 @@ fun main(args: Array<String>) {
 fun VideoSetup(app: AppState) {
     var note by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(MpvLoader.error) }
-    MissingLibScreen(Platform.windows, MpvLoader.appDir, error, note,
+    MissingLibScreen(Platform.os, MpvLoader.appDir, error, note,
         onChoose = {
             val f = pickLibmpv()
             if (f != null) {

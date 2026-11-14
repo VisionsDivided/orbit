@@ -29,10 +29,13 @@ interface MpvLib : Library {
     fun mpv_client_api_version(): NativeLong
 }
 
-/** Format and processor of a native library file, read from its PE (Windows) or ELF (Linux) header. */
-data class BinArch(val format: String, val arch: String) {
+/**
+ * Format and processor of a native library file, read from its PE (Windows), ELF (Linux) or Mach-O (macOS) header.
+ * A universal (fat) Mach-O file holds several processors: [all] lists them and [arch] is "universal".
+ */
+data class BinArch(val format: String, val arch: String, val all: List<String> = listOf(arch)) {
     companion object {
-        /** Null when [f] is neither a PE nor an ELF file (or cannot be read). */
+        /** Null when [f] is neither a PE, an ELF nor a Mach-O file (or cannot be read). */
         fun of(f: File): BinArch? = try {
             RandomAccessFile(f, "r").use { r ->
                 if (r.length() < 64) return null
@@ -50,7 +53,7 @@ data class BinArch(val format: String, val arch: String) {
                     }
                     h[0] == 0x7f.toByte() && h[1] == 'E'.code.toByte() && h[2] == 'L'.code.toByte() && h[3] == 'F'.code.toByte() ->
                         BinArch("elf", when (le16(h, 18)) { 0x3E -> "x64"; 0x03 -> "x86"; 0xB7 -> "arm64"; 0x28 -> "arm"; else -> "other" })
-                    else -> null
+                    else -> MachO.of(h, r)
                 }
             }
         } catch (e: java.io.IOException) { null }
@@ -66,6 +69,53 @@ data class BinArch(val format: String, val arch: String) {
     }
 }
 
+/**
+ * Mach-O headers (macOS dylibs). Thin files start with MH_MAGIC / MH_MAGIC_64 (0xfeedface / 0xfeedfacf, stored in
+ * the file's byte order: little-endian on Intel and Apple Silicon, so the bytes read CE/CF FA ED FE), followed by the
+ * cputype. Universal files start with FAT_MAGIC / FAT_MAGIC_64 (0xcafebabe / 0xcafebabf, always big-endian), a count
+ * and one fat_arch record (20 bytes; 32 for the 64-bit form) per processor, cputype first. Java class files also
+ * start with CAFEBABE; their next word is the class version (45 or more), so a count above [MAX_FAT] is not Mach-O.
+ */
+object MachO {
+    const val MH_MAGIC = 0xfeedface.toInt()
+    const val MH_MAGIC_64 = 0xfeedfacf.toInt()
+    const val FAT_MAGIC = 0xcafebabe.toInt()
+    const val FAT_MAGIC_64 = 0xcafebabf.toInt()
+    const val CPU_X86 = 7
+    const val CPU_ARM = 12
+    const val CPU_ARCH_ABI64 = 0x01000000
+    const val MAX_FAT = 20
+
+    fun cpu(t: Int): String = when (t) {
+        CPU_ARCH_ABI64 or CPU_X86 -> "x64"; CPU_X86 -> "x86"; CPU_ARCH_ABI64 or CPU_ARM -> "arm64"; CPU_ARM -> "arm"; else -> "other"
+    }
+
+    private fun be32(b: ByteArray, o: Int) =
+        ((b[o].toInt() and 0xff) shl 24) or ((b[o + 1].toInt() and 0xff) shl 16) or ((b[o + 2].toInt() and 0xff) shl 8) or (b[o + 3].toInt() and 0xff)
+    private fun le32(b: ByteArray, o: Int) = Integer.reverseBytes(be32(b, o))
+
+    /** [h]: the first 64 bytes; [r] for the fat records beyond them. Null = not Mach-O. */
+    fun of(h: ByteArray, r: RandomAccessFile): BinArch? {
+        val be = be32(h, 0)
+        val le = le32(h, 0)
+        return when {
+            le == MH_MAGIC || le == MH_MAGIC_64 -> BinArch("macho", cpu(le32(h, 4)))
+            be == MH_MAGIC || be == MH_MAGIC_64 -> BinArch("macho", cpu(be32(h, 4))) // big-endian (PowerPC era)
+            be == FAT_MAGIC || be == FAT_MAGIC_64 -> {
+                val n = be32(h, 4)
+                if (n < 1 || n > MAX_FAT) return null
+                val rec = if (be == FAT_MAGIC_64) 32 else 20
+                if (8L + n * rec > r.length()) return null
+                r.seek(8)
+                val t = ByteArray(n * rec).also { r.readFully(it) }
+                val archs = (0 until n).map { cpu(be32(t, it * rec)) }.distinct()
+                if (archs.size == 1) BinArch("macho", archs[0]) else BinArch("macho", "universal", archs)
+            }
+            else -> null
+        }
+    }
+}
+
 /** A place libmpv may be loaded from: a file ([file], checked before loading) or a library name the OS searches for. */
 data class MpvCandidate(val path: String, val file: Boolean, val chosen: Boolean = false)
 
@@ -74,26 +124,44 @@ data class MpvLoad(val lib: MpvLib?, val error: String?, val from: String?)
 
 /**
  * Where libmpv is looked for and why it could not be loaded. tvBro does not ship libmpv (the usual Windows builds are
- * GPL): the user's own copy is used, from a file they chose, next to tvBro.exe, or wherever the OS finds it.
+ * GPL): the user's own copy is used, from a file they chose, next to tvBro.exe, or wherever the OS finds it. On macOS
+ * also inside the app bundle (Contents/Frameworks, a lib/ folder) and where Homebrew and MacPorts install it.
  */
 object MpvLocate {
     const val WIN_DLL = "libmpv-2.dll"
+    const val MAC_DYLIB = "libmpv.2.dylib"
+    /** Homebrew on Apple Silicon, Homebrew on Intel, MacPorts. */
+    val MAC_DIRS = listOf("/opt/homebrew/lib", "/usr/local/lib", "/opt/local/lib")
 
-    fun candidates(windows: Boolean, chosen: String?, appDir: String?): List<MpvCandidate> = buildList {
+    /** The library file name the user is asked for. */
+    fun fileName(os: Os) = when (os) { Os.WINDOWS -> WIN_DLL; Os.MAC -> MAC_DYLIB; Os.LINUX -> "libmpv.so.2" }
+
+    fun candidates(os: Os, chosen: String?, appDir: String?): List<MpvCandidate> = buildList {
         chosen?.takeIf { it.isNotBlank() }?.let { add(MpvCandidate(it, file = true, chosen = true)) }
-        if (windows) {
-            appDir?.let { add(MpvCandidate(File(it, WIN_DLL).path, file = true)) }
-            for (n in listOf("libmpv-2", "mpv-2", "mpv")) add(MpvCandidate(n, file = false))
-        } else for (n in listOf("mpv", "libmpv.so.2", "libmpv.so.1")) add(MpvCandidate(n, file = false))
+        when (os) {
+            Os.WINDOWS -> {
+                appDir?.let { add(MpvCandidate(File(it, WIN_DLL).path, file = true)) }
+                for (n in listOf("libmpv-2", "mpv-2", "mpv")) add(MpvCandidate(n, file = false))
+            }
+            Os.MAC -> {
+                // in a packaged app appDir is Orbit.app/Contents/MacOS (jpackage.app-path is the launcher in there)
+                val own = appDir?.let { val a = File(it); listOfNotNull(a.parentFile?.let { c -> File(c, "Frameworks") }, File(a, "lib"), a) }.orEmpty()
+                for (d in own.map { it.path } + MAC_DIRS) for (n in listOf(MAC_DYLIB, "libmpv.dylib")) add(MpvCandidate(File(d, n).path, file = true))
+                for (n in listOf("mpv", MAC_DYLIB)) add(MpvCandidate(n, file = false))
+            }
+            Os.LINUX -> for (n in listOf("mpv", "libmpv.so.2", "libmpv.so.1")) add(MpvCandidate(n, file = false))
+        }
     }
 
+    private fun format(os: Os) = when (os) { Os.WINDOWS -> "pe"; Os.MAC -> "macho"; Os.LINUX -> "elf" }
+    private fun kind(os: Os) = when (os) { Os.WINDOWS -> "a Windows DLL"; Os.MAC -> "a macOS library (.dylib)"; Os.LINUX -> "a Linux shared library" }
+
     /** Checks a file before it is loaded: null = it may be loaded, else why not. */
-    fun problem(f: File, windows: Boolean, jvmArch: String): String? {
+    fun problem(f: File, os: Os, jvmArch: String): String? {
         if (!f.isFile) return "${f.path} is not there (moved or deleted?)"
-        val kind = if (windows) "a Windows DLL" else "a Linux shared library"
-        val b = BinArch.of(f) ?: return "${f.name} is not $kind"
-        if (b.format != (if (windows) "pe" else "elf")) return "${f.name} is not $kind"
-        if (b.arch != jvmArch) return "${f.name} is built for ${BinArch.label(b.arch)}; this computer needs the build for ${BinArch.label(jvmArch)}"
+        val b = BinArch.of(f) ?: return "${f.name} is not ${kind(os)}"
+        if (b.format != format(os)) return "${f.name} is not ${kind(os)}"
+        if (jvmArch !in b.all) return "${f.name} is built for ${b.all.joinToString(" and ") { BinArch.label(it) }}; this computer needs the build for ${BinArch.label(jvmArch)}"
         return null
     }
 
@@ -101,14 +169,14 @@ object MpvLocate {
      * Tries [cands] in order with [open]. A file next to the app that is simply absent is skipped quietly; a chosen
      * file that is gone, of the wrong kind or processor is reported first, then problems of the file next to the app.
      */
-    fun load(cands: List<MpvCandidate>, windows: Boolean, jvmArch: String, open: (String) -> MpvLib): MpvLoad {
+    fun load(cands: List<MpvCandidate>, os: Os, jvmArch: String, open: (String) -> MpvLib): MpvLoad {
         var chosenErr: String? = null
         var fileErr: String? = null
         for (c in cands) {
             if (c.file) {
                 val f = File(c.path)
                 if (!c.chosen && !f.exists()) continue
-                val p = problem(f, windows, jvmArch)
+                val p = problem(f, os, jvmArch)
                 if (p != null) { if (c.chosen) chosenErr = chosenErr ?: p else fileErr = fileErr ?: p; continue }
             }
             try { return MpvLoad(open(c.path), null, c.path) } catch (e: Exception) {
@@ -117,7 +185,11 @@ object MpvLocate {
                 if (c.file) { val m = "${File(c.path).name} could not be loaded: ${firstLine(e)}"; if (c.chosen) chosenErr = chosenErr ?: m else fileErr = fileErr ?: m }
             }
         }
-        val none = if (windows) "$WIN_DLL was not found next to tvBro.exe or on PATH" else "libmpv was not found (Debian / Raspberry Pi OS: sudo apt install libmpv2)"
+        val none = when (os) {
+            Os.WINDOWS -> "$WIN_DLL was not found next to tvBro.exe or on PATH"
+            Os.MAC -> "libmpv was not found (macOS: brew install mpv)"
+            Os.LINUX -> "libmpv was not found (Debian / Raspberry Pi OS: sudo apt install libmpv2)"
+        }
         return MpvLoad(null, chosenErr ?: fileErr ?: none, null)
     }
 
@@ -147,7 +219,7 @@ object MpvLoader {
 
     /** Loads [f] (picked by the user) and remembers it. Null = loaded, else why not; a file that fails is not remembered. */
     @Synchronized fun choose(f: File): String? {
-        MpvLocate.problem(f, Platform.windows, BinArch.jvm())?.let { return it }
+        MpvLocate.problem(f, Platform.os, BinArch.jvm())?.let { return it }
         if (attempt(f.absolutePath) == null) return error
         if (from == f.absolutePath) try { atomicWrite(pathFile, f.absolutePath.toByteArray(Charsets.UTF_8)) } catch (e: Exception) { Diag.log("libmpv path not saved") }
         return null
@@ -157,7 +229,7 @@ object MpvLoader {
         loaded.value?.let { return it } // a loaded library stays loaded for the whole run
         tried = true
         appDir?.let { System.setProperty("jna.library.path", it) }
-        val r = MpvLocate.load(MpvLocate.candidates(Platform.windows, pick, appDir), Platform.windows, BinArch.jvm(), ::open)
+        val r = MpvLocate.load(MpvLocate.candidates(Platform.os, pick, appDir), Platform.os, BinArch.jvm(), ::open)
         error = r.error; from = r.from; loaded.value = r.lib
         if (r.lib == null) Diag.log("libmpv not found: ${r.error}")
         return r.lib
