@@ -26,8 +26,8 @@ ALPHABET = "BCDFGHJKLMNPQRSTVWXZ23456789"   # no vowels (no words), no 0/O or 1/
 CODE_LEN = 8                                # 28^8 ≈ 3.8e11 codes
 TTL = 600
 POLL_EVERY = 3
-MAX_PER_CLIENT = 5
-MAX_PENDING = 50
+MAX_PER_CLIENT = 3                          # waiting pairings per client address (a TV needs one)
+MAX_PENDING = 20                            # waiting pairings in all (a household links a few TVs at a time)
 
 
 def _key(pair_id: str) -> str:
@@ -64,8 +64,14 @@ class Pairings:
         dev = device.strip()[:60] if isinstance(device, str) and device.strip() else "TV"
         with self._lock:
             self._prune()
-            if len(self._p) >= MAX_PENDING or sum(1 for p in self._p.values() if p["client"] == client) >= MAX_PER_CLIENT:
-                raise ApiError(429, "too many pairings at once; try again in a few minutes", 60)
+            # every pairing in memory counts (an approved one is collected by its TV within seconds)
+            waiting = list(self._p.values())
+            if sum(1 for p in waiting if p["client"] == client) >= MAX_PER_CLIENT:
+                raise ApiError(429, f"this device already has {MAX_PER_CLIENT} pairing codes waiting; use one of "
+                                    "them or try again in a few minutes", self._retry(client))
+            if len(waiting) >= MAX_PENDING:
+                raise ApiError(429, f"too many TVs are waiting to be linked ({MAX_PENDING}); try again in a few "
+                                    "minutes", self._retry(None))
             codes = {p["code"] for p in self._p.values()}
             code = "".join(secrets.choice(ALPHABET) for _ in range(CODE_LEN))
             while code in codes:
@@ -74,6 +80,11 @@ class Pairings:
             exp = self.clock() + TTL
             self._p[_key(pair_id)] = {"code": code, "device": dev, "client": client, "exp": exp}
         return {"pairId": pair_id, "code": pretty(code), "expires": int(exp), "interval": POLL_EVERY}
+
+    def _retry(self, client) -> int:
+        """Seconds until the oldest waiting code (of ``client``, or of anyone) expires: the Retry-After."""
+        exps = [p["exp"] for p in self._p.values() if client is None or p["client"] == client]
+        return max(1, int(min(exps) - self.clock()) + 1) if exps else 60
 
     def tick(self):
         """Called on every API request: expired pairings (and sessions approved but never collected) end on time."""

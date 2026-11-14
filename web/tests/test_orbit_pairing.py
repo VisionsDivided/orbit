@@ -100,11 +100,41 @@ class Unit(unittest.TestCase):
         self.assertEqual(api.handle(Call("GET", "/v1/device/playlists", self.alex)).code, 403)
 
     def test_limits(self):
+        self.assertLessEqual(PA.MAX_PER_CLIENT, 3)
+        self.assertLessEqual(PA.MAX_PENDING, 20)
         for _ in range(PA.MAX_PER_CLIENT):
             self.pr.start("TV", "192.0.2.5")
         with self.assertRaises(ApiError) as e:
             self.pr.start("TV", "192.0.2.5")
         self.assertEqual(e.exception.code, 429)
+        self.assertIn("pairing codes waiting", e.exception.msg)
+        self.assertEqual(e.exception.retry_after, PA.TTL + 1)       # when its oldest code expires
+        self.pr.start("TV", "192.0.2.6")                          # another address still may
+
+    def test_global_cap(self):
+        n = 0
+        while n < PA.MAX_PENDING:
+            for _ in range(min(PA.MAX_PER_CLIENT, PA.MAX_PENDING - n)):
+                self.pr.start("TV", "192.0.2.%d" % (10 + n // PA.MAX_PER_CLIENT))
+                n += 1
+        self.clock.t += 30
+        with self.assertRaises(ApiError) as e:
+            self.pr.start("TV", "192.0.2.200")                    # a new address, but the server is full
+        self.assertEqual(e.exception.code, 429)
+        self.assertIn("too many TVs are waiting", e.exception.msg)
+        self.assertEqual(e.exception.retry_after, PA.TTL - 30 + 1)
+        self.clock.t += PA.TTL                                    # all expired: room again
+        self.pr.start("TV", "192.0.2.200")
+
+    def test_cap_over_http_is_429_with_retry_after(self):
+        from orbit.api import Api, Call
+        api = Api(self.acc, self.pr)
+        for _ in range(PA.MAX_PER_CLIENT):
+            self.assertEqual(api.handle(Call("POST", "/v1/pair/start", None, {"device": "TV"}, "192.0.2.7")).code, 200)
+        r = api.handle(Call("POST", "/v1/pair/start", None, {"device": "TV"}, "192.0.2.7"))
+        self.assertEqual(r.code, 429)
+        self.assertIn("error", r.obj)
+        self.assertEqual(r.headers.get("Retry-After"), str(PA.TTL + 1))
 
 
 class Server(unittest.TestCase):
