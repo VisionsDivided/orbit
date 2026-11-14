@@ -119,35 +119,63 @@ export function chunksFor(from, to) {
 }
 
 /**
- * One channel's programmes made drawable: providers send overlapping entries (two titles printed over each
- * other). Sorted by start (then by stop, so of two that start together the longer one comes last and is kept);
- * exact duplicates and entries fully inside a longer one with the same title are dropped; an entry that runs into
- * the next one ends where the next one starts; what is left with no length is dropped. Copies are returned for
- * trimmed entries; the input is not changed. The server does the same (parsers.normalize_programmes).
+ * One channel's programmes made drawable: providers send overlapping entries (two titles printed over each other)
+ * and put fillers ("Next Game Today") or inner entries inside a live game. The rules (the same on the server,
+ * parsers.normalize_programmes, and in the Kotlin EpgIndex.tidy):
+ * 1. entries with stop <= start are dropped;
+ * 2. sorted by start, then the longer first (stable: equal ones keep their input order);
+ * 3. of entries starting at the same time only the first (the longest) is kept;
+ * 4. an entry lying fully inside an earlier kept entry with the same title is dropped (duplicates included);
+ * 5. timeline overlay: at any moment the entry shown is the kept one covering it with the latest start, so when an
+ *    inner entry ends the enclosing one resumes (Block 1-5, Match 2-3 -> Block 1-2, Match 2-3, Block 3-5;
+ *    A 1-3, B 2-4 -> A 1-2, B 2-4); adjacent pieces of one entry are merged;
+ * 6. zero-length pieces are dropped.
+ * A piece is a copy of its entry with other start / stop; an entry shown whole comes back as it was, and the input
+ * is not changed. O(n log n): one sweep with a stack of open entries.
  */
 export function normalizeProgs(progs) {
   const ps = (progs || []).filter((p) => p && p.stop > p.start)
-    .slice().sort((a, b) => a.start - b.start || a.stop - b.stop);
+    .sort((a, b) => a.start - b.start || (b.stop - b.start) - (a.stop - a.start));
   const kept = [];
-  for (let i = 0; i < ps.length; i++) {
-    const p = ps[i];
-    let drop = false;
-    for (let j = 0; j < ps.length && !drop; j++) {
-      if (j === i) continue;
-      const o = ps[j];
-      if (o.title !== p.title || o.start > p.start || o.stop < p.stop) continue;
-      // inside o (or the same span): an exact duplicate keeps its first copy, a shorter one goes
-      drop = o.start === p.start && o.stop === p.stop ? j < i : true;
+  const reach = new Map(); // latest stop of each title kept so far: all of them start no later than p
+  for (const p of ps) {
+    if (kept.length && kept[kept.length - 1].start === p.start) continue;
+    const r = reach.get(p.title);
+    if (r !== undefined && r >= p.stop) continue;
+    reach.set(p.title, r === undefined ? p.stop : Math.max(r, p.stop));
+    kept.push(p);
+  }
+  const pieces = []; // [entry index, start, stop]
+  const emit = (i, a, b) => {
+    if (b <= a) return;
+    const last = pieces[pieces.length - 1];
+    if (last && last[0] === i && last[2] === a) last[2] = b;
+    else pieces.push([i, a, b]);
+  };
+  const stack = []; // open entries, later starts on top; ones already ended are removed lazily
+  let cur = 0;
+  const advance = (t) => { // t null: to the end
+    while (stack.length) {
+      const i = stack[stack.length - 1], top = kept[i];
+      if (top.stop <= cur) { stack.pop(); continue; }
+      const end = t === null || top.stop <= t ? top.stop : t;
+      emit(i, cur, end);
+      cur = end;
+      if (t !== null && top.stop > t) break;
+      stack.pop();
     }
-    if (!drop) kept.push(p);
-  }
-  const out = [];
+    if (t !== null) cur = Math.max(cur, t);
+  };
   for (let i = 0; i < kept.length; i++) {
-    const p = kept[i], nx = kept[i + 1];
-    const q = nx && nx.start < p.stop ? { ...p, stop: nx.start } : p;
-    if (q.stop > q.start) out.push(q);
+    if (!stack.length) cur = kept[i].start;
+    advance(kept[i].start);
+    stack.push(i);
   }
-  return out;
+  advance(null);
+  return pieces.map(([i, a, b]) => {
+    const p = kept[i];
+    return a === p.start && b === p.stop ? p : { ...p, start: a, stop: b };
+  });
 }
 
 /** Merge programme lists from several chunks: dedupe by start, normalise (normalizeProgs). */
