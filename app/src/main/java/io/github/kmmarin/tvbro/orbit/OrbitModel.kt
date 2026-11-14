@@ -44,6 +44,9 @@ interface OrbitHost {
     fun describe(key: String): JsonObject?
     /** Another device took this TV's stream slot: stop live / film playback and say why. */
     fun stopPlayback(reason: String)
+    /** Per-channel stream formats of the linked profile (synced through its server prefs, FormatSync.kt). */
+    val channelFormats: io.github.kmmarin.tvbro.data.ChannelFormats get() = io.github.kmmarin.tvbro.data.ChannelFormats()
+    fun setChannelFormats(f: io.github.kmmarin.tvbro.data.ChannelFormats) {}
 }
 
 /**
@@ -179,6 +182,7 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
                 api.statePut(l, "resume", k, JsonObject(v))
             }
             syncShows(l, h, watch)
+            syncChannelFormats(api, l, h, st)
             val t = io.github.kmmarin.tvbro.data.TimeFmt.time(System.currentTimeMillis() / 1000)
             withContext(Dispatchers.Main) { syncStatus = "Synced $t" }
         } catch (e: OrbitError) {

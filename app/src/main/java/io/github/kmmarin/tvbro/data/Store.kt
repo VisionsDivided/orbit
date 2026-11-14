@@ -86,6 +86,9 @@ class Store(private val ctx: Context) {
     var liveHls: Boolean
         get() = sp.getBoolean("liveHls", false)
         set(v) = sp.edit { putBoolean("liveHls", v) }
+    /** Orbit: per-channel stream format of one profile (ChannelFormats as JSON); [profile] "" = this TV, not linked. */
+    fun channelFormats(profile: String): String? = sp.getString("chFmt|$profile", null)
+    fun saveChannelFormats(profile: String, json: String) = sp.edit { putString("chFmt|$profile", json) }
 
     var bufferSec: Int
         get() = sp.getInt("bufferSec", 15)

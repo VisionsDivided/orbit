@@ -25,6 +25,16 @@ the TV must stall. The provider's HLS path (a CDN-style segment server) did not 
 - Playback stats (Settings ▸ About, and the second line in the player's stream info) show start time, stalls and
   longest stall per channel, so the two formats can be compared on the TV.
 
+### Per-channel format (added later the same day)
+
+- Settings ▸ Live stream format stays the default (MPEG-TS). Each Xtream live channel can override it: long-press
+  (or Menu) on the channel ▸ **Stream format** ▸ Default / MPEG-TS / HLS. Stored per profile and synced through the
+  profile's server prefs (`tvChannelFormats`, see API-v1.md), so the choice follows the profile to another TV.
+- A gentle hint, never a silent switch: when a channel playing as TS stalls 3 times within its first 2 minutes in the
+  full-screen player, a small note says "This channel keeps buffering. Try HLS for it?"; OK sets that channel to HLS.
+  It comes once per channel per app start, takes no focus and goes away after 20 s.
+- Playback stats mark HLS sessions with "[HLS]" after the channel name, so both formats of a channel can be compared.
+
 ## Suggested next steps
 
 1. On the TV, switch Live stream format to HLS and watch Reelz (and a channel that never buffered) for 30+ minutes

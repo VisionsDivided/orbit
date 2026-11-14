@@ -163,6 +163,11 @@ points; reminders; search history; preferences), `GET /api/series/continue`, `GE
 (`profiles/<profile id>/state.db`). Still shared by the household: playlists and their sync, channel layout and
 custom groups, the guide, recordings and recording rules, parental PIN and locks, and server settings.
 
+Preference keys written by Orbit clients (scope `prefs`):
+- `tvChannelFormats`: the TV's per-channel live stream format, `{"at": <ms>, "channels": {"<channel key>": "ts"|"hls"}}`
+  (at most 400 channels; a channel not listed follows the TV's Settings ▸ Live stream format). The copy with the newer
+  `at` wins as a whole.
+
 At setup, the household's data so far (its `state.db`) is copied into the owner's first profile; the household
 file is left as it was. Deleting a profile deletes its data; sessions on it move to the account's first profile.
 

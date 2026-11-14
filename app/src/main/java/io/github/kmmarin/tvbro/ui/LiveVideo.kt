@@ -74,14 +74,16 @@ private class Counting(private val d: androidx.media3.datasource.DataSource) : a
  * is stopped and its connection closed before the new one opens (zapping opened the next channel while the old
  * connection was still open, two at once for a moment). Waits at most 3 s for a connection that does not close.
  */
-suspend fun liveLoad(exo: ExoPlayer, url: String, label: String = "") {
-    // Orbit playback stats: the same stream again is a reconnect, another one a new session (by URL hash, never the URL)
-    io.github.kmmarin.tvbro.orbit.PlayStats.run { keep(live.begin(url.hashCode(), "live", label)) }
+suspend fun liveLoad(exo: ExoPlayer, url: String, label: String = "", format: String? = null) {
+    // Orbit: the channel's own stream format ([format]: "ts" / "hls", AppModel.channelFormat) wins over Settings
+    val playUrl = io.github.kmmarin.tvbro.data.LiveFormat.playUrl(url, format, LivePlayer.preferHls)
+    // Orbit playback stats: the same stream again is a reconnect, another one a new session (by URL hash, never the
+    // URL); HLS is marked so the two formats of a channel can be compared in Settings ▸ About
+    io.github.kmmarin.tvbro.orbit.PlayStats.run { keep(live.begin(playUrl.hashCode(), "live", if (playUrl != url) "$label [HLS]" else label)) }
     if (LiveConns.open > 0) {
         exo.stop()
         kotlinx.coroutines.withTimeoutOrNull(3000) { while (LiveConns.open > 0) kotlinx.coroutines.delay(20) }
     }
-    val playUrl = if (LivePlayer.preferHls) io.github.kmmarin.tvbro.data.LiveFormat.toHls(url) else url
     exo.setMediaItem(androidx.media3.common.MediaItem.fromUri(playUrl)); exo.prepare(); exo.playWhenReady = true
 }
 

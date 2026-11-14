@@ -69,7 +69,7 @@ private fun Preview(m: AppModel, ch: Channel?, modifier: Modifier) {
         if (m.liveKey == ch.key && m.liveUrl != null && exo.playbackState != androidx.media3.common.Player.STATE_IDLE) { exo.playWhenReady = true; return@LaunchedEffect }
         if (!m.orbit.claimStream("live", ch.name, ask = false)) return@LaunchedEffect   // Orbit: every stream in use
         m.liveUrl = ch.url; m.liveKey = ch.key
-        liveLoad(exo, ch.url, ch.name)
+        liveLoad(exo, ch.url, ch.name, m.channelFormat(ch.key))
     }
     // a preview stream that fails (dropped connection, provider hiccup) tries again, like full screen does
     DisposableEffect(exo) {
@@ -94,7 +94,7 @@ private fun Preview(m: AppModel, ch: Channel?, modifier: Modifier) {
         if (m.liveKey != null) return@LaunchedEffect // something else started a stream meanwhile
         if (!m.orbit.claimStream("live", ch.name, ask = false)) return@LaunchedEffect   // Orbit: every stream in use
         m.liveUrl = ch.url; m.liveKey = ch.key
-        liveLoad(exo, ch.url, ch.name)
+        liveLoad(exo, ch.url, ch.name, m.channelFormat(ch.key))
     }
     Box(modifier.background(Color.Black).onGloballyPositioned { m.previewRect = it.boundsInRoot() }) {
         if (!m.previewOn) Text("Preview off", color = TextDim, modifier = Modifier.align(Alignment.Center))

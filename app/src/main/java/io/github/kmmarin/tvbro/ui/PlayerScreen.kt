@@ -86,7 +86,7 @@ fun PlayerScreen(m: AppModel) {
         // Orbit: join the household's stream count (asks to stop the oldest viewer when every stream is in use)
         if (!m.orbit.claimStream("live", ch.name, ask = true)) { m.screen = Screen.LIST; return@LaunchedEffect }
         m.liveUrl = url; m.liveKey = ch.key
-        liveLoad(exo, url, if (m.catchup != null) ch.name + " (catch-up)" else ch.name)
+        liveLoad(exo, url, if (m.catchup != null) ch.name + " (catch-up)" else ch.name, m.channelFormat(ch.key))
     }
 
     var overlay by remember { mutableStateOf(true) }
@@ -94,6 +94,25 @@ fun PlayerScreen(m: AppModel) {
     var bar by remember { mutableStateOf(false) }
     LaunchedEffect(ch.key) { m.applyDelayFor(ch.key) }
     LaunchedEffect(overlay) { while (overlay) { tech = listOf(techInfo(exo), io.github.kmmarin.tvbro.orbit.PlayStats.live.snapshot()?.line().orEmpty()).filter { it.isNotEmpty() }.joinToString("\n"); delay(1000) } }
+    // Orbit: a TS channel that stalls again and again in its first two minutes gets a small hint to try HLS (once per
+    // channel, never a silent switch). It takes no focus: OK while it shows says yes, otherwise it goes away.
+    var hlsHint by remember { mutableStateOf(false) }
+    LaunchedEffect(ch.key, url) {
+        hlsHint = false
+        if (m.catchup != null || !io.github.kmmarin.tvbro.data.LiveFormat.canHls(url)) return@LaunchedEffect
+        while (ch.key !in m.stallHinted) {
+            delay(2000)
+            // the channel chose a format, or Settings already says HLS: nothing to suggest
+            if (m.channelFormat(ch.key) != null || m.liveHls) break
+            if (m.liveKey != ch.key) continue
+            val s = io.github.kmmarin.tvbro.orbit.PlayStats.live.snapshot() ?: continue
+            val t = System.currentTimeMillis()
+            if (io.github.kmmarin.tvbro.data.StallHint.suggest(s, t)) { m.stallHinted += ch.key; hlsHint = true; break }
+            if (t - s.startedAt > io.github.kmmarin.tvbro.data.StallHint.WINDOW_MS) break
+        }
+    }
+    LaunchedEffect(hlsHint) { if (hlsHint) { delay(20_000); hlsHint = false } }
+    val acceptHls = { hlsHint = false; m.setChannelFormat(ch, io.github.kmmarin.tvbro.data.ChannelFormats.HLS) }
     var tick by remember { mutableIntStateOf(0) }
     LaunchedEffect(ch.key, tick, m.catchup) { overlay = true; delay(5000); overlay = false }
 
@@ -152,7 +171,7 @@ fun PlayerScreen(m: AppModel) {
                     e.key == Key.DirectionLeft -> { m.leavePlayer(); true }
                     e.key == Key.DirectionRight -> { m.screen = Screen.GUIDE; true }
                     e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter || e.key == Key.ButtonA -> {
-                        if (overlay) overlay = false else tick++
+                        if (hlsHint) acceptHls() else if (overlay) overlay = false else tick++
                         true
                     }
                     e.key == Key.MediaPlayPause -> { exo.playWhenReady = !exo.playWhenReady; true }
@@ -164,6 +183,15 @@ fun PlayerScreen(m: AppModel) {
         if (status.isNotEmpty()) {
             Text(status, color = TextMain, fontSize = 18.sp,
                 modifier = Modifier.align(Alignment.TopEnd).padding(24.dp).background(Color(0xAA000000)).padding(10.dp))
+        }
+        if (hlsHint) {
+            Column(
+                Modifier.align(Alignment.TopCenter).padding(top = 24.dp).background(Color(0xDD0E1116)).padding(horizontal = 18.dp, vertical = 12.dp)
+                    .pointerInput(Unit) { detectTapGestures(onTap = { acceptHls() }) },
+            ) {
+                Text("This channel keeps buffering. Try HLS for it?", color = TextMain, fontSize = 18.sp)
+                Text("Press OK to play ${ch.name} as HLS from now on (Default / TS / HLS: channel options)", color = TextDim, fontSize = 14.sp)
+            }
         }
         if (digits.isNotEmpty()) {
             Text(digits, color = Accent, fontSize = 48.sp,
