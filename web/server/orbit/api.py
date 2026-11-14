@@ -28,6 +28,7 @@ class Call:
     body: dict = field(default_factory=dict)
     client: str = ""                     # client address, for sign-in throttling
     query: dict = field(default_factory=dict)   # the query string of a GET, first value of each name
+    origin: str = ""                     # "http://<Host>" as the client addressed this server (facade addresses)
 
 
 @dataclass
@@ -44,12 +45,15 @@ class Api:
     def __init__(self, accounts: Accounts, pairings: Optional[Pairings] = None,
                  playlists: Optional[Callable[[], list]] = None,
                  stores: Optional[Callable[[dict], tuple]] = None,
-                 streams: Optional[Callable[[], dict]] = None, media: Optional[MediaServers] = None):
+                 streams: Optional[Callable[[], dict]] = None, media: Optional[MediaServers] = None,
+                 device_view: Optional[Callable[[list, Call], list]] = None):
         self.acc = accounts
         self.streams = streams or (lambda: {"max": 1, "count": 0, "active": []})   # tvBro's StreamRegistry.status()
         self.stores = stores                              # (StateStore, SeriesStore) of a session's profile
         self.pair = pairings or Pairings(accounts)
         self.playlists = playlists or (lambda: [])      # the household's enabled playlists, with their logins
+        # orbit/facade.py: what a linked TV gets instead of the logins (None: the logins themselves)
+        self.device_view = device_view
         A, PR = self.acc, self.pair
         r: dict[tuple[str, str], Callable[[Call], Reply]] = {
             ("GET", "/v1/status"): lambda c: Reply({"accounts": A.enabled(), "setup": not A.enabled()}),
@@ -136,14 +140,18 @@ class Api:
             raise ApiError(409, "no profile selected")
 
     def _device_playlists(self, c: Call) -> Reply:
-        """Linked TVs only (never a browser): the playlists to play directly from the provider.
+        """Linked TVs only (never a browser): the household's playlists.
 
         Every linked TV gets them, whatever its account's role (the owner wants every household TV to watch IPTV).
-        This means any account can read the provider logins by linking a "TV" (or a script) with its own
-        approval: the household trusts its members with them. Browser sessions never get them."""
+        With hidden provider logins (``device_view``, orbit/facade.py; the default) they point at this server's
+        Xtream facade with a login of the TV's own. Without it they carry the provider logins, and any account can
+        read those by linking a "TV" (or a script) with its own approval. Browser sessions never get them."""
         if c.sess.get("session_kind") != "tv":
             return Reply({"error": "only a linked TV can fetch the playlists"}, 403)
-        return Reply({"playlists": self.playlists()})
+        pl = self.playlists()
+        if self.device_view is not None:
+            pl = self.device_view(pl, c)
+        return Reply({"playlists": pl})
 
     @staticmethod
     def _media(out) -> Reply:
