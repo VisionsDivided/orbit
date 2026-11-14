@@ -15,6 +15,7 @@ same session, Host, Origin and CSRF checks as every other /v1 call.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -38,6 +39,20 @@ UPCOMING = (("/discover/movies/upcoming", "movie"), ("/discover/tv/upcoming", "t
 MAX_REQUESTS = 50
 LOOKUP_WORKERS = 4         # title lookups for a request list run in parallel, at most this many at once
 MISSING_TTL = 600          # a title Seerr does not know (404) is not asked for again for this long
+# GET /v1/discover/image: TMDB artwork through this server (the web page's CSP allows only its own images).
+# Only image.tmdb.org, only these sizes, only a plain file name: the route can fetch nothing else.
+IMAGE_SIZES = ("w92", "w154", "w185", "w300", "w342", "w500", "w780", "w1280", "original")
+IMAGE_PATH = re.compile(r"^/(" + "|".join(IMAGE_SIZES) + r")/[A-Za-z0-9_-]{1,100}\.(?:jpg|jpeg|png|webp)$")
+IMAGE_MAX = 5 * 1024 * 1024
+IMAGE_HEADERS = {"Cache-Control": "private, max-age=604800", "Content-Disposition": "inline",
+                 "Content-Security-Policy": "sandbox; default-src 'none'"}
+
+
+def image_url(p: str) -> Optional[str]:
+    """'/w500/abc.jpg' -> the TMDB CDN URL, or None when p is not an allowed size + file name."""
+    return S.TMDB_IMG + p[1:] if isinstance(p, str) and IMAGE_PATH.match(p) else None
+
+
 NOT_LINKED = "your account is not linked to a Seerr user: ask the owner to link your Seerr user"
 
 
@@ -75,8 +90,13 @@ class _Guarded:
 class Discover:
     def __init__(self, accounts: Accounts, config: S.SeerrConfig,
                  client_factory: Callable[[str, str], S.SeerrClient] = S.SeerrClient,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time,
+                 fetch_image: Optional[Callable[[str], bytes]] = None, image_cache=None,
+                 sniff: Optional[Callable[[bytes], Optional[str]]] = None):
         self.acc, self.cfg, self.clock = accounts, config, clock
+        # TMDB artwork proxy: fetch_image(url) -> bytes (at most IMAGE_MAX + 1 read), image_cache with get / put
+        # (the app's /img disk cache, size-capped), sniff(bytes) -> image content type or None
+        self.fetch_image, self.image_cache, self.sniff = fetch_image, image_cache, sniff
         self._client_factory = client_factory
         self.cache = S.TTLCache(256, clock)
         self.availability_override: Callable[[int, str], Optional[dict]] = availability_override
@@ -102,7 +122,34 @@ class Discover:
             ("POST", "/v1/discover/settings"): self._settings,
             ("POST", "/v1/discover/map"): self._map,
             ("GET", "/v1/discover/users"): self._users,
+            ("GET", "/v1/discover/image"): self._image,
         }
+
+    def _image(self, c: Call) -> Reply:
+        """TMDB artwork for clients that may load images only from this server (the web page). Works whether or not
+        Seerr is set up (the files are public); signed in like every /v1 route."""
+        url = image_url(c.query.get("p", ""))
+        if url is None:
+            raise ApiError(400, "p must be /<size>/<file>.jpg|png|webp with size one of " + ", ".join(IMAGE_SIZES))
+        if self.fetch_image is None or self.sniff is None:
+            raise ApiError(503, "image proxy not available")
+        key = "tmdb:" + url
+        data = self.image_cache.get(key) if self.image_cache is not None else None
+        if data is None:
+            try:
+                data = self.fetch_image(url)
+            except Exception:                          # noqa: BLE001 (network, 404 from TMDB)
+                raise ApiError(404, "image not found")
+            if not data or len(data) > IMAGE_MAX:
+                raise ApiError(413 if data else 404, "image too large" if data else "image not found")
+            if self.sniff(data) is None:
+                raise ApiError(415, "not an image")
+            if self.image_cache is not None:
+                self.image_cache.put(key, data)
+        ctype = self.sniff(data)
+        if ctype is None:
+            raise ApiError(415, "not an image")
+        return Reply({}, raw=data, ctype=ctype, headers=dict(IMAGE_HEADERS))
 
     # ---- helpers ----
     @staticmethod

@@ -43,6 +43,9 @@ data class Tile(
     val seriesRow: SeriesRow? = null,
     /** A catalog title in a PIN-locked category: opening it asks for the PIN. */
     val locked: Boolean = false,
+    /** The catalog's own item id and media connection (Plex / Jellyfin titles open their page with these). */
+    val id: String = "",
+    val conn: String? = null,
 )
 
 /** A row on Home; [landscape] rows use 16:9 cards (Continue watching, live channels). */
@@ -101,7 +104,7 @@ class HomeFeed(private val m: AppModel, private val api: CatalogApi = CatalogApi
         val next = c.next?.let { n -> listOfNotNull((if (n.season > 0) "S${n.season} " else "") + "E${n.num}", n.title?.takeIf { it.isNotBlank() }).joinToString(" · ") }
         val left = if (!c.isShow && c.progressSecs != null && c.progressDur != null && c.progressDur > c.progressSecs) "${(c.progressDur - c.progressSecs) / 60} min left" else null
         val meta = next ?: left ?: listOfNotNull(c.year, c.genres.firstOrNull()).joinToString(" · ").ifEmpty { null }
-        return Tile(c.key, c.title, meta, c.poster, c.backdrop, c.colors, c.source, c.progress, c.year, c.rating, c.genres, c.isShow, vod, locked = c.locked)
+        return Tile(c.key, c.title, meta, c.poster, c.backdrop, c.colors, c.source, c.progress, c.year, c.rating, c.genres, c.isShow, vod, locked = c.locked, id = c.id, conn = c.conn)
     }
 
     // ---- local data ----

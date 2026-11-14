@@ -144,7 +144,7 @@ class MainActivity : ComponentActivity() {
                             Screen.RECORDINGS -> RecordingsScreen(m)
                             Screen.EDITOR -> EditorScreen(m)
                             Screen.ORBIT_LINK -> OrbitLinkScreen(m)
-                            Screen.DETAIL -> DetailPage(m)
+                            Screen.DETAIL -> io.github.kmmarin.tvbro.ui.movies.DetailScreen(m)
                             Screen.VODPLAY -> androidx.compose.runtime.key(m.vodPlay?.key) { VodPlayerScreen(m) }
                         }
                         // One live video surface: full screen or in the TV preview spot, animated between them.

@@ -1,9 +1,11 @@
 // Copyright 2026 The tvBro authors. SPDX-License-Identifier: Apache-2.0
-// Movies / Shows: header for the focused title over its backdrop, poster grid with rating
-// badges (paged from the backend), details page with actions and one row per season.
+// Films and shows from the /api catalogue: show progress, the details page (direction 5) and
+// playback. (The Movies / Shows screens themselves are section.js.)
 
-import { api, cacheGet, cacheSet, inMyList, toggleMyList, getResume, clearResume } from './api.js';
-import { h, toast, fmtDur, spatialMove, debounce, menu, onItemMenu } from './util.js';
+import { api, inMyList, toggleMyList, getResume, clearResume, setResume, isWatched } from './api.js';
+import { h, toast, fmtDur, spatialMove, menu, onItemMenu } from './util.js';
+import { heroLayer, btn5, srcBadge, ic, landCard, legend, colorKey, emptyState, skHero, skRow, ratingText } from './ui5.js';
+import { setScene, plainScene } from './backdrop.js';
 import { openPlayer, playerReplace } from './player.js';
 import { withUnlock } from './parental.js';
 import { cleanEpisodeTitle, seasonsOf, fmtRuntime, episodeAfter, epCode, isWatchedPos } from './vodutil.js';
@@ -73,7 +75,6 @@ export function cwTile(row, onChange) {
 
 const items = new Map();        // key "movie:id" -> list item (for details deep links)
 const infoCache = new Map();    // "movie:id" -> detail json
-const mem = { movie: { cat: '__all' }, series: { cat: '__all' } };
 
 /** ask: a locked film / show asks for the parental PIN (the detail page, playing); a focus preview never does. */
 export async function vodInfo(kind, id, ask = false) {
@@ -84,196 +85,99 @@ export async function vodInfo(kind, id, ask = false) {
   return p;
 }
 export function rememberItem(kind, it) { items.set(kind + ':' + it.id, it); }
-function ratingText(r) { const n = parseFloat(r); return n ? (n > 10 ? (n / 10).toFixed(1) : n.toFixed(1)) : ''; }
-function setBackdrop(url) {
-  let bd = document.querySelector('.backdrop');
-  if (!bd) { bd = h('div', { class: 'backdrop' }); document.body.prepend(bd); }
-  bd.style.backgroundImage = url ? `url("${api.img(url)}")` : 'none';
-}
-export function clearBackdrop() { const bd = document.querySelector('.backdrop'); if (bd) bd.remove(); }
 
-function factsLine(kind, it, d) {
-  const year = (d && d.year) || it.year;
-  const run = kind === 'movie' ? fmtRuntime(d && d.runtime) : (d && d.seasons ? `${d.seasons} season${d.seasons > 1 ? 's' : ''}` : '');
-  const genre = (d && d.genre) || it.genre;
-  return [year, run, genre].filter(Boolean).join(' · ');
-}
-
-// ---------------------------------------------------------------- browse
-export function vodBrowse(main, kind, nav) {
-  const title = kind === 'movie' ? 'Movies' : 'Shows';
-  main.innerHTML = '';
-  const head = h('div', { class: 'vh glass' });
-  const chips = h('div', { class: 'chips vchips' });
-  const grid = h('div', { class: 'grid vgrid' });
-  const more = h('div', { class: 'loading', hidden: true }, 'Loading…');
-  // Shows: "Continue watching" is the first row (shows with a started, unfinished episode)
-  const cw = h('section', { class: 'cw-row', hidden: true });
-  const scr = h('div', { class: 'screen vscreen' }, head, cw, h('div', { class: 'vbar' }, h('h1', {}, title), chips), grid, more);
-  main.append(scr);
-  const st = mem[kind];
-  let page = 0, total = 0, loading = false, alive = true, focused = null, tok = 0, headTok = 0, cwTok = 0;
-  async function renderCw() {
-    if (kind !== 'series') return;
-    const my = ++cwTok;
-    let rows; try { rows = await continueRows(); } catch { return; }
-    if (!alive || my !== cwTok) return;
-    const had = cw.contains(document.activeElement);
-    cw.hidden = !rows.length;
-    cw.replaceChildren(h('h2', {}, 'Continue watching'), h('div', { class: 'cw-strip' }, ...rows.map((r) => {
-      const t = cwTile(r, renderCw);
-      t.addEventListener('focus', () => { focused = t._series; headSoon(t._series); });
-      return t;
-    })));
-    if (had) { const f = cw.querySelector('.focusable'); if (f) f.focus(); }
-  }
-  renderCw();
-  const onSeries = () => renderCw();
-  window.addEventListener('tvbro-series', onSeries);
-  window.addEventListener('tvbro-vod-closed', onSeries);
-
-  renderHead(null);
-  (async () => {
-    let cats = await cacheGet('vcat:' + kind);
-    if (cats) renderChips(cats);
-    try { cats = (await api.vodCategories(kind)).categories; cacheSet('vcat:' + kind, cats); renderChips(cats); }
-    catch (e) { if (!cats) grid.append(h('div', { class: 'empty' }, 'Could not load: ' + e.message)); }
-  })();
-  function renderChips(cs) {
-    chips.innerHTML = '';
-    for (const c of cs) {
-      const chip = h('button', { class: 'chip focusable' + (c.id === st.cat ? ' active' : '') }, c.name + (c.count ? ` ${c.count}` : ''));
-      chip.onclick = () => { st.cat = c.id; chips.querySelectorAll('.chip').forEach((x) => x.classList.toggle('active', x === chip)); reload(); };
-      chips.append(chip);
-    }
-    if (!page) reload();
-  }
-  function reload() { tok++; page = 0; total = 0; grid.innerHTML = ''; loadMore(); }
-  async function loadMore() {
-    if (loading || (page && grid.children.length >= total)) return;
-    loading = true; more.hidden = false; const t = tok;
-    try {
-      const r = await api.vodList(kind, st.cat, page + 1);
-      if (t !== tok || !alive) return;
-      page = r.page; total = r.total;
-      if (!r.items.length && page === 1) grid.append(h('div', { class: 'empty' }, 'Nothing here.'));
-      for (const it of r.items) grid.append(tile(kind, it));
-      // back from a film / show page: the tile that was opened gets the focus again (no jump to the top)
-      if (st.back && st.focusId != null) { const b = grid.querySelector(`[data-id="${CSS.escape(String(st.focusId))}"]`); if (b) { st.back = false; b.focus({ preventScroll: true }); b.scrollIntoView({ block: 'nearest' }); } else if (grid.children.length >= total) st.back = false; else setTimeout(loadMore, 0); }
-      if (page === 1 && r.items[0]) renderHead(r.items[0]);
-    } catch (e) { if (page === 0) grid.append(h('div', { class: 'empty' }, e.message)); }
-    // a reload while this page was on its way (the categories arrive twice: cached, then fresh) threw
-    // this answer away: load the new list now, or the grid would stay empty
-    finally { loading = false; more.hidden = true; if (t !== tok && alive) loadMore(); }
-  }
-  function tile(k, it) {
-    rememberItem(k, it);
-    const rt = ratingText(it.rating);
-    const t = h('button', { class: 'tile focusable', 'data-id': it.id },
-      h('img', { class: 'poster', loading: 'lazy', src: api.img(it.poster), alt: '', onerror: function () { this.style.opacity = '.15'; } }),
-      rt ? h('span', { class: 'rbadge' }, '★ ' + rt) : null,
-      inMyList(it.key) ? h('span', { class: 'fbadge' }, '★') : null,
-      it.locked ? h('span', { class: 'lbadge', title: 'Locked (parental PIN)' }, '🔒') : null,
-      h('div', { class: 'cap' }, it.name));
-    onItemMenu(t, () => itemMenu(k, it));
-    t.onclick = () => { st.focusId = it.id; st.back = true; location.hash = `detail:${k}:${it.id}`; };
-    t.onfocus = () => { focused = it; headSoon(it); const rest = [...grid.children].indexOf(t); if (rest > grid.children.length - 18) loadMore(); };
-    t.onmouseenter = () => headSoon(it);
-    return t;
-  }
-  const headSoon = debounce((it) => { if (alive) renderHead(it); }, 250);
-  function myListItem(k, it) { return { key: it.key, kind: k, name: it.name, poster: it.poster, id: it.id, ext: it.ext, rating: it.rating, year: it.year }; }
-  /** The item menu (right-click / long press / M key): open, My list, and for shows watched / unwatched. */
-  function itemMenu(k, it) {
-    const items = [
-      { label: 'Open', action: () => { location.hash = `detail:${k}:${it.id}`; } },
-      { label: inMyList(it.key) ? '★ Remove from My list' : '☆ Add to My list', action: () => { const a = toggleMyList(myListItem(k, it)); toast(a ? '★ Added to My list' : 'Removed from My list'); } },
-    ];
-    if (k === 'series') {
-      items.push({ label: '✓ Mark the show as watched', action: () => markSeries(it.id, true) });
-      items.push({ label: '↺ Mark the show as unwatched', action: () => markSeries(it.id, false) });
-    }
-    menu(it.name || '', items);
-  }
-  function renderHead(it) {
-    const my = ++headTok;
-    head.innerHTML = '';
-    if (!it) { head.append(h('div', { class: 'vh-title' }, title)); return; }
-    const rt = ratingText(it.rating);
-    const draw = (d) => {
-      if (my !== headTok) return;
-      head.innerHTML = '';
-      const bdUrl = (d && d.backdrop) || it.poster;
-      head.append(h('div', { class: 'vh-bg', style: { backgroundImage: bdUrl ? `url("${api.img(bdUrl)}")` : 'none' } }));
-      setBackdrop(bdUrl);
-      const box = h('div', { class: 'vh-text' },
-        h('div', { class: 'vh-title' }, it.name, rt ? h('span', { class: 'rbadge inline' }, '★ ' + rt) : null),
-        h('div', { class: 'vh-facts' }, factsLine(kind, it, d)));
-      if (d && d.cast) box.append(h('div', { class: 'vh-cast' }, 'Cast: ' + d.cast));
-      if (d && d.director) box.append(h('div', { class: 'vh-cast' }, 'Director: ' + d.director));
-      if (d && d.plot) box.append(h('div', { class: 'vh-plot' }, d.plot));
-      head.append(box);
-    };
-    draw(null);
-    vodInfo(kind, it.id).then(draw).catch(() => {});
-  }
-  const onScroll = () => { if (main.scrollTop + main.clientHeight > main.scrollHeight - 800) loadMore(); };
-  main.addEventListener('scroll', onScroll);
-  return {
-    onKey(e) {
-      if (e.key.startsWith('Arrow')) { if (!spatialMove(scr, e.key) && e.key === 'ArrowLeft') nav.focusActive(); return true; }
-      if (e.key === 'Enter' && document.activeElement && document.activeElement.classList.contains('focusable')) { document.activeElement.click(); return true; }
-      if ((e.key === 'f' || e.key === 'F') && focused) { toggleMyList(myListItem(kind, focused));
-        toast(inMyList(focused.key) ? '★ Added to My list' : 'Removed from My list'); return true; }
-      if ((e.key === 'm' || e.key === 'M' || e.key === 'ContextMenu') && document.activeElement && document.activeElement.classList.contains('has-menu')) {
-        document.activeElement.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); return true; }
-      if (e.key === 'Escape' || e.key === 'Backspace') { nav.focusActive(); return true; }
-      return false;
-    },
-    focusIn() { const f = cw.querySelector('.tile') || grid.querySelector('.tile') || chips.querySelector('.chip'); if (f) f.focus(); },
-    destroy() { alive = false; main.removeEventListener('scroll', onScroll); clearBackdrop(); window.removeEventListener('tvbro-series', onSeries); window.removeEventListener('tvbro-vod-closed', onSeries); },
-  };
-}
-
-// ---------------------------------------------------------------- details
+// ---------------------------------------------------------------- details (direction 5)
+// Hero over the title's backdrop (eyebrow, title, meta, synopsis, actions), then for shows the
+// seasons as tabs with the selected season's episodes as landscape cards. Colour keys: My list,
+// Play trailer, Mark watched, More; on phones the same four as round buttons under the hero.
 export function vodDetail(main, kind, id, nav) {
   main.innerHTML = '';
   const it = items.get(kind + ':' + id) || { id, key: (kind === 'movie' ? 'm|p0|' : 's|p0|') + id, name: '', poster: null };
-  const scr = h('div', { class: 'screen dt' }, h('div', { class: 'loading' }, 'Loading…'));
+  const heroBox = h('div', { class: 'hero5 detail' }, skHero());
+  const below = h('div', { class: 'dt5-below' }, skRow(5));
+  const scr = h('div', { class: 'screen5 dt5' }, heroBox, below);
   main.append(scr);
-  let alive = true, d = null, ss = null;     // ss: this show's progress (server)
+  plainScene();
+  let alive = true, d = null, ss = null, season = null;     // ss: this show's progress (server)
   const refreshSeries = async () => { if (kind === 'series') { try { ss = await loadSeriesState(id); } catch {} } };
-  const onClosed = async () => { if (!alive || !d) return; await refreshSeries(); if (alive) render(); };
+  const onClosed = async () => { if (!alive || !d) return; await refreshSeries(); if (alive) render(true); };
   const onSeries = () => { if (alive && d) { ss = seriesState.get(String(id)) || ss; render(true); } };
   window.addEventListener('tvbro-vod-closed', onClosed);
   window.addEventListener('tvbro-series', onSeries);
-  Promise.all([vodInfo(kind, id, true), refreshSeries()]).then(([x]) => { if (alive) { d = x; render(); } }).catch((e) => { scr.innerHTML = ''; scr.append(h('div', { class: 'empty' }, 'Could not load: ' + e.message)); });
+  Promise.all([vodInfo(kind, id, true), refreshSeries()]).then(([x]) => { if (alive) { d = x; render(); } })
+    .catch((e) => { heroBox.replaceChildren(); below.replaceChildren(emptyState('Could not load', e.message, btn5('Back', 'back', () => history.back(), { primary: true }))); });
   const epProg = (e) => (ss && ss.episodes && ss.episodes[e.id]) || null;
+  const epName = (e) => `${epCode(e)} · ${cleanEpisodeTitle(it.name, e.title)}`;
+  const listEntry = () => ({ key: it.key, kind, name: it.name, poster: it.poster, id, ext: it.ext || (d && d.ext), rating: it.rating || (d && d.rating), year: it.year || (d && d.year) });
+  const toggleList = () => { const a = toggleMyList(listEntry()); toast(a ? 'Added to My list' : 'Removed from My list'); render(true); };
+  const trailer = () => { if (d && d.trailer) window.open(d.trailer, '_blank', 'noopener'); else toast('No trailer for this title'); };
+  const markAll = () => {
+    if (kind === 'series') { markSeries(id, !(ss && ss.finished)); return; }
+    if (isWatched('m|' + id)) { clearResume('m|' + id); toast('Marked as unwatched'); }
+    else { const dur = durSecs(d && (d.duration || (d.runtime && d.runtime * 60))) || 1; setResume('m|' + id, dur, dur, { kind: 'movie', id, ext: listEntry().ext, title: it.name, poster: it.poster }); toast('Marked as watched'); }
+    render(true);
+  };
 
   function render(keepFocus) {
     const ae = document.activeElement, fk = keepFocus && ae && scr.contains(ae) ? ae.dataset.fk : null;
     const sy = main.scrollTop;
     const name = it.name || d.name || '';
     it.name = name; it.poster = it.poster || d.cover;
-    setBackdrop(d.backdrop || it.poster);
-    scr.innerHTML = '';
+    setScene({ art: api.img(d.backdrop || it.poster) || null, colors: d.colors || null });
     const rt = ratingText(it.rating || d.rating);
-    const top = h('div', { class: 'dt-top' },
-      h('img', { class: 'dt-poster', src: api.img(it.poster), alt: '', onerror: function () { this.style.opacity = '.15'; } }),
-      h('div', { class: 'dt-info' },
-        h('h1', { class: 'dt-title' }, name, rt ? h('span', { class: 'rbadge inline' }, '★ ' + rt) : null),
-        h('div', { class: 'vh-facts' }, factsLine(kind, it, d)),
-        d.director ? h('div', { class: 'vh-cast' }, 'Director: ' + d.director) : null,
-        d.cast ? h('div', { class: 'vh-cast' }, 'Cast: ' + d.cast) : null,
-        d.plot ? h('p', { class: 'dt-plot' }, d.plot) : null,
-        actionRow()));
-    scr.append(h('div', { class: 'dt-bg', style: { backgroundImage: (d.backdrop || it.poster) ? `url("${api.img(d.backdrop || it.poster)}")` : 'none' } }), top);
-    if (kind === 'series') for (const s of seasonsOf(d.episodes)) scr.append(seasonRow(s));
+    const year = d.year || it.year;
+    const run = kind === 'movie' ? fmtRuntime(d.runtime) : (d.seasons ? `${d.seasons} season${d.seasons > 1 ? 's' : ''}` : '');
+    const people = [d.director ? 'Director: ' + d.director : null, d.cast ? 'Cast: ' + d.cast : null].filter(Boolean).join(' · ');
+    heroBox.replaceChildren(heroLayer({
+      eyebrow: [srcBadge('iptv'), h('span', {}, kind === 'movie' ? 'Film' : 'Series')],
+      title: name,
+      meta: [year ? String(year) : null, rt ? h('span', { class: 'r' }, '★ ' + rt) : null, run, d.genre || it.genre || null].filter(Boolean),
+      synopsis: d.plot || '',
+      buttons: actionButtons(),
+      foot: people || null,
+    }, true));
+    heroBox.append(phoneActs());
+    below.replaceChildren();
+    if (kind === 'series') {
+      const all = seasonsOf(d.episodes);
+      if (all.length) {
+        if (season == null || !all.some((s) => s.season === season)) {
+          const n = ss && ss.next; const hit = n && all.find((s) => s.eps.some((e) => String(e.id) === String(n.id)));
+          season = (hit || all[0]).season;
+        }
+        const cur = all.find((s) => s.season === season);
+        const tabs = h('div', { class: 'tabs5', role: 'tablist', 'aria-label': 'Seasons' },
+          ...all.map((s) => h('button', { class: 'tab focusable' + (s.season === season ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': s.season === season ? 'true' : 'false', 'data-fk': 's' + s.season,
+            onclick: () => { season = s.season; render(true); const t = scr.querySelector(`[data-fk="s${s.season}"]`); if (t) t.focus({ preventScroll: true }); } }, 'Season ' + s.season)),
+          h('button', { class: 'tab more focusable', type: 'button', 'data-fk': 'smenu', title: 'Season menu', 'aria-label': 'Season ' + season + ' menu', onclick: () => seasonMenu(cur) }, ic('dots')));
+        below.append(tabs, episodeStrip(cur));
+      }
+    }
+    scr.querySelectorAll('.ck').forEach((x) => x.remove());
+    scr.append(legend(colorKeys(), [['OK', 'Play'], ['BACK', 'Close']]));
     const back = fk && scr.querySelector(`[data-fk="${CSS.escape(fk)}"]`);
     if (back) { back.focus({ preventScroll: true }); main.scrollTop = sy; }
-    else { const first = scr.querySelector('.dt-actions .btn'); if (first) first.focus(); }
+    else if (!keepFocus) { const first = heroBox.querySelector('.btns .focusable'); if (first) first.focus({ preventScroll: true }); }
   }
-  const epName = (e) => `${epCode(e)} · ${cleanEpisodeTitle(it.name, e.title)}`;
+  const colorKeys = () => [
+    { color: 'red', label: 'My list', action: toggleList },
+    { color: 'green', label: 'Play trailer', action: trailer },
+    { color: 'yellow', label: 'Mark watched', action: markAll },
+    { color: 'blue', label: 'More', action: moreMenu },
+  ];
+  function moreMenu() {
+    const list = [{ label: inMyList(it.key) ? '★ Remove from My list' : '☆ Add to My list', action: toggleList }];
+    if (d && d.trailer) list.push({ label: '▷ Play trailer', action: trailer });
+    if (kind === 'movie') { const r = getResume('m|' + id); if (r && !r.done) list.push({ label: '⟲ Play from start', action: () => playMovie(it, d, true) }); }
+    list.push({ label: kind === 'series' ? (ss && ss.finished ? '↺ Mark the show as unwatched' : '✓ Mark the show as watched') : (isWatched('m|' + id) ? '↺ Mark as unwatched' : '✓ Mark as watched'), action: markAll });
+    menu(it.name || 'Title', list);
+  }
+  function phoneActs() {
+    const a = (label, icon, fn, on) => h('button', { class: 'act5' + (on ? ' on' : ''), type: 'button', onclick: fn }, h('span', {}, ic(icon)), label);
+    const watched = kind === 'series' ? !!(ss && ss.finished) : isWatched('m|' + id);
+    return h('div', { class: 'acts5' }, a('My list', inMyList(it.key) ? 'check' : 'plus', toggleList, inMyList(it.key)), a('Trailer', 'play', trailer),
+      a('Watched', watched ? 'check' : 'starO', markAll, watched), a('More', 'dots', moreMenu));
+  }
   function epMenu(e) {
     const p = epProg(e);
     menu(epName(e), [
@@ -284,71 +188,64 @@ export function vodDetail(main, kind, id, nav) {
     ]);
   }
   function seasonMenu(s) {
+    if (!s) return;
     menu('Season ' + s.season, [
       { label: '✓ Mark season as watched', action: () => markSeries(id, true, { season: s.season }, 'Season ' + s.season) },
       { label: '↺ Mark season as unwatched', action: () => markSeries(id, false, { season: s.season }, 'Season ' + s.season) },
     ]);
   }
-  function actionRow() {
-    const row = h('div', { class: 'dt-actions' });
+  function actionButtons() {
+    const out = [];
     if (kind === 'movie') {
       const r = getResume('m|' + id);
-      const label = r && !r.done && r.dur ? `▶ Resume · ${fmtDur(r.dur - r.secs)} left` : '▶ Play';
-      row.append(h('button', { class: 'btn focusable', onclick: () => playMovie(it, d) }, label));
-      if (r && !r.done) row.append(h('button', { class: 'btn secondary focusable', onclick: () => playMovie(it, d, true) }, '⟲ From start'));
+      const resume = r && !r.done && r.dur;
+      out.push(btn5(resume ? `Resume · ${fmtDur(r.dur - r.secs)} left` : 'Play', 'play', () => playMovie(it, d), { primary: true, fk: 'main' }));
+      if (resume) out.push(btn5('From start', 'restart', () => playMovie(it, d, true), { fk: 'start' }));
     } else {
       const eps = seasonsOf(d.episodes).flatMap((s) => s.eps);
       const n = ss && ss.next, find = (x) => eps.find((e) => String(e.id) === String(x.id)) || x;
-      if (ss && ss.finished && eps[0]) {
-        row.append(h('button', { class: 'btn focusable', 'data-fk': 'main', onclick: () => playEpisode(it, d, eps[0], { fromStart: true }) }, `▶ Watch again ${epCode(eps[0])}`));
-      } else if (n && n.resume && n.secs) {
-        row.append(h('button', { class: 'btn focusable', 'data-fk': 'main', onclick: () => playEpisode(it, d, find(n)) }, `▶ Resume ${epCode(n)} (${fmtDur(n.secs)})`));
-        row.append(h('button', { class: 'btn secondary focusable', onclick: () => playEpisode(it, d, find(n), { fromStart: true }) }, '⟲ Play from start'));
+      if (ss && ss.finished && eps[0]) out.push(btn5(`Watch again ${epCode(eps[0])}`, 'restart', () => playEpisode(it, d, eps[0], { fromStart: true }), { primary: true, fk: 'main' }));
+      else if (n && n.resume && n.secs) {
+        out.push(btn5(`Resume ${epCode(n)} (${fmtDur(n.secs)})`, 'play', () => playEpisode(it, d, find(n)), { primary: true, fk: 'main' }));
+        out.push(btn5('Play from start', 'restart', () => playEpisode(it, d, find(n), { fromStart: true }), { fk: 'start' }));
       } else {
         const e = n ? find(n) : eps[0];
-        if (e) row.append(h('button', { class: 'btn focusable', 'data-fk': 'main', onclick: () => playEpisode(it, d, e, { fromStart: true }) }, `▶ Play ${epCode(e)}`));
+        if (e) out.push(btn5(`Play ${epCode(e)}`, 'play', () => playEpisode(it, d, e, { fromStart: true }), { primary: true, fk: 'main' }));
       }
       const done = !!(ss && ss.finished);
-      row.append(h('button', { class: 'btn secondary focusable', 'data-fk': 'markall', onclick: () => markSeries(id, !done) }, done ? '↺ Mark as unwatched' : '✓ Mark as watched'));
+      out.push(btn5(done ? 'Mark as unwatched' : 'Mark as watched', done ? 'restart' : 'check', () => markSeries(id, !done), { fk: 'markall', cls: 'opt' }));
     }
-    if (d.trailer) row.append(h('button', { class: 'btn secondary focusable', onclick: () => window.open(d.trailer, '_blank', 'noopener') }, '▷ Trailer'));
-    const fav = h('button', { class: 'btn secondary focusable' }, inMyList(it.key) ? '★ In My list' : '☆ Add to My list');
-    fav.onclick = () => { const a = toggleMyList({ key: it.key, kind, name: it.name, poster: it.poster, id, ext: it.ext || d.ext, rating: it.rating || d.rating, year: it.year || d.year });
-      fav.textContent = a ? '★ In My list' : '☆ Add to My list'; toast(a ? 'Added to My list' : 'Removed from My list'); };
-    row.append(fav);
-    return row;
+    if (d.trailer) out.push(btn5('Trailer', 'play', trailer, { fk: 'trailer', cls: 'opt' }));
+    out.push(btn5(inMyList(it.key) ? 'In My list' : 'My list', inMyList(it.key) ? 'check' : 'plus', toggleList, { fk: 'fav', cls: 'opt' }));
+    return out;
   }
-  function seasonRow(s) {
-    const counter = h('span', { class: 'sr-count' }, `${s.eps.length} episodes`);
-    const strip = h('div', { class: 'sr-strip' });
-    s.eps.forEach((e, i) => {
+  function episodeStrip(s) {
+    const strip = h('div', { class: 'strip eps5' });
+    s.eps.forEach((e) => {
       const r = epProg(e);
-      const card = h('button', { class: 'ep focusable' + (r && r.done ? ' watched' : ''), 'data-fk': 'e' + e.id },
-        h('div', { class: 'ep-still' },
-          h('img', { loading: 'lazy', alt: '', src: api.img(e.image || d.backdrop || it.poster), onerror: function () { this.style.opacity = '.12'; } }),
-          r && r.done ? h('span', { class: 'ep-tick', title: 'Watched' }, '✓') : null,
-          r && !r.done && r.dur && r.secs ? h('div', { class: 'progress ep-prog' }, h('i', { style: { width: Math.min(100, (r.secs / r.dur) * 100).toFixed(1) + '%' } })) : null),
-        h('div', { class: 'ep-title' }, `E${e.num}. ${cleanEpisodeTitle(it.name, e.title)}`),
-        e.duration ? h('div', { class: 'ep-sub' }, e.duration) : null);
-      card.onfocus = () => { counter.textContent = `${i + 1} / ${s.eps.length}`; };
+      const left = r && !r.done && r.dur && r.secs ? `${Math.max(1, Math.round((r.dur - r.secs) / 60))} min left` : '';
+      const card = landCard({ key: 'e' + e.id, title: `E${e.num} · ${cleanEpisodeTitle(it.name, e.title)}`, still: e.image || d.backdrop || it.poster, poster: it.poster,
+        progress: r && !r.done && r.dur && r.secs ? { secs: r.secs, dur: r.dur } : null, genres: [] },
+      { sub: r && r.done ? 'Watched' : left || e.duration || '', watched: !!(r && r.done), onOpen: () => playEpisode(it, d, e) });
+      card.dataset.fk = 'e' + e.id;
+      if (r && r.done) card.classList.add('watched');
       onItemMenu(card, () => epMenu(e));
-      card.onclick = () => playEpisode(it, d, e);
       strip.append(card);
     });
-    const more = h('button', { class: 'btn secondary focusable sr-menu', 'data-fk': 's' + s.season, title: 'Season menu', onclick: () => seasonMenu(s) }, '⋯');
-    return h('div', { class: 'sr' }, h('div', { class: 'sr-head' }, h('h3', {}, 'Season ' + s.season), counter, more), strip);
+    return strip;
   }
   return {
     onKey(e) {
-      if (e.key.startsWith('Arrow')) { if (!spatialMove(scr, e.key) && e.key === 'ArrowLeft') nav.focusActive(); return true; }
+      if (e.key.startsWith('Arrow')) { if (!spatialMove(scr, e.key) && (e.key === 'ArrowUp' || e.key === 'ArrowLeft')) nav.focusActive(); return true; }
       if (e.key === 'Enter' && document.activeElement && scr.contains(document.activeElement)) { document.activeElement.click(); return true; }
       if ((e.key === 'm' || e.key === 'M' || e.key === 'ContextMenu') && document.activeElement && document.activeElement.classList.contains('has-menu')) {
         document.activeElement.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); return true; }
+      if (d && colorKey(e, colorKeys())) return true;
       if (e.key === 'Escape' || e.key === 'Backspace') { history.back(); return true; }
       return false;
     },
-    focusIn() { const f = scr.querySelector('.focusable'); if (f) f.focus(); },
-    destroy() { alive = false; clearBackdrop(); window.removeEventListener('tvbro-vod-closed', onClosed); window.removeEventListener('tvbro-series', onSeries); },
+    focusIn() { const f = scr.querySelector('.btns .focusable') || scr.querySelector('.focusable'); if (f) f.focus(); },
+    destroy() { alive = false; window.removeEventListener('tvbro-vod-closed', onClosed); window.removeEventListener('tvbro-series', onSeries); },
   };
 }
 

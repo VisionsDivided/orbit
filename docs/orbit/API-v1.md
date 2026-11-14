@@ -271,7 +271,7 @@ Objects:
 | GET | `/v1/media/items` | `?conn=&library=&cursor=&kind=movie\|series&limit=` (limit 1–200, default 50) → `{"items": [Item], "next": cursor\|null, "total"}`. `cursor` is opaque; pass `next` back. |
 | GET | `/v1/media/item` | `?conn=&id=` → `Item` |
 | GET | `/v1/media/children` | `?conn=&id=` → `{"items": [Item]}`: the seasons of a series, the episodes of a season |
-| GET | `/v1/media/image` | `?conn=&path=` → the image itself (`image/jpeg`, `png`, `webp` or `gif` only; at most 5 MB; `Cache-Control: private, max-age=86400`). The server fetches it with the token. `path` must be an artwork path of that server (as found in `poster` / `backdrop`), else 400. This is the one `/v1` answer that is not JSON. |
+| GET | `/v1/media/image` | `?conn=&path=` → the image itself (`image/jpeg`, `png`, `webp` or `gif` only; at most 5 MB; `Cache-Control: private, max-age=86400`). The server fetches it with the token. `path` must be an artwork path of that server (as found in `poster` / `backdrop`), else 400. With `/v1/discover/image`, one of the two `/v1` answers that are not JSON. |
 | POST | `/v1/media/playback` | `{"conn", "id"}` → `{"url", "headers": {}, "direct": bool, "container", "resumeSecs", "conn", "source"}` for a film or episode (400 for a series / season). |
 | POST | `/v1/media/progress` | `{"conn", "id", "secs", "dur", "state": "playing"\|"paused"\|"stopped"}` → `{"ok": true}`. Jellyfin: `Sessions/Playing/Progress` or `/Stopped`; Plex: `/:/timeline`. Send it every ~10 seconds while playing and once on stop. |
 | POST | `/v1/media/watched` | `{"conn", "id", "watched": bool}` → `{"ok": true}` |
@@ -332,6 +332,7 @@ Server code: `web/server/orbit/seerr.py` (settings, client, cache, normalization
 | GET | `/v1/discover/rows` | signed in | → `{"rows": [{"id": "trending"\|"movies"\|"tv"\|"upcoming", "title", "items": [Title]}], "stale"}`. `upcoming` mixes films and shows. |
 | GET | `/v1/discover/search?q=` | signed in | `q`: 1–100 characters → `{"results": [Title], "stale"}` (people are left out). |
 | GET | `/v1/discover/title?type=movie\|tv&tmdb=` | signed in | → `Title` with `seasons` for shows, plus `"stale"`. 404 when Seerr does not know it. |
+| GET | `/v1/discover/image` | signed in | `?p=/<size>/<file>`: one TMDB artwork file through this server (for clients whose page may load images only from its own origin, the web app). `size` is one of `w92 w154 w185 w300 w342 w500 w780 w1280 original`; `file` is 1–100 letters, digits, `_` or `-` with `.jpg`, `.jpeg`, `.png` or `.webp` (exactly TMDB's `/t/p/<size>/<file>`; anything else is 400). Fetched only from `https://image.tmdb.org/t/p/`, at most 5 MB (413), served only when the bytes are a JPEG / PNG / GIF / WebP / AVIF (415 otherwise; never the upstream Content-Type), with `Cache-Control: private, max-age=604800` and a sandbox CSP. Kept in the server's image cache (`imgcache/`, shared with `/img`, 300 MB cap, oldest dropped). 404 when TMDB has no such file. Works whether or not Seerr is set up. This is the one other `/v1` answer that is not JSON. |
 | GET | `/v1/requests` | signed in | → `{"requests": [Request], "linked"}`: your own requests (the newest 50). Owners and admins may pass `all=1` for everyone's; then `requestedBy.accountId` names the Orbit account where one is linked. |
 | POST | `/v1/requests` | signed in, linked | `{"type": "movie"\|"tv", "tmdb", "seasons"?: [n]}` → 201 `{"created": true, "request": Request, "title": Title}`, or 200 `{"created": false, "title": Title}` when it is already available, being processed or requested (nothing new is sent to Seerr). For shows without `seasons`, every season that is neither available nor requested is asked for. 409 for an account without a linked Seerr user ("ask the owner to link your Seerr user"); 403 with Seerr's message when Seerr refuses (permissions, quota); 503 while Seerr cannot be reached. |
 | POST | `/v1/discover/settings` | owner, admin | `{"baseUrl", "apiKey"}` → `{"configured": true, "baseUrl", "keySet": true, "version"}`. The connection and key are tested (`/api/v1/status`, `/api/v1/auth/me`) before anything is saved (400 wrong key, 502 unreachable). Leave `apiKey` out to change only the address. `{"remove": true}` → `{"configured": false}`. |
@@ -378,8 +379,9 @@ How it works:
   `"available"`. IPTV titles match when the provider sends a TMDb id; Plex and Jellyfin titles by their TMDb guid.
   `discover.availability_override(tmdb, type)` stays as a second, household-wide hook (no-op).
 - **Privacy note:** `poster` and `backdrop` are full `https://image.tmdb.org/t/p/...` URLs, so clients load artwork
-  straight from TMDB's public image CDN (no key, but TMDB sees the client's address and which artwork it loads). A
-  later option can proxy them through the server's image cache.
+  straight from TMDB's public image CDN (no key, but TMDB sees the client's address and which artwork it loads), or
+  through `GET /v1/discover/image?p=/<size>/<file>` (the part after `/t/p`), which the web app does: its CSP allows
+  only images from its own origin. Then only the server talks to TMDB.
 
 ## Catalogue: Home, Movies and Shows (Phase 5)
 

@@ -205,7 +205,15 @@ internal fun open(m: AppModel, t: Tile, play: Boolean, unlocked: Boolean = false
     t.channel?.let { m.play(it); return }
     // a catalog title of a PIN-locked category (its category name is not known here, so the PIN is asked each time)
     if (t.locked && !unlocked && m.prefs.pinHash.isNotEmpty()) { m.askPin { open(m, t, play, unlocked = true) }; return }
-    val v: VodItem = t.vod ?: run { m.toast("${t.title} plays from ${t.source.replaceFirstChar { it.uppercase() }}, not on this TV yet"); return }
+    val v: VodItem = t.vod ?: run {
+        // a Plex / Jellyfin title: its page (details, seasons, My list; playback on the TV comes later)
+        if (t.source == "plex" || t.source == "jellyfin") io.github.kmmarin.tvbro.ui.movies.openMediaTitle(m,
+            io.github.kmmarin.tvbro.ui.movies.Title(key = t.key, title = t.title, show = t.show, poster = t.poster,
+                backdrop = t.backdrop, colors = t.colors, year = t.year, rating = t.rating, genres = t.genres,
+                source = t.source, id = t.id, conn = t.conn))
+        else m.toast("${t.title} is not on this TV yet")
+        return
+    }
     // straight to playback only when the file type is known (catalog titles carry none: their page loads it)
     if (play && !t.show && !m.isDirect(v) && v.ext.isNotEmpty()) {
         if (m.detail?.key != v.key) m.detailInfo = null    // playItem prefers the open page's file type

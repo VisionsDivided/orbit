@@ -12,7 +12,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -42,6 +44,19 @@ import io.github.kmmarin.tvbro.ui.orbit5.O5Row
 import io.github.kmmarin.tvbro.ui.orbit5.OrbitCanvas
 import io.github.kmmarin.tvbro.ui.orbit5.PosterCard
 import io.github.kmmarin.tvbro.ui.orbit5.SubMenuRow
+import io.github.kmmarin.tvbro.ui.movies.BrowseGridView
+import io.github.kmmarin.tvbro.ui.movies.Coll
+import io.github.kmmarin.tvbro.ui.movies.CollectionView
+import io.github.kmmarin.tvbro.ui.movies.DetailButton
+import io.github.kmmarin.tvbro.ui.movies.DetailData
+import io.github.kmmarin.tvbro.ui.movies.DetailView
+import io.github.kmmarin.tvbro.ui.movies.EpCard
+import io.github.kmmarin.tvbro.ui.movies.RecommendedView
+import io.github.kmmarin.tvbro.ui.movies.Title
+import io.github.kmmarin.tvbro.ui.movies.TitleEvents
+import io.github.kmmarin.tvbro.ui.movies.TitleRow
+import io.github.kmmarin.tvbro.ui.movies.heroOf
+import io.github.kmmarin.tvbro.ui.orbit5.ColorKeyLegend
 import io.github.kmmarin.tvbro.ui.profiles.ProfilePicker
 import io.github.kmmarin.tvbro.ui.shell.ShellFrame
 import io.github.kmmarin.tvbro.ui.shell.PhoneFrame
@@ -136,6 +151,89 @@ class DesignShotsTest {
     @Test fun pickerOrbit() = shot("picker-orbit") { ProfilePicker(people, "d", PickerStyle.ORBIT, "", emptyList(), {}, {}) }
 
     @Test fun pickerClassic() = shot("picker-classic") { ProfilePicker(people, "d", PickerStyle.CLASSIC, "", emptyList(), {}, {}) }
+
+    // ---- Movies / Shows / title page (ui/movies) ----
+
+    private val names = listOf("Glass Harbor", "Paper Comets", "Northbound Quiet", "Saltwater Kings", "Velvet Static", "A Map of Tuesdays", "Ironwood",
+        "The Ninth Lantern", "Low Tide Republic", "Neon Orchard", "Halcyon Drift", "Copper Sky", "Small Hours", "Ember Line", "Wildglass", "The Long Meridian",
+        "Orchid Protocol", "Second Sunrise", "Driftwood Saints", "Quiet Machines", "Terminal Bloom", "Foxglove Hill", "Sable Coast", "The Kindling")
+    private val genres = listOf("Drama", "Sci-fi", "Western", "Drama", "Music", "Comedy", "Fantasy", "Mystery")
+
+    private fun title(i: Int) = Title(
+        "m|p0|$i", names[i % names.size], false, year = "${2020 + i % 6}", rating = "7.${i % 10}", genres = listOf(genres[i % genres.size]),
+        source = if (i % 3 == 0) "plex" else "iptv", meta = "${2020 + i % 6} · ${genres[i % genres.size]}",
+    )
+
+    @Composable private fun keys() =
+        ColorKeyActions(red = KeyAction("My list") {}, green = KeyAction("Play trailer") {}, yellow = KeyAction("Mark watched") {}, blue = KeyAction("More") {})
+
+    private val tabs = listOf("Recommended", "Browse", "Collections")
+
+    @Test fun moviesRecommended() = shot("movies-recommended") {
+        OrbitCanvas {
+            keys()
+            ShellFrame(active = NavTab.MOVIES, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani") {
+                BackdropStill(art().asImageBitmap(), MeshColors(Color(0xFF6A3FD8), Color(0xFFFF9AD5)), Modifier.fillMaxSize())
+                val cont = (0..4).map { title(it).copy(progress = 0.2f + it * 0.15f, meta = if (it % 2 == 0) "S2 E4 · Ballast" else "1h 12m left") }
+                val rows = listOf(TitleRow("continue", "Continue watching", cont, landscape = true), TitleRow("recent", "Recently added", (5..14).map { title(it) }))
+                RecommendedView(
+                    heroOf(title(1), "#1 in Sci-fi this week", "A paper-route kid finds that the comets falling over her town are letters, and somebody up there is waiting for a reply.",
+                        runtime = "1h 51m"),
+                    rows, TitleEvents(), "Play", inList = false, onPlay = {}, onMyList = {},
+                )
+                SubMenuRow(tabs, 0, {}, Modifier.padding(top = 118.dp), browseTab = 1, browse = BrowseControls(BrowseSource.ALL, {}, count = "1,284 titles"))
+            }
+        }
+    }
+
+    @Test fun moviesBrowse() = shot("movies-browse") {
+        OrbitCanvas {
+            keys()
+            ShellFrame(active = NavTab.MOVIES, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani") {
+                BackdropStill(null, MeshColors(Color(0xFF1B7FA3), Color(0xFFD8F3FF)), Modifier.fillMaxSize())
+                BrowseGridView((0..23).map { title(it) }, TitleEvents(watched = { it.key.endsWith("3") }), hasMore = false, onNearEnd = {})
+                SubMenuRow(tabs, 1, {}, Modifier.padding(top = 118.dp), browseTab = 1, browse = BrowseControls(BrowseSource.ALL, {}, count = "1,284 titles"))
+            }
+        }
+    }
+
+    @Test fun collection() = shot("collection") {
+        OrbitCanvas {
+            keys()
+            ShellFrame(active = NavTab.MOVIES, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani") {
+                BackdropStill(art().asImageBitmap(), MeshColors(Color(0xFF16968A), Color(0xFFF2FFFB)), Modifier.fillMaxSize())
+                val words = listOf("Key", "Orchard", "Winter", "Gate", "Lantern", "Prince", "Ashes I", "Ashes II")
+                val films = (0..7).map { i ->
+                    title(i).copy(key = "m|p0|c$i", title = "The Hollowmere ${words[i]}", year = "${2001 + i}", progress = if (i == 3) 0.4f else null,
+                        meta = if (i == 3) "1h 12m left" else null, genres = listOf("Fantasy", "Adventure"))
+                }
+                CollectionView(Coll("c1", "The Hollowmere Saga", 8, null, null, null, "plex"), films, false, TitleEvents(watched = { it.key.last().digitToInt() < 3 }), onPlay = {})
+                SubMenuRow(tabs, 2, {}, Modifier.padding(top = 118.dp), browseTab = 1, browse = BrowseControls(BrowseSource.ALL, {}))
+            }
+        }
+    }
+
+    @Test fun detail() = shot("detail") {
+        OrbitCanvas {
+            keys()
+            ShellFrame(active = NavTab.SHOWS, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani", legend = false) {
+                BackdropStill(art().asImageBitmap(), MeshColors(Color(0xFF1B7FA3), Color(0xFFD8F3FF)), Modifier.fillMaxSize())
+                DetailView(
+                    DetailData("Fathom Station", "Series", listOf("iptv"), "2023", "8.4", "3 Seasons", listOf("Thriller", "Sci-fi"),
+                        "Eight researchers live two kilometres under the ocean on a station that was never meant to be found. When the surface goes silent, the crew has to decide who they can trust.",
+                        status = "28 min left · Ballast · My list ✓"),
+                    listOf(DetailButton("Resume S2 E4", Icons.Filled.PlayArrow, primary = true), DetailButton("Play from start"), DetailButton("My list", Icons.Filled.Add),
+                        DetailButton("More", Icons.Filled.MoreVert)),
+                    seasons = listOf("Season 1", "Season 2", "Season 3"), season = 1,
+                    episodes = listOf(
+                        EpCard("3", "E3 · Pressure Line", "Watched", null, 1f, true), EpCard("4", "E4 · Ballast", "28 min left", null, 0.46f),
+                        EpCard("5", "E5 · Thermocline", "52 min", null), EpCard("6", "E6 · The Quiet Hatch", "49 min", null), EpCard("7", "E7 · Surface", "55 min", null),
+                    ),
+                )
+                ColorKeyLegend(Modifier.align(Alignment.BottomStart).padding(start = 96.dp, bottom = 28.dp), hints = listOf("OK" to "Play"))
+            }
+        }
+    }
 
     // ---- Discover, Settings > Profiles, phone (orbit/tv-discover) ----
 

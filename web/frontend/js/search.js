@@ -152,7 +152,7 @@ export function searchScreen(main, nav, initial = '') {
         return e.key.startsWith('Arrow');
       }
       if (e.key.startsWith('Arrow')) {
-        if (!spatialMove(scr, e.key)) { if (e.key === 'ArrowLeft') nav.focusActive(); else if (e.key === 'ArrowUp') box.focus(); }
+        if (!spatialMove(scr, e.key)) { if (e.key === 'ArrowLeft' || (e.key === 'ArrowUp' && document.activeElement === box)) nav.focusActive(); else if (e.key === 'ArrowUp') box.focus(); }   // Up from the box: the top bar
         return true;
       }
       if (e.key === 'Enter' && document.activeElement && scr.contains(document.activeElement)) { document.activeElement.click(); return true; }
