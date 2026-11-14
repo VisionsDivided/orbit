@@ -55,7 +55,8 @@ compose.desktop {
             modules("java.naming", "jdk.crypto.ec", "java.net.http", "java.sql", "jdk.httpserver", "java.desktop")
             // upgradeUuid is the one the tvBro MSI used: kept so the Orbit MSI upgrades an installed tvBro in place
             // (Windows removes the old product, Add/Remove Programs then lists only Orbit). Never change it.
-            windows { menuGroup = "Orbit"; upgradeUuid = "6f3b8f63-2a43-4f7b-9a8e-2d6b0c1e7a51" }
+            // orbit.ico (16-256 px) is made from branding/orbit-app-icon.webp: exe, Start menu, Add/Remove Programs
+            windows { menuGroup = "Orbit"; upgradeUuid = "6f3b8f63-2a43-4f7b-9a8e-2d6b0c1e7a51"; iconFile.set(project.file("packaging/orbit.ico")) }
             // macOS app: Orbit.app in Orbit-<version>.dmg. Unsigned (signing / notarization need a paid Apple
             // Developer account: docs/orbit/MACOS.md). orbit.icns is made from branding/orbit-app-icon.webp.
             macOS {

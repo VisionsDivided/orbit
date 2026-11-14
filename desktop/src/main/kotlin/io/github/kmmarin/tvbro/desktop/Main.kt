@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
@@ -41,16 +42,13 @@ object Theme {
     val ok = Color(0xFF7FF0BB)
 }
 
-/** Original tvBro mark: a rounded screen with a play wedge. */
-object AppIcon : Painter() {
-    override val intrinsicSize = Size(64f, 64f)
-    override fun DrawScope.onDraw() {
-        val w = size.width
-        drawRoundRect(Theme.accent, Offset(w * .06f, w * .14f), Size(w * .88f, w * .66f), CornerRadius(w * .12f))
-        drawRect(Theme.accent, Offset(w * .3f, w * .82f), Size(w * .4f, w * .06f))
-        val p = Path().apply { moveTo(w * .42f, w * .3f); lineTo(w * .64f, w * .47f); lineTo(w * .42f, w * .64f); close() }
-        drawPath(p, Theme.bg)
-    }
+/** The Orbit app icon (branding/orbit-app-icon.webp at 256 px): window, taskbar and the missing-library screen. */
+val AppIcon: Painter by lazy {
+    val bytes = Thread.currentThread().contextClassLoader?.getResourceAsStream("orbit-app-icon.png")?.use { it.readBytes() }
+        ?: AppDirs::class.java.getResourceAsStream("/orbit-app-icon.png")?.use { it.readBytes() }
+    if (bytes != null) androidx.compose.ui.graphics.painter.BitmapPainter(
+        org.jetbrains.skia.Image.makeFromEncoded(bytes).toComposeImageBitmap())
+    else androidx.compose.ui.graphics.painter.ColorPainter(Theme.accent)
 }
 
 /**
