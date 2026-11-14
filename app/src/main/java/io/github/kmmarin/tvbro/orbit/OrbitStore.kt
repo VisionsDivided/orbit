@@ -44,8 +44,18 @@ class OrbitStore(private val ctx: Context) {
 
     /** Forget the session (the last server address stays, to link again quickly). */
     fun clear() {
-        try { prefs?.edit { listOf("server", "session", "csrf", "account", "username", "profile", "kids").forEach { remove(it) } } } catch (e: Exception) { }
+        try { prefs?.edit { listOf("server", "session", "csrf", "account", "username", "profile", "kids", "listBase").forEach { remove(it) } } } catch (e: Exception) { }
     }
+
+    /** My list as it was after the last sync (the base of the three-way merge). */
+    var listBase: Set<String>
+        get() = try { prefs?.getStringSet("listBase", emptySet())?.toSet() ?: emptySet() } catch (e: Exception) { emptySet() }
+        set(v) { try { prefs?.edit { putStringSet("listBase", v) } } catch (e: Exception) { } }
+
+    /** Ids of the playlists that came from the home server (removed again when the TV is unlinked). */
+    var serverSources: Set<String>
+        get() = try { prefs?.getStringSet("serverSources", emptySet())?.toSet() ?: emptySet() } catch (e: Exception) { emptySet() }
+        set(v) { try { prefs?.edit { putStringSet("serverSources", v) } } catch (e: Exception) { } }
 
     var lastServer: String
         get() = try { prefs?.getString("lastServer", "") ?: "" } catch (e: Exception) { "" }

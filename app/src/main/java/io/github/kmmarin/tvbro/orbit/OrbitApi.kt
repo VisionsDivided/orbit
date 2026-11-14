@@ -120,4 +120,31 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT) {
     fun logout(link: OrbitLink) {
         runCatching { call(link.server, "/v1/auth/logout", "{}", link) }
     }
+
+    /** The household's playlists (linked TVs only): ids match the server's ("p0", "p1" …), so keys line up. */
+    fun playlists(link: OrbitLink): List<io.github.kmmarin.tvbro.data.Source> {
+        val j = call(link.server, "/v1/device/playlists", null, link)
+        val arr = j["playlists"] as? kotlinx.serialization.json.JsonArray ?: return emptyList()
+        return arr.mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            val id = o.str("id") ?: return@mapNotNull null
+            val kind = o.str("kind") ?: return@mapNotNull null
+            if (kind != "xtream" && kind != "m3u") return@mapNotNull null
+            io.github.kmmarin.tvbro.data.Source(id = id, name = o.str("name") ?: id, kind = kind, url = o.str("url") ?: "",
+                epgUrl = o.str("epgUrl") ?: "", server = o.str("server") ?: "", user = o.str("user") ?: "", pass = o.str("pass") ?: "")
+        }
+    }
+
+    /** This TV's profile state on the server: My list and resume points (see docs/orbit/API-v1.md, step 4). */
+    fun state(link: OrbitLink): JsonObject = call(link.server, "/api/state", null, link)
+
+    fun statePut(link: OrbitLink, scope: String, key: String, value: kotlinx.serialization.json.JsonElement) {
+        val body = JsonObject(mapOf("op" to JsonPrimitive("put"), "key" to JsonPrimitive(key), "value" to value))
+        call(link.server, "/api/state/$scope", Json.encodeToString(JsonObject.serializer(), body), link)
+    }
+
+    fun stateDel(link: OrbitLink, scope: String, key: String) {
+        val body = JsonObject(mapOf("op" to JsonPrimitive("del"), "key" to JsonPrimitive(key)))
+        call(link.server, "/api/state/$scope", Json.encodeToString(JsonObject.serializer(), body), link)
+    }
 }

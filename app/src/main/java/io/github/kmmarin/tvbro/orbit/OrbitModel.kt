@@ -6,24 +6,52 @@ import android.app.Application
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import io.github.kmmarin.tvbro.data.Diag
+import io.github.kmmarin.tvbro.data.Source
+import io.github.kmmarin.tvbro.data.Watch
+import io.github.kmmarin.tvbro.data.WatchDb
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.longOrNull
 
 /** A pairing in progress: the code shown on screen while the TV waits for approval. */
 data class Pairing(val server: String, val code: String, val expires: Long)
 
+/** What OrbitModel needs from the app (AppModel implements it); all calls on the main thread. */
+interface OrbitHost {
+    val favourites: Set<String>
+    fun setFavourites(f: Set<String>)
+    val sources: List<Source>
+    /** Use these playlists (from the home server) instead of [remove]d ones. */
+    fun replaceSources(list: List<Source>, remove: Set<String>)
+    /** My list entry for the web app: {key, kind, name, logo / poster, id}, or null when unknown here. */
+    fun describe(key: String): JsonObject?
+}
+
 /**
- * Orbit state for the TV app: the home-server link and the pairing screen. Kept out of AppModel; AppModel only
- * holds one instance. Network calls run on IO, state changes on the main thread.
+ * Orbit state for the TV app: the home-server link, the pairing screen and sync (playlists, My list, film resume
+ * points). Kept out of AppModel; AppModel holds one instance and attaches itself as [OrbitHost].
  */
-class OrbitModel(app: Application, private val scope: CoroutineScope, private val api: OrbitApi = OrbitApi()) {
+class OrbitModel(private val app: Application, private val scope: CoroutineScope, private val api: OrbitApi = OrbitApi()) {
     private val store = OrbitStore(app)
+    private var host: OrbitHost? = null
+    private val syncLock = Mutex()
 
     var link by mutableStateOf<OrbitLink?>(null); private set
     var pairing by mutableStateOf<Pairing?>(null); private set
@@ -32,35 +60,138 @@ class OrbitModel(app: Application, private val scope: CoroutineScope, private va
     var signedOut by mutableStateOf(false); private set
     /** Set when a pairing has just finished, so the pairing screen can close itself. */
     var justLinked by mutableStateOf(false)
+    /** Last sync result for Settings ("Synced 21:04" / an error). */
+    var syncStatus by mutableStateOf(""); private set
     val lastServer: String get() = store.lastServer
 
     private var job: Job? = null
+    private var loop: Job? = null
     private val device = "TV (" + (android.os.Build.MODEL ?: "Android").take(40) + ")"
 
-    init {
+    /** Called by AppModel once all its state exists: loads the link, checks it, starts syncing. */
+    @OptIn(FlowPreview::class)
+    fun attach(h: OrbitHost) {
+        host = h
         scope.launch(Dispatchers.IO) {
             val l = store.load()
             withContext(Dispatchers.Main) { link = l }
-            if (l != null) check(l)
+            if (l != null && check(l)) startSyncLoop()
+        }
+        // a change to My list on the TV goes to the server shortly after (and pulls the other side's changes)
+        scope.launch {
+            snapshotFlow { h.favourites }.drop(1).debounce(1500).collect { if (link != null) scope.launch(Dispatchers.IO) { syncState() } }
         }
     }
 
-    /** Names up to date; a session the server no longer knows means this TV was signed out. */
-    private suspend fun check(l: OrbitLink) {
+    /** Names up to date; false when the server no longer knows this TV (signed out). Offline keeps the link. */
+    private suspend fun check(l: OrbitLink): Boolean {
         try {
             val now = api.me(l)
-            if (now == null) {
-                store.clear()
-                withContext(Dispatchers.Main) { link = null; signedOut = true }
-            } else if (now != l) {
-                store.save(now)
-                withContext(Dispatchers.Main) { link = now }
-            }
+            if (now == null) { forget(signedOutByServer = true); return false }
+            if (now != l) { store.save(now); withContext(Dispatchers.Main) { link = now } }
         } catch (e: Exception) {
-            Diag.log("Orbit: home server not reachable (${e.javaClass.simpleName})")    // offline: keep the link
+            Diag.log("Orbit: home server not reachable (${e.javaClass.simpleName})")
+        }
+        return true
+    }
+
+    private fun startSyncLoop() {
+        loop?.cancel()
+        loop = scope.launch(Dispatchers.IO) {
+            syncPlaylists()
+            var n = 0
+            while (isActive && link != null) {
+                syncState()
+                delay(60_000)
+                if (++n % 30 == 0) syncPlaylists()            // every half hour: playlists changed on the server
+            }
         }
     }
 
+    // ---------- sync ----------
+    /** The household's playlists from the server replace the TV's (same ids as the server, so keys line up). */
+    private suspend fun syncPlaylists() {
+        val l = link ?: return
+        val h = host ?: return
+        try {
+            val list = api.playlists(l)
+            if (list.isEmpty()) { withContext(Dispatchers.Main) { syncStatus = "The home server has no playlist yet" }; return }
+            withContext(Dispatchers.Main) {
+                val mine = store.serverSources
+                // first link: playlists typed in on this TV are replaced too (their keys would not match the server's)
+                val remove = if (mine.isEmpty()) h.sources.map { it.id }.toSet() else mine
+                val same = h.sources.map { it.copy(enabled = true) }.toSet() == list.toSet()
+                if (!same) h.replaceSources(list, remove - list.map { it.id }.toSet())
+                store.serverSources = list.map { it.id }.toSet()
+            }
+        } catch (e: OrbitError) {
+            if (e.code == 401) forget(signedOutByServer = true) else Diag.log("Orbit: playlists (${e.code})")
+        } catch (e: Exception) { Diag.log("Orbit: playlists (${e.javaClass.simpleName})") }
+    }
+
+    /** My list (three-way merge) and film resume points (newest wins) with this TV's profile on the server. */
+    suspend fun syncState() = syncLock.withLock {
+        val l = link ?: return@withLock
+        val h = host ?: return@withLock
+        if (store.serverSources.isEmpty()) return@withLock          // keys only match once the playlists come from the server
+        try {
+            val st = api.state(l)
+            // My list
+            val serverKeys = (st["mylist"] as? kotlinx.serialization.json.JsonArray).orEmpty()
+                .mapNotNull { (it as? JsonObject)?.get("key")?.let { k -> (k as? JsonPrimitive)?.contentOrNull } }.toSet()
+            val local = withContext(Dispatchers.Main) { h.favourites }
+            val m = OrbitSyncLogic.mergeList(local, store.listBase, serverKeys)
+            for (k in m.add) {
+                val v = withContext(Dispatchers.Main) { h.describe(k) } ?: JsonObject(mapOf("key" to JsonPrimitive(k)))
+                api.statePut(l, "mylist", k, v)
+            }
+            for (k in m.remove) api.stateDel(l, "mylist", k)
+            store.listBase = m.result
+            val merged = OrbitSyncLogic.withLocalOnly(local, m.result)
+            withContext(Dispatchers.Main) { if (merged != h.favourites) h.setFavourites(merged) }
+            // film resume points
+            val watch = WatchDb.get(app)
+            val server = (st["resume"] as? JsonObject).orEmpty().mapNotNull { (k, v) ->
+                val o = v as? JsonObject ?: return@mapNotNull null
+                val at = (o["at"] as? JsonPrimitive)?.longOrNull ?: return@mapNotNull null
+                k to ServerResume((o["secs"] as? JsonPrimitive)?.longOrNull ?: 0, (o["dur"] as? JsonPrimitive)?.longOrNull ?: 0, at,
+                    (o["done"] as? JsonPrimitive)?.booleanOrNull ?: false)
+            }.toMap()
+            val plan = OrbitSyncLogic.planResume(watch.allStates(), server, Watch.MIN_RESUME_MS)
+            withContext(Dispatchers.Main) { for ((k, s) in plan.toLocal) watch.putState(k, s) }
+            for ((k, s) in plan.toServer) {
+                val meta = withContext(Dispatchers.Main) { h.describe(k) }
+                val v = buildMap<String, kotlinx.serialization.json.JsonElement> {
+                    put("secs", JsonPrimitive(if (s.watched) s.durMs / 1000 else s.posMs / 1000)); put("dur", JsonPrimitive(s.durMs / 1000))
+                    put("at", JsonPrimitive(s.updated)); if (s.watched) put("done", JsonPrimitive(true))
+                    if (meta != null) put("meta", JsonObject(mapOf("title" to (meta["name"] ?: JsonPrimitive("")), "poster" to (meta["poster"] ?: JsonPrimitive("")),
+                        "kind" to JsonPrimitive("movie"), "id" to (meta["id"] ?: JsonPrimitive("")))))
+                }
+                api.statePut(l, "resume", k, JsonObject(v))
+            }
+            val t = io.github.kmmarin.tvbro.data.TimeFmt.time(System.currentTimeMillis() / 1000)
+            withContext(Dispatchers.Main) { syncStatus = "Synced $t" }
+        } catch (e: OrbitError) {
+            if (e.code == 401) forget(signedOutByServer = true)
+            else withContext(Dispatchers.Main) { syncStatus = "Sync failed: ${e.message}" }
+        } catch (e: Exception) {
+            withContext(Dispatchers.Main) { syncStatus = "Home server not reachable; will try again" }
+        }
+    }
+
+    /** Sign-out from the server or unlink: forget the session and remove the playlists that came from the server. */
+    private suspend fun forget(signedOutByServer: Boolean) {
+        store.clear()
+        val ids = store.serverSources
+        store.serverSources = emptySet()
+        withContext(Dispatchers.Main) {
+            loop?.cancel(); loop = null
+            link = null; signedOut = signedOutByServer
+            if (ids.isNotEmpty()) host?.replaceSources(emptyList(), ids)
+        }
+    }
+
+    // ---------- pairing ----------
     fun startPairing(input: String) {
         val server = OrbitApi.normalizeServer(input)
         if (server == null) { message = "Enter the home server's address, e.g. http://192.0.2.10:8750"; return }
@@ -83,10 +214,12 @@ class OrbitModel(app: Application, private val scope: CoroutineScope, private va
                     PairPoll.Pending -> if (message.isNotEmpty()) withContext(Dispatchers.Main) { message = "" }
                     is PairPoll.Approved -> {
                         store.save(r.link)
+                        store.listBase = emptySet()
                         withContext(Dispatchers.Main) {
                             link = r.link; signedOut = false; pairing = null; justLinked = true
                             message = "Linked: ${r.link.account}, profile ${r.link.profile}"
                         }
+                        startSyncLoop()
                         return@launch
                     }
                     is PairPoll.Gone -> {
@@ -106,9 +239,11 @@ class OrbitModel(app: Application, private val scope: CoroutineScope, private va
     fun unlink() {
         val l = link ?: return
         cancelPairing()
-        link = null; signedOut = false; message = "This TV is unlinked"
-        store.clear()
-        scope.launch(Dispatchers.IO) { api.logout(l) }
+        scope.launch(Dispatchers.IO) {
+            api.logout(l)
+            forget(signedOutByServer = false)
+            withContext(Dispatchers.Main) { message = "This TV is unlinked; the playlists from the home server were removed" }
+        }
     }
 
     fun clearMessage() { message = "" }

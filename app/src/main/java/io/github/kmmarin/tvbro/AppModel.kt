@@ -1349,6 +1349,37 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
         watch.putSeries(if (audio) o.copy(audioLang = lang?.takeIf { it.isNotBlank() } ?: o.audioLang) else o.copy(subs = SubPref(on, lang ?: "")))
     }
 
+    // ---- Orbit: the home server syncs playlists, My list and film resume points (orbit/OrbitModel.kt) ----
+    private fun attachOrbit() = orbit.attach(object : io.github.kmmarin.tvbro.orbit.OrbitHost {
+        override val favourites: Set<String> get() = this@AppModel.favourites
+        override fun setFavourites(f: Set<String>) { this@AppModel.favourites = f; store.saveFavourites(f); refreshLists() }
+        override val sources: List<Source> get() = this@AppModel.sources
+        override fun replaceSources(list: List<Source>, remove: Set<String>) {
+            remove.forEach { repo.removeSourceFiles(it) }
+            val now = this@AppModel.sources.filter { it.id !in remove && list.none { n -> n.id == it.id } } + list
+            this@AppModel.sources = now
+            store.saveSources(now)
+            channels = channels.filter { c -> now.any { it.id == c.sourceId } }
+            if (now.isEmpty()) { rebuildIndex(); screen = Screen.ADD_SOURCE }
+            else { if (screen == Screen.ADD_SOURCE) screen = Screen.LIST; loadAll(true) }
+        }
+        override fun describe(key: String) = orbitDescribe(key)
+    })
+
+    /** A My list entry the web app can show: channels by name and logo, films and shows by poster and id. */
+    private fun orbitDescribe(key: String): kotlinx.serialization.json.JsonObject? {
+        fun obj(vararg p: Pair<String, String?>) = kotlinx.serialization.json.JsonObject(
+            p.filter { it.second != null }.associate { it.first to kotlinx.serialization.json.JsonPrimitive(it.second) })
+        if (key.startsWith("m|") || key.startsWith("s|")) {
+            val v = store.snaps(listOf(key)).firstOrNull() ?: return null
+            val webId = if (v.sourceId == "p0") v.id else "${v.sourceId}~${v.id}"     // the web server's VOD id
+            return obj("key" to key, "kind" to (if (key.startsWith("m|")) "movie" else "series"), "name" to v.name,
+                "poster" to v.poster, "id" to webId, "ext" to v.ext)
+        }
+        val c = channels.firstOrNull { it.key == key } ?: return null
+        return obj("key" to key, "kind" to "live", "name" to c.name, "logo" to c.logo)
+    }
+
     // keep last: every property above is initialised by now
-    init { watchUiState(); DebugHooks.attach(this) }
+    init { watchUiState(); DebugHooks.attach(this); attachOrbit() }
 }

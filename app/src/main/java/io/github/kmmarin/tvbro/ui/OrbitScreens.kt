@@ -45,6 +45,10 @@ fun LazyListScope.orbitSection(m: AppModel) {
             Text("Change the profile or sign this TV out from Orbit on a phone or computer (Settings ▸ Accounts ▸ Your devices), " +
                 "or unlink it here.", color = TextDim, fontSize = 14.sp, modifier = Modifier.padding(vertical = 3.dp))
         }
+        item {
+            Text("Playlists come from the home server; My list, favourite channels and film resume points sync with your " +
+                "profile. ${o.syncStatus}", color = TextDim, fontSize = 14.sp, modifier = Modifier.padding(vertical = 3.dp))
+        }
         item { TvButton("Unlink this TV", Modifier.padding(vertical = 6.dp)) { o.unlink() } }
     }
     if (o.message.isNotEmpty()) item { Text(o.message, color = Ok, fontSize = 15.sp, modifier = Modifier.padding(vertical = 4.dp)) }
@@ -54,10 +58,13 @@ fun LazyListScope.orbitSection(m: AppModel) {
 @Composable
 fun OrbitLinkScreen(m: AppModel) {
     val o = m.orbit
-    // back where it was opened from: Settings, or the first-run Add source screen when there is no playlist yet
-    val back = if (m.sources.isEmpty()) Screen.ADD_SOURCE else Screen.SETTINGS
-    BackHandler { o.cancelPairing(); m.screen = back }
-    LaunchedEffect(o.justLinked) { if (o.justLinked) { o.justLinked = false; m.screen = back } }
+    // where to go when this screen closes, decided at that moment (the playlist from the home server may arrive just
+    // before or just after the pairing finishes): opened on first run -> the channels once there is a playlist, else
+    // Add source; opened from Settings -> Settings
+    val firstRun = remember { m.sources.isEmpty() }
+    val back = { if (!firstRun) Screen.SETTINGS else if (m.sources.isEmpty()) Screen.ADD_SOURCE else Screen.LIST }
+    BackHandler { o.cancelPairing(); m.screen = back() }
+    LaunchedEffect(o.justLinked) { if (o.justLinked) { o.justLinked = false; m.screen = back() } }
     val p = o.pairing
     if (p == null) {
         var server by remember { mutableStateOf(o.lastServer.ifEmpty { "http://" }) }
@@ -73,7 +80,7 @@ fun OrbitLinkScreen(m: AppModel) {
                 modifier = Modifier.focusProperties { down = getFr })
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 TvButton("Get a code", Modifier.focusRequester(getFr)) { o.startPairing(server) }
-                TvButton("Cancel") { o.cancelPairing(); m.screen = back }
+                TvButton("Cancel") { o.cancelPairing(); m.screen = back() }
             }
             if (o.message.isNotEmpty()) Text(o.message, color = Accent, fontSize = 16.sp)
         }
@@ -93,7 +100,7 @@ fun OrbitLinkScreen(m: AppModel) {
                 Text("Waiting for approval… The code works once and expires at ${hhmm(p.expires)}.", color = TextDim, fontSize = 15.sp,
                     modifier = Modifier.padding(top = 12.dp))
                 if (o.message.isNotEmpty()) Text(o.message, color = Accent, fontSize = 15.sp)
-                TvButton("Cancel", Modifier.padding(top = 24.dp).focusRequester(cancelFr)) { o.cancelPairing(); m.screen = back }
+                TvButton("Cancel", Modifier.padding(top = 24.dp).focusRequester(cancelFr)) { o.cancelPairing(); m.screen = back() }
             }
         }
     }

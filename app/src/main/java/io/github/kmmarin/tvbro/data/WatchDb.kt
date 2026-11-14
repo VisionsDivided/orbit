@@ -116,6 +116,16 @@ class WatchDb private constructor(private val ctx: Context) : SQLiteOpenHelper(c
         rev.intValue++
     }
 
+    /** Orbit sync: every stored position / watched mark. */
+    fun allStates(): Map<String, WatchState> { ensure(); return HashMap(eps) }
+
+    /** Orbit sync: a state from the home server, kept with its own time (so it is not sent back as new). */
+    fun putState(key: String, s: WatchState) {
+        ensure()
+        writeEp(key, null, s)
+        rev.intValue++
+    }
+
     fun setDur(key: String, ms: Long) {
         ensure()
         val o = eps[key] ?: WatchState()
