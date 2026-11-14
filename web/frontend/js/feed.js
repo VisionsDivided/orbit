@@ -154,25 +154,29 @@ export function cwCard(it, o = {}) {
   ].filter(Boolean)));
   return c;
 }
-/** Favourite channels with what is on now (cards play the channel). null when there are none. */
+/** Live channels with what is on now (cards play the channel): the favourites, or else the first channels
+ *  of the guide. {title, cards}, or null when there are no channels. */
 export async function favChannelCards() {
   const favs = myList().filter((x) => x.kind === 'live');
-  if (!favs.length) return null;
-  const chans = favs.map((x) => x.ch || { key: x.key, name: x.name, logo: x.logo });
+  let chans = favs.map((x) => x.ch || { key: x.key, name: x.name, logo: x.logo });
+  let title = 'Live now on your favourites';
+  if (!chans.length) {
+    try { chans = ((await api.channels('__all', 1, '', 24)).items || []); } catch { chans = []; }
+    title = 'On now';
+  }
+  if (!chans.length) return null;
   let nn = {};
   try { nn = (await api.nownext(chans.map((c) => c.key).slice(0, 60))).nownext || {}; } catch {}
   const n = nowSec();
-  return chans.slice(0, 20).map((c) => {
+  const cards = chans.slice(0, 24).map((c) => {
     const now = nn[c.key] && nn[c.key].now;
     const pr = now ? G.progress(now, n) : null;
-    const it = { key: c.key, kind: 'live', title: c.name, poster: c.logo, backdrop: null, still: null, source: null, genres: [], progress: null };
     const card = h('button', { class: 'card5 cap5 chcard focusable', type: 'button', 'aria-label': c.name + (now ? ', ' + now.title : '') },
-      h('span', { class: 'pic land5 ch' }, c.logo ? h('img', { alt: '', loading: 'lazy', src: api.img(c.logo) }) : h('span', { class: 'pic-t' }, c.name),
+      h('span', { class: 'pic land5 ch' }, c.logo ? h('img', { alt: '', loading: 'lazy', src: api.img(c.logo) }) : h('span', { class: 'ch-name' }, c.name),
         pr ? h('span', { class: 'pg' }, h('i', { style: { width: (pr.frac * 100).toFixed(1) + '%' } })) : null),
       h('b', {}, now ? now.title : c.name), h('span', {}, now ? `${c.name} · ${pr.minLeft} min left` : (c.number ? 'Channel ' + c.number : '')));
-    card.addEventListener('click', () => playLive(c, { list: () => chans, group: '__fav' }));
-    card._item = it;
+    card.addEventListener('click', () => playLive(c, { list: () => chans, group: favs.length ? '__fav' : '__all' }));
     return card;
   });
-}
-export { posterCard, rememberTitle, getResume };
+  return { title, cards };
+}export { posterCard, rememberTitle, getResume };

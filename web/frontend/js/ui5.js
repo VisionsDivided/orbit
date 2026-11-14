@@ -143,6 +143,7 @@ export function heroEl(cls = '') {
     set(key, parts, force) {
       if (key === curKey && !force) return;
       curKey = key;
+      el.querySelectorAll(':scope > .skel').forEach((x) => x.remove());
       const keepFocus = layer && layer.contains(document.activeElement) ? [...layer.querySelectorAll('.focusable')].indexOf(document.activeElement) : -1;
       const n = heroLayer(parts);
       const old = layer; layer = n;

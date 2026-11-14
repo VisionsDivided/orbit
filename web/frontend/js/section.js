@@ -58,7 +58,8 @@ export function sectionScreen(main, kind, nav, arg = '') {
       onclick: () => setSource(v) }, t)));
   const browseGrp = h('div', { class: 'grp' + (m.tab === 'browse' ? ' open' : '') }, tabBtn('browse', 'Browse'), m.tab === 'browse' ? seg : null);
   const rt = h('div', { class: 'rt' }, h('span', { class: 'dd-wrap' }, ic('filter'), genreSel), h('span', { class: 'dd-wrap' }, sortSel), count);
-  sub.append(tabBtn('rec', 'Recommended'), browseGrp, tabBtn('coll', 'Collections'), m.tab === 'browse' ? rt : null);
+  sub.append(tabBtn('rec', 'Recommended'), browseGrp, tabBtn('coll', 'Collections'));
+  if (m.tab === 'browse') sub.append(rt);
   sub.classList.toggle('wide', m.tab === 'browse');
 
   function setSource(v) {
@@ -230,7 +231,7 @@ export function sectionScreen(main, kind, nav, arg = '') {
   function collectionView(id) {
     const hero = heroEl('coll');
     const strip = h('div', { class: 'strip posters coll-strip' }, ...skGrid(8));
-    body.append(hero.el, h('section', { class: 'row5' }, strip));
+    body.append(hero.el, h('div', { class: 'rows5' }, h('section', { class: 'row5' }, strip)));
     hero.el.append(skHero());
     let list = [];
     (async () => {
@@ -257,7 +258,7 @@ export function sectionScreen(main, kind, nav, arg = '') {
           list[0] && done ? btn5('Play from the first', 'restart', () => playItem(list[0])) : null,
         ].filter(Boolean),
       });
-      strip.replaceChildren(...list.map((it, i) => cardWithMenu(it, (x) => setScene(sceneOf(x)), { num: i + 1 })));
+      strip.replaceChildren(...list.map((it, i) => cardWithMenu(it, (x) => setScene(sceneOf(x)), { num: i + 1, noBadge: true })));
     })();
     return { keys: () => null, destroy() {} };
   }

@@ -26,23 +26,27 @@ export function homeScreen(main, nav) {
   const onFocus = (it) => feat.feature(it);
   const isCw = (id, title) => /continue|resume/i.test(id + ' ' + title);
 
-  function build(list, heroes = []) {
+  function build(list, heroes = [], live = null) {
     if (!alive) return;
     rows.replaceChildren();
     hero.el.querySelectorAll('.skel').forEach((x) => x.remove());
     for (const r of list) {
-      if (!r.items.length && !r.cards) continue;
+      if (!r.items.length) continue;
       const cw = isCw(r.id, r.title);
-      const cards = r.cards || r.items.map((it) => (cw ? cwCard(it, { onFocus }) : posterCard(it, { onFocus })));
-      rows.append(rowEl(r.title, cards, { posters: !cw && !r.cards, id: r.id }));
-      if (!first && r.items && r.items.length) { first = r.items.find((x) => x.backdrop) || r.items[0]; first._label = cw ? 'Continue watching' : 'Featured tonight'; }
+      const cards = r.items.map((it) => (cw ? cwCard(it, { onFocus }) : posterCard(it, { onFocus })));
+      rows.append(rowEl(r.title, cards, { posters: !cw, id: r.id }));
+      if (!first) { first = r.items.find((x) => x.backdrop) || r.items[0]; first._label = cw ? 'Continue watching' : 'Featured tonight'; }
     }
+    if (live && live.cards.length) rows.append(rowEl(live.title, live.cards, { id: 'live' }));
     if (heroes[0]) { first = heroes[0]; first._label = 'Featured tonight'; }
-    if (first) feat.feature(first, true);
-    else {
-      hero.el.replaceChildren();
-      rows.append(emptyState('Nothing to show yet', 'Add a playlist or link a Plex or Jellyfin server, and your films, shows and channels appear here.',
+    scr.classList.toggle('nohero', !first);
+    if (first) { feat.feature(first, true); return; }
+    hero.el.replaceChildren(h('div', { class: 'hero-l in' }, h('div', { class: 'eyebrow' }, h('span', {}, 'Welcome to Orbit')), h('h1', { class: 'ttl' }, live && live.cards.length ? 'Live TV' : 'Nothing to show yet')));
+    if (!live || !live.cards.length) {
+      rows.append(emptyState('Your films and shows appear here', 'Add a playlist with films and series, or link a Plex or Jellyfin server.',
         btn5('Open Settings', 'gear', () => { location.hash = 'settings'; }, { primary: true })));
+    } else {
+      rows.prepend(h('p', { class: 'note5 mut' }, 'This playlist has no films or series yet. Live channels are below; the guide is under Live TV.'));
     }
   }
 
@@ -50,7 +54,8 @@ export function homeScreen(main, nav) {
     let data = null;
     try { data = await catalog.home(); } catch (e) { data = null; }
     if (!alive) return;
-    if (data && (data.rows.length || data.hero.length)) { build(data.rows, data.hero); return; }
+    const live = favChannelCards().catch(() => null);
+    if (data && (data.rows.length || data.hero.length)) { build(data.rows, data.hero, await live); return; }
     // older server: the rows from /api
     const [cw, films, shows] = await Promise.all([
       continueItems().catch(() => []),
@@ -58,17 +63,13 @@ export function homeScreen(main, nav) {
       latestItems('series').catch(() => ({ items: [] })),
     ]);
     if (!alive) return;
-    const list = [
+    build([
       { id: 'continue', title: 'Continue watching · films and shows', items: cw },
       { id: 'mylist', title: 'My list', items: myListItems() },
       { id: 'movies', title: 'New films', items: films.items },
       { id: 'shows', title: 'New shows', items: shows.items },
-    ];
-    build(list);
-    const ch = await favChannelCards().catch(() => null);
-    if (alive && ch && ch.length) rows.append(rowEl('Live now on your favourites', ch, { id: 'live' }));
+    ], [], await live);
   })();
-
   return {
     onKey(e) {
       if (e.key.startsWith('Arrow')) { if (!spatialMove(scr, e.key) && (e.key === 'ArrowUp' || e.key === 'ArrowLeft')) nav.focusActive(); return true; }
