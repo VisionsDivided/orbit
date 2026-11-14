@@ -93,7 +93,7 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT, private val userAgent
         fun imageHeaders(link: OrbitLink?, url: String): Map<String, String>? =
             if (link != null && url.startsWith(link.server + "/")) mapOf("Cookie" to "$COOKIE=${link.session}") else null
 
-        internal fun linkFrom(server: String, session: String, csrf: String, me: JsonObject): OrbitLink {
+        fun linkFrom(server: String, session: String, csrf: String, me: JsonObject): OrbitLink {
             val acc = me["account"]?.jsonObject
             val prof = (me["profile"] as? JsonObject)
             return OrbitLink(
@@ -324,10 +324,10 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT, private val userAgent
     }
 
     /** A signed-in GET of [path] (catalog, profiles: CatalogApi.kt, OrbitProfiles.kt). Errors as [OrbitError]. */
-    internal fun getJson(link: OrbitLink, path: String): JsonObject = call(link.server, path, null, link)
+    fun getJson(link: OrbitLink, path: String): JsonObject = call(link.server, path, null, link)
 
     /** A signed-in POST of [body] to [path]. */
-    internal fun postJson(link: OrbitLink, path: String, body: JsonObject): JsonObject =
+    fun postJson(link: OrbitLink, path: String, body: JsonObject): JsonObject =
         call(link.server, path, Json.encodeToString(JsonObject.serializer(), body), link)
 
     /** This TV's profile state on the server: My list and resume points (see docs/orbit/API-v1.md, step 4). */
