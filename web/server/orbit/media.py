@@ -9,9 +9,10 @@ the direct-play URL of ``POST /v1/media/playback``, which goes to the same perso
 by the server (``GET /v1/media/image``) so pages never see a token.
 
 LAN servers: net.py refuses private addresses unless "local network sources" is on. ``private_hosts`` gives
-net.set_private_hosts the exact host:port of every saved connection, plus, while an owner or admin signs in,
-the address being linked. Members cannot add new LAN addresses (that would let anyone signed in probe the
-network); they can link their own user on a server the household already uses."""
+net.set_private_hosts the exact host:port of every saved connection. While an owner or admin signs in, the
+address being linked is allowed only for that sign-in's own requests (``net.private_hosts_scope``, per thread),
+never in the global list, until it is saved. Members cannot add new LAN addresses (that would let anyone signed
+in probe the network); they can link their own user on a server the household already uses."""
 from __future__ import annotations
 
 import json
@@ -23,6 +24,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from tvbro_server import net as NET
 from tvbro_server.auth import Throttle, Wait
 from tvbro_server.secfile import write_secret
 
@@ -143,14 +145,15 @@ class MediaServers:
         self._hosts = hs
 
     def private_hosts(self) -> set:
-        """Saved connections' (host, port), plus addresses an owner / admin is linking right now."""
-        now = self.clock()
-        extra = set()
+        """Saved connections' (host, port). Addresses being linked are not here: see ``_scope``."""
+        return self._hosts
+
+    def _scope(self, hosts: set):
+        """The LAN addresses an owner / admin is linking, allowed for the requests made inside this block by this
+        thread only (and any the sign-in adds on the way, through its ``allow``)."""
         with self._lock:                      # never held while a connector makes a request
-            for p in self._pending.values():
-                if p["exp"] > now:
-                    extra |= p["hosts"]
-        return self._hosts | extra if extra else self._hosts
+            now = set(hosts)
+        return NET.private_hosts_scope(now)
 
     # ---- connections ----
     @staticmethod
@@ -249,6 +252,10 @@ class MediaServers:
             if hp and sess.get("account_role") in MANAGERS:
                 with self._lock:
                     hosts.add(hp)
+                try:                          # inside a sign-in step: its next requests may reach it
+                    NET.allow_here(*hp)
+                except RuntimeError:
+                    pass                      # outside one: only remembered for its next step
         return allow
 
     def start(self, sess: dict, kind, base_url) -> dict:
@@ -272,7 +279,8 @@ class MediaServers:
         with self._lock:
             self._pending[pid] = entry        # the host must be listed before the first request
         try:
-            public, state = cls.sign_in_start(self.http(cls.label), base_url, device)
+            with self._scope(hosts):
+                public, state = cls.sign_in_start(self.http(cls.label), base_url, device)
         except ConnectorError as e:
             with self._lock:
                 self._pending.pop(pid, None)
@@ -289,7 +297,8 @@ class MediaServers:
                 raise ApiError(404, "no such sign-in (it may have expired)")
         cls = self.kinds[p["kind"]]
         try:
-            linked = cls.sign_in_poll(self.http(cls.label), p["state"], p["device"])
+            with self._scope(p["hosts"]):
+                linked = cls.sign_in_poll(self.http(cls.label), p["state"], p["device"])
         except ConnectorError as e:
             with self._lock:
                 self._pending.pop(pid, None)
@@ -320,19 +329,13 @@ class MediaServers:
         device = "orbit-" + secrets.token_hex(12)
         hosts: set = set()
         self._allow(sess, hosts)(base)
-        pid = "pw-" + secrets.token_urlsafe(12)
-        with self._lock:
-            self._pending[pid] = {"account": sess["account_id"], "kind": kind, "exp": self.clock() + 60, "hosts": hosts,
-                                  "device": device, "state": None}
         try:
-            linked = cls.sign_in_password(self.http(cls.label), base, user, pw, device)
+            with self._scope(hosts):
+                linked = cls.sign_in_password(self.http(cls.label), base, user, pw, device)
         except ConnectorError as e:
             if e.code == 403:
                 self.throttle.fail(key)
             raise ApiError(e.code, e.msg)
-        finally:
-            with self._lock:
-                self._pending.pop(pid, None)
         self.throttle.ok(key)
         return {"connections": self._save(sess, kind, [linked], device)}
 

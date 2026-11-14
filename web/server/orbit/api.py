@@ -74,6 +74,10 @@ class Api:
             ("POST", "/v1/accounts/disable"): lambda c: Reply(A.set_disabled(c.sess, c.body.get("id"),
                                                                             c.body.get("disabled"))),
             ("GET", "/v1/device/playlists"): self._device_playlists,
+            ("POST", "/v1/device/name"): lambda c: Reply(A.set_device_name(c.sess, c.body.get("name"))),
+            ("GET", "/v1/devices"): lambda c: Reply({"devices": A.devices(c.sess)}),
+            ("POST", "/v1/devices/rename"): lambda c: Reply(A.rename_device(c.sess, c.body.get("id"), c.body.get("name"))),
+            ("POST", "/v1/devices/unlink"): self._unlink_device,
             ("GET", "/v1/streams"): lambda c: Reply(self.streams()),
             ("GET", "/v1/progress/shows"): lambda c: Reply(PROG.shows_state(self._series(c))),
             ("POST", "/v1/progress/episodes"): lambda c: Reply(PROG.push_episodes(self._series(c), c.body.get("items"))),
@@ -161,6 +165,10 @@ class Api:
 
     def _change_password(self, c: Call) -> Reply:
         self.acc.change_password(c.sess, c.body.get("current"), c.body.get("password"))
+        return Reply({"ok": True})
+
+    def _unlink_device(self, c: Call) -> Reply:
+        self.acc.unlink_device(c.sess, c.body.get("id"))
         return Reply({"ok": True})
 
     def _revoke(self, c: Call) -> Reply:

@@ -86,7 +86,11 @@ export function openPlayer(opts) {
   }
   async function startEngine(extra = {}) {
     // (a reconnect keeps the slot it has: it never takes one back from another window)
-    if (!opts.local && !extra.reconnect && (await beginStream(what)) === false) return;   // every stream is held by a recording
+    if (!opts.local && !extra.reconnect) {
+      const got = await beginStream(what);
+      if (got === false) return;                    // every stream is held by a recording
+      if (got === 'cancel') { if (cur === s) close(); return; }   // every stream in use and the person kept them
+    }
     if (cur !== s) return;
     let r;
     try {
@@ -286,7 +290,7 @@ export function openPlayer(opts) {
   };
   window.addEventListener('tvbro-replaced', onReplaced);
   video.addEventListener('pause', () => { if (!video.ended && cur === s && !opts.local) { released = true; endStream(); } });
-  video.addEventListener('play', () => { if (released && cur === s) { released = false; beginStream(what); } });
+  video.addEventListener('play', () => { if (released && cur === s) { released = false; beginStream(what).then((got) => { if (got === 'cancel' && cur === s) video.pause(); }); } });
   applyAspect();
   const delay0 = sessionDelay != null ? sessionDelay : (prefs().audioDelayMs || 0);
   if (delay0 > 0 && !env.ios) setAudioDelay(delay0, true);

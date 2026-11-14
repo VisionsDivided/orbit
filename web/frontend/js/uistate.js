@@ -18,4 +18,6 @@ export function uiSave(patch) {
 }
 function flush() { try { localStorage.setItem(KEY, JSON.stringify(uiLoad())); } catch {} }
 window.addEventListener('pagehide', flush);
+// signed out (signout.js): the stored copy is gone; forget the one in memory too, so it is not written back
+window.addEventListener('tvbro-account-cleared', () => { clearTimeout(timer); cache = {}; });
 document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
