@@ -127,8 +127,10 @@ Verified on Windows (no Mac here), with `TVBRO_MAC_VIDEO=sw` paths and the real 
 - `SwRendererTest` (fake libmpv): param layout as mpv reads it, stop order, no render after stop, one buffer set for
   hundreds of frames, and the Compose drawing (a 160 x 120 frame scaled into a 320 x 240 box, colours exact, opaque).
 - `SwMathTest`: stride, render size, buffer layout, the buffer ring, hwdec mapping.
-- Not verified here: the app itself on screen with sw (Windows keeps `wid` by default), and everything that only a Mac
-  shows (below).
+- The app with `TVBRO_MAC_VIDEO=sw` on Windows (`--m3u testdata/test.m3u --play 0 --exit-after 25`, a fresh test
+  config folder): the public HLS test stream played, the log said "sw video: 1464 frames rendered, 1 dropped" (so
+  Compose drew nearly every frame) and the app quit without a crash. The picture itself was not looked at.
+- Not verified here: how it looks and feels on screen, and everything that only a Mac shows (below).
 
 ### Testing the video on the MacBook
 
