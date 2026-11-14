@@ -120,11 +120,14 @@ class WatchDb private constructor(private val ctx: Context) : SQLiteOpenHelper(c
     fun allStates(): Map<String, WatchState> { ensure(); return HashMap(eps) }
 
     /** Orbit sync: a state from the home server, kept with its own time (so it is not sent back as new). */
-    fun putState(key: String, s: WatchState) {
+    fun putState(key: String, s: WatchState, seriesKey: String? = null) {
         ensure()
-        writeEp(key, null, s)
+        writeEp(key, seriesKey, s)
         rev.intValue++
     }
+
+    /** Orbit sync: the series an episode key belongs to ("s|p0|7"), when known. */
+    fun seriesKeyOf(key: String): String? { ensure(); return epSeries[key] }
 
     fun setDur(key: String, ms: Long) {
         ensure()

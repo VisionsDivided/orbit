@@ -135,6 +135,36 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT) {
         }
     }
 
+    /** Episode marks and show summaries of this TV's profile (/v1/progress/shows). */
+    fun showsState(link: OrbitLink): Pair<List<ServerEpisode>, List<ServerShow>> {
+        val j = call(link.server, "/v1/progress/shows", null, link)
+        fun JsonObject.long(k: String) = (this[k] as? JsonPrimitive)?.longOrNull ?: 0L
+        fun JsonObject.bool(k: String) = (this[k] as? JsonPrimitive)?.booleanOrNull ?: false
+        val eps = (j["episodes"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            ServerEpisode(o.str("seriesId") ?: return@mapNotNull null, o.str("epId") ?: return@mapNotNull null,
+                o.long("secs"), o.long("dur"), o.bool("done"), o.long("at"))
+        }
+        val shows = (j["shows"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            val n = (o["next"] as? JsonObject)?.let { x ->
+                ServerNext(x.str("id") ?: return@let null, (x["season"] as? JsonPrimitive)?.intOrNull ?: 0,
+                    (x["num"] as? JsonPrimitive)?.intOrNull ?: 0, x.str("title"))
+            }
+            ServerShow(o.str("id") ?: return@mapNotNull null, o.str("key") ?: return@mapNotNull null, o.str("lastEp"), n,
+                o.bool("finished"), o.bool("hidden"), o.long("at"))
+        }
+        return eps to shows
+    }
+
+    /** Episode changes from this TV; the server keeps the newest per episode. */
+    fun pushEpisodes(link: OrbitLink, items: List<JsonObject>) {
+        for (chunk in items.chunked(500)) {
+            val body = JsonObject(mapOf("items" to kotlinx.serialization.json.JsonArray(chunk)))
+            call(link.server, "/v1/progress/episodes", Json.encodeToString(JsonObject.serializer(), body), link)
+        }
+    }
+
     /** This TV's profile state on the server: My list and resume points (see docs/orbit/API-v1.md, step 4). */
     fun state(link: OrbitLink): JsonObject = call(link.server, "/api/state", null, link)
 

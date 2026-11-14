@@ -169,6 +169,7 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
                 }
                 api.statePut(l, "resume", k, JsonObject(v))
             }
+            syncShows(l, h, watch)
             val t = io.github.kmmarin.tvbro.data.TimeFmt.time(System.currentTimeMillis() / 1000)
             withContext(Dispatchers.Main) { syncStatus = "Synced $t" }
         } catch (e: OrbitError) {
@@ -177,6 +178,33 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
         } catch (e: Exception) {
             withContext(Dispatchers.Main) { syncStatus = "Home server not reachable; will try again" }
         }
+    }
+
+    /**
+     * Show progress: episode marks newest-wins both ways, then the server's show summaries (next episode, finished)
+     * for the TV's Continue watching where the server knows newer. The server recomputes a show's next episode
+     * after changes from here, so the TV gets it on the next sync.
+     */
+    private suspend fun syncShows(l: OrbitLink, h: OrbitHost, watch: WatchDb) {
+        val (serverEps, serverShows) = api.showsState(l)
+        val local = watch.allStates().filterKeys { it.startsWith("e|") }
+        val plan = OrbitSyncLogic.planEpisodes(local, watch::seriesKeyOf, serverEps, Watch.MIN_RESUME_MS)
+        withContext(Dispatchers.Main) { for ((k, v) in plan.toLocal) watch.putState(k, v.first, v.second) }
+        if (plan.toServer.isNotEmpty()) {
+            val items = plan.toServer.map { p ->
+                val meta = withContext(Dispatchers.Main) { h.describe(p.seriesKey) }
+                val s = p.state
+                JsonObject(buildMap {
+                    put("seriesId", JsonPrimitive(p.seriesId)); put("epId", JsonPrimitive(p.epId))
+                    put("secs", JsonPrimitive(if (s.watched) s.durMs / 1000 else s.posMs / 1000)); put("dur", JsonPrimitive(s.durMs / 1000))
+                    put("done", JsonPrimitive(s.watched)); put("at", JsonPrimitive(s.updated))
+                    meta?.get("name")?.let { put("name", it) }; meta?.get("poster")?.let { put("poster", it) }
+                })
+            }
+            api.pushEpisodes(l, items)
+        }
+        val rows = OrbitSyncLogic.planShows(watch.allSeries().associateBy { it.key }, serverShows)
+        withContext(Dispatchers.Main) { for (r in rows) watch.putSeries(r) }
     }
 
     /** Sign-out from the server or unlink: forget the session and remove the playlists that came from the server. */
