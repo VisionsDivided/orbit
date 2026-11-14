@@ -16,10 +16,12 @@ MAX_VALUE = 16 * 1024
 class StateStore:
     def __init__(self, path: str):
         self._lock = threading.Lock()
+        self._last = 0.0  # last "updated" written; see _stamp
         self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("CREATE TABLE IF NOT EXISTS kv (scope TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,"
                         " updated REAL NOT NULL, PRIMARY KEY (scope, key))")
+        self._last = self.db.execute("SELECT COALESCE(MAX(updated), 0) FROM kv").fetchone()[0]
 
     def all(self) -> dict:
         out: dict = {"mylist": [], "resume": {}, "reminders": [], "history": [], "prefs": {}}
@@ -36,6 +38,13 @@ class StateStore:
                 out[scope].append(v)
         return out
 
+    def _stamp(self) -> float:
+        """A strictly increasing 'updated' value (call with the lock held). time.time() can return the
+        same value for writes in quick succession (coarse clocks, e.g. Windows), which made the newest-first
+        order of My list and friends arbitrary."""
+        self._last = max(time.time(), self._last + 1e-6)
+        return self._last
+
     def put(self, scope: str, key: str, value) -> bool:
         if scope not in SCOPES or not key or len(key) > 300:
             return False
@@ -45,7 +54,7 @@ class StateStore:
         with self._lock:
             self.db.execute("INSERT INTO kv(scope, key, value, updated) VALUES (?,?,?,?) "
                             "ON CONFLICT(scope, key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
-                            (scope, key, raw, time.time()))
+                            (scope, key, raw, self._stamp()))
             # keep each scope bounded (oldest go first)
             self.db.execute("DELETE FROM kv WHERE scope=? AND key NOT IN (SELECT key FROM kv WHERE scope=? "
                             "ORDER BY updated DESC LIMIT ?)", (scope, scope, SCOPES[scope]))
