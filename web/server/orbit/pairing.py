@@ -75,6 +75,28 @@ class Pairings:
             self._p[_key(pair_id)] = {"code": code, "device": dev, "client": client, "exp": exp}
         return {"pairId": pair_id, "code": pretty(code), "expires": int(exp), "interval": POLL_EVERY}
 
+    def tick(self):
+        """Called on every API request: expired pairings (and sessions approved but never collected) end on time."""
+        if self._p:
+            with self._lock:
+                self._prune()
+
+    def peek(self, sess: dict, code, client: str) -> dict:
+        """What is waiting behind a code (device name, address, age), so the person approving sees which TV it is
+        before it gets their account. Wrong codes count like wrong approvals."""
+        try:
+            self.throttle.check(client)
+        except Wait as e:
+            raise ApiError(429, "too many wrong codes", e.retry_after)
+        want = normalize(code)
+        with self._lock:
+            self._prune()
+            hit = next((p for p in self._p.values() if p["code"] == want and not p.get("sid")), None) if len(want) == CODE_LEN else None
+        if hit is None:
+            self.throttle.fail(client)
+            raise ApiError(404, "no TV is waiting with that code (it may have expired)")
+        return {"device": hit["device"], "address": hit["client"], "waitingSecs": int(self.clock() - (hit["exp"] - TTL))}
+
     def poll(self, pair_id) -> dict:
         """{"status": "pending"} or {"status": "approved", "session", "csrf", "me"} (once)."""
         if not isinstance(pair_id, str) or not pair_id:

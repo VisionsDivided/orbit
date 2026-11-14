@@ -183,6 +183,9 @@ export async function approveTvDialog(code) {
   (x) => (x.code.replace(/[^0-9a-z]/gi, '').length === 8 ? null : 'The code has 8 letters and digits'));
   if (!v) return false;
   try {
+    // first see which device is waiting behind the code (a link from someone else could be any device)
+    const w = await post('/v1/pair/peek', { code: v.code });
+    if (!confirm(`Link "${w.device}" (from ${w.address}, waiting ${w.waitingSecs} s) to your account? Only approve a TV you can see showing this code.`)) return false;
     const r = await post('/v1/pair/approve', { code: v.code, profileId: v.profile });
     toast(`${r.device} is linked`);
     return true;

@@ -75,6 +75,9 @@ class Api:
             ("POST", "/v1/progress/episodes"): lambda c: Reply(PROG.push_episodes(self._series(c), c.body.get("items"))),
             ("POST", "/v1/pair/start"): lambda c: Reply(PR.start(c.body.get("device"), c.client)),
             ("POST", "/v1/pair/poll"): lambda c: Reply(PR.poll(c.body.get("pairId"))),
+            ("POST", "/v1/pair/peek"): lambda c: Reply(PR.peek(c.sess, c.body.get("code"), c.client)),
+            ("POST", "/v1/auth/password"): self._change_password,
+            ("POST", "/v1/accounts/password"): lambda c: Reply(A.reset_password(c.sess, c.body.get("id"), c.body.get("password"))),
             ("POST", "/v1/pair/approve"): lambda c: Reply(PR.approve(c.sess, c.body.get("code"), c.body.get("profileId"),
                                                                     c.client)),
         }
@@ -85,6 +88,7 @@ class Api:
         self.routes = r
 
     def handle(self, call: Call) -> Reply:
+        self.pair.tick()
         fn = self.routes.get((call.method, call.path))
         if fn is None:
             return Reply({"error": "not found"}, 404)
@@ -135,6 +139,10 @@ class Api:
         """Linked TVs only (never a browser): the playlists to play directly from the provider."""
         if c.sess.get("session_kind") != "tv":
             return Reply({"error": "only a linked TV can fetch the playlists"}, 403)
+        # the playlists carry the provider login: only TVs linked to an owner or admin account get them (a member
+        # could otherwise "link" a script with their own approval and read the login)
+        if c.sess.get("account_role") not in ("owner", "admin"):
+            return Reply({"error": "ask the owner or an admin to link this TV to their account to use the household's playlists"}, 403)
         return Reply({"playlists": self.playlists()})
 
     @staticmethod
@@ -142,6 +150,10 @@ class Api:
         if isinstance(out, Raw):
             return Reply({}, raw=out.body, ctype=out.ctype, headers=out.headers)
         return Reply(out)
+
+    def _change_password(self, c: Call) -> Reply:
+        self.acc.change_password(c.sess, c.body.get("current"), c.body.get("password"))
+        return Reply({"ok": True})
 
     def _revoke(self, c: Call) -> Reply:
         self.acc.revoke(c.sess, c.body.get("id"))
