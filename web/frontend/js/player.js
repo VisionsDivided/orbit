@@ -4,7 +4,7 @@
 // Quick settings: video quality, audio track, audio delay (Web Audio DelayNode), subtitles /
 // captions, aspect, sleep timer. Clock top-right.
 
-import { api, setResume, getResume, beginStream, endStream, streamStillOurs } from './api.js';
+import { api, setResume, getResume, beginStream, endStream, streamStillOurs, inMyList, toggleMyList } from './api.js';
 import { LiveRecovery, watchStall } from './livefix.js';
 import { unlock } from './parental.js';
 import { openLiveExternally } from './external.js';
@@ -402,6 +402,13 @@ export function openPlayer(opts) {
     if (opts.vod && fileUrl) items.push({ label: 'Open in app', value: 'VLC · Infuse', act: openInApp });
     if (opts.channel && !opts.catchup && !opts.local) items.push({ label: 'Open in app', value: 'VLC · link · .m3u', act: () => openLiveExternally(opts.channel, () => video.pause()) });
     if (opts.channel && !opts.catchup && !opts.local) items.push({ label: '⏺ Record', value: s.recId ? 'recording' : 'on the server', act: recordNow });
+    if (opts.channel && !opts.local) {
+      const c = opts.channel, fav = inMyList(c.key);
+      items.push({ label: fav ? '★ Favourited' : '☆ Favourite', value: fav ? 'remove' : 'add to ★ Favourites', act: () => {
+        const on = toggleMyList({ key: c.key, kind: 'live', name: c.name, logo: c.logo, ch: c });
+        flash(on ? '★ Added to Favourites' : 'Removed from Favourites');
+      } });
+    }
     if (pipOk()) items.push({ label: 'Picture in picture', value: inPip() ? 'on' : 'off', act: togglePip });
     items.push({ label: document.fullscreenElement ? 'Window' : 'Full screen', value: 'F', act: toggleFs });
     return items;

@@ -1,8 +1,9 @@
 // Copyright 2026 The tvBro authors. SPDX-License-Identifier: Apache-2.0
 // Live TV (direction 5, like the TV app): a sub-menu row (Channels · Guide · Recordings · My list), an info block
-// for the channel under the cursor with the live preview top right, the groups as tabs (★ Favourites, All
-// channels, News…), a time-proportional guide grid with a now line (virtualised rows, guide paged from the backend)
-// and the colour-key legend. Channels shows the info block; Guide gives the grid the whole screen.
+// for the channel under the cursor (compact) with the live preview top right, quick-select tabs (★ Favourites, All,
+// Recent, the profile's pinned groups, "All groups ☰" which opens a side menu with search, folders and pins), a
+// time-proportional guide grid with a now line (virtualised rows, guide paged from the backend) and the colour-key
+// legend. Channels shows the info block; Guide gives the grid the whole screen.
 // Keys: Up from the guide's first row reaches the group tabs, then the sub-menu row, then the top bar.
 
 import { api, cacheGet, cacheSet, myList, inMyList, toggleMyList } from './api.js';
@@ -18,16 +19,21 @@ import { hasReminder, toggleReminder } from './reminders.js';
 import { isUnlocked, setLock, unlock } from './parental.js';
 import { guideMapDialog } from './epgpick.js';
 import { openLiveExternally } from './external.js';
-import { legend, colorKey } from './ui5.js';
+import { legend, colorKey, COLOR_KEY } from './ui5.js';
+import * as LG from './livegroups.js';
 
 const PAGE = 200;
 let ROW_H = 52, LABEL_W = 240, narrow = false;     // both scale with the window on wide screens (layout())
 
 // remembered across screen switches
 // (group, focused row, scroll position and whether the guide or the group list had focus)
-const mem = { group: null, row: 0, winStart: null, follow: true, scroll: 0, zone: 'grid' };
-{ const u = uiLoad().tv; if (u) { mem.group = u.group != null ? u.group : null; mem.row = u.row | 0; mem.scroll = u.scroll | 0; mem.zone = u.zone === 'groups' || u.zone === 'label' ? u.zone : 'grid'; } }
-const saveMem = () => uiSave({ tv: { group: mem.group, row: mem.row, scroll: mem.scroll, zone: mem.zone } });
+// (extra: the group last picked in the "All groups" side menu, shown as a tab while it is not pinned)
+const mem = { group: null, row: 0, winStart: null, follow: true, scroll: 0, zone: 'grid', extra: null };
+{ const u = uiLoad().tv; if (u) { mem.group = u.group != null ? u.group : null; mem.row = u.row | 0; mem.scroll = u.scroll | 0; mem.zone = u.zone === 'groups' || u.zone === 'label' ? u.zone : 'grid'; mem.extra = u.extra || null; } }
+const saveMem = () => uiSave({ tv: { group: mem.group, row: mem.row, scroll: mem.scroll, zone: mem.zone, extra: mem.extra } });
+/** The profile's pinned groups (full names, most recent first; server prefs, shared with the TV). */
+const pinsOf = () => LG.normPins(prefs()[LG.PIN_PREF]);
+const recentOf = () => { const r = prefs()[LG.RECENT_PREF]; return Array.isArray(r) ? r.filter((x) => x && x.key) : []; };
 const guideCache = new Map();   // channel key -> { chunks: Map<chunk, progs[]>, progs: merged[] }
 
 export function favKeys() { return myList().filter((x) => x.kind === 'live').map((x) => x.key); }
@@ -70,7 +76,17 @@ export function tvScreen(main, nav) {
   const nowPill = h('div', { class: 'now-pill', hidden: true });
   ruler.append(nowPill);
   const right = h('div', { class: 'tvr' }, header, gcol, ruler, bodyWrap);
-  root.append(sub, right); main.append(root);
+  // the "All groups" side menu: a search field (groups and channels), the groups folded by the text before " | ",
+  // a pin on each group (the pinned ones become tabs)
+  const gmInput = h('input', { class: 'gm-q', type: 'search', placeholder: 'Search groups and channels', 'aria-label': 'Search groups and channels', autocomplete: 'off', spellcheck: 'false', enterkeyhint: 'search' });
+  const gmList = h('div', { class: 'gm-list', role: 'listbox', 'aria-label': 'Groups' });
+  const gmPanel = h('div', { class: 'gm-panel', role: 'dialog', 'aria-label': 'All groups' },
+    h('div', { class: 'gm-h' }, h('span', {}, 'All groups'), h('button', { class: 'gm-x', type: 'button', title: 'Close (Esc)', onclick: () => closeMenu(true) }, '✕')),
+    h('div', { class: 'gm-search' }, gmInput), gmList,
+    h('div', { class: 'gm-keys' }, h('button', { type: 'button', class: 'ck-k', onclick: () => pinFocused() }, h('i', { class: 'kr' }), 'Pin / unpin'),
+      h('span', { class: 'hn' }, h('b', {}, 'OK'), ' Choose   ', h('b', {}, 'Esc'), ' Close')));
+  const gmenu = h('div', { class: 'gmenu', hidden: true }, h('div', { class: 'gm-scrim', onclick: () => closeMenu(true) }), gmPanel);
+  root.append(sub, right, gmenu); main.append(root);
 
   const preview = new PreviewPlayer(pvVideo, () => { pvBox.querySelector('.pv-off').textContent = 'Playing in another window · click to play here'; },
     (msg) => { pvNote.textContent = msg || ''; pvNote.hidden = !msg; });
@@ -96,9 +112,13 @@ export function tvScreen(main, nav) {
   // the household's layout changed (rename / hide / own groups): reload the lists
   async function onLayout() {
     if (!alive) return;
-    try { const g = (await api.groups()).groups; cacheSet('groups', g); groups = g; gi = Math.max(0, groups.findIndex((x) => x.id === mem.group)); renderGroups(); loadGroup(groups[gi] ? groups[gi].id : '__all'); } catch {}
+    try { const g = (await api.groups()).groups; cacheSet('groups', g); groups = g; if (!groupExists(mem.group)) mem.group = '__all'; renderGroups(); loadGroup(mem.group); if (menuOpen) renderMenu(); } catch {}
   }
   window.addEventListener('tvbro-layout', onLayout);
+  // the profile's state came back from the server (every minute, or the tab shown again): pins set on the TV
+  // show up as tabs
+  const onState = () => { if (!alive) return; renderGroups(); if (menuOpen) renderMenu(); };
+  window.addEventListener('tvbro-state', onState);
   const onUnlocked = () => { if (alive) { renderRows(); renderHeader(); } };
   window.addEventListener('tvbro-unlocked', onUnlocked);
   // a channel got another guide channel (manual mapping): its rows load again (and again while the
@@ -111,42 +131,236 @@ export function tvScreen(main, nav) {
     if (e.detail.syncing) for (const ms of [2000, 5000, 10000, 20000, 40000]) epgTimers.push(setTimeout(again, ms));
   };
   window.addEventListener('tvbro-epgmap', onEpgMap);
+  const SPECIAL = ['__fav', '__all', '__recent'];
+  const groupExists = (id) => SPECIAL.includes(id) || groups.some((g) => g.id === id);
   function setGroups(gs) {
     const first = !groups.length;
     groups = gs;
-    gi = Math.max(0, groups.findIndex((g) => g.id === mem.group));
+    if (!groupExists(mem.group)) mem.group = '__all';
+    // a group opened from the side menu (or on another visit) stays reachable as a tab
+    if (!SPECIAL.includes(mem.group) && !pinsOf().includes((groups.find((g) => g.id === mem.group) || {}).name)) mem.extra = mem.group;
     renderGroups();
-    if (first) loadGroup(groups[gi] ? groups[gi].id : '__all');
+    if (first) loadGroup(mem.group);
+    if (menuOpen) renderMenu();
   }
+  /** The quick-select tabs: ★ Favourites · All · Recent · the pinned groups · (the group picked in the menu) · All groups ☰ */
+  let tabs = [];
+  function computeTabs() { tabs = LG.quickTabs(groups, pinsOf(), mem.extra && groupExists(mem.extra) ? mem.extra : null); return tabs; }
+  function tabIndexOf(id) { const i = tabs.findIndex((t) => t.id === id); return i; }
   function renderGroups() {
+    computeTabs();
+    if (gi >= tabs.length) gi = tabs.length - 1;
     glist.innerHTML = '';
-    groups.forEach((g, i) => {
-      const n = g.id === '__fav' ? favKeys().length : g.count;
-      const name = g.id === '__fav' ? '★ ' + g.name.replace(/^★\s*/, '') : g.name;
-      const b = h('button', { class: 'gitem' + (g.id === mem.group ? ' sel' : '') + (zone === 'groups' && i === gi ? ' kf' : ''), 'data-i': i, tabindex: '-1' },
-        h('span', { class: 'gname' }, (g.locked ? '🔒 ' : '') + name), n != null ? h('span', { class: 'count' }, String(n)) : null);
-      b.onclick = () => { gi = i; zone = 'groups'; selectGroup(g.id); };
+    tabs.forEach((t, i) => {
+      const g = t.group || {};
+      const n = t.id === '__fav' ? favKeys().length : t.id === '__recent' ? recentOf().length : g.count;
+      const sp = t.kind === 'pin' || t.kind === 'sel' ? LG.splitGroup(t.name) : null;
+      const label = t.kind === 'menu' ? [h('span', { class: 'gname' }, t.name), h('span', { class: 'gm-ic', 'aria-hidden': 'true' }, '☰')]
+        : [h('span', { class: 'gname' }, (g.locked ? '🔒 ' : ''), sp ? h('span', { class: 'gpre' }, sp.folder + ' · ') : null, sp ? sp.short : t.name),
+          t.kind === 'pin' ? h('span', { class: 'gpin', title: 'Pinned' }, '📌') : null];
+      const b = h('button', { class: 'gitem' + (t.kind === 'menu' ? ' gmenu-tab' : '') + (t.id === mem.group ? ' sel' : '') + (zone === 'groups' && i === gi ? ' kf' : ''), 'data-i': i, tabindex: '-1', title: t.kind === 'menu' ? 'All groups: search, folders, pins' : t.name },
+        ...label, n != null && t.kind !== 'menu' ? h('span', { class: 'count' }, String(n)) : null);
+      b.onclick = () => { gi = i; zone = 'groups'; if (t.kind === 'menu') openMenu(); else selectGroup(t.id); };
       glist.append(b);
     });
     const kf = glist.querySelector('.kf') || glist.querySelector('.sel'); if (kf) kf.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     renderSub();
   }
   function selectGroup(id) {
+    if (id === '__menu') { openMenu(); return; }
     if (id !== mem.group) { mem.group = id; mem.row = 0; mem.scroll = 0; setPref('lastGroup', id); loadGroup(id); }
+    computeTabs(); gi = Math.max(0, tabIndexOf(mem.group));
     renderGroups();
   }
   const selectGroupSoon = debounce((id) => selectGroup(id), 300);
+
+  // ---------- the "All groups" side menu ----------
+  // Rows: the search field (mi = -1), then folders / groups (a folder opens in place) and, while searching, the
+  // channels whose name matches. The field keeps the DOM focus on keyboards (typing goes there); the rows have
+  // a drawn focus (mi). Red (or the pin button) pins / unpins the focused group.
+  let menuOpen = false, mi = -1, mrows = [], chanHits = null, chanTotal = 0, searchTok = 0;
+  const openFolders = new Set();
+  const coarse = () => !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  function openMenu() {
+    if (menuOpen) return;
+    menuOpen = true; gmenu.hidden = false; root.classList.add('gm-on');
+    mi = -1; gmInput.value = ''; chanHits = null;
+    // open on the folder of the group shown now, with that group focused
+    const cur = groups.find((g) => g.id === mem.group), sp = cur && LG.splitGroup(cur.name);
+    if (sp) openFolders.add(sp.folder.toLowerCase());
+    mrows = menuRows();
+    const at = mrows.findIndex((r) => r.kind === 'group' && r.group.id === mem.group);
+    if (at >= 0) mi = at;
+    renderMenu();
+    if (!coarse()) gmInput.focus({ preventScroll: true });
+  }
+  function closeMenu(back) {
+    if (!menuOpen) return;
+    menuOpen = false; gmenu.hidden = true; root.classList.remove('gm-on');
+    if (document.activeElement === gmInput) gmInput.blur();
+    if (back) { zone = 'groups'; computeTabs(); gi = Math.max(0, tabs.findIndex((t) => t.kind === 'menu')); renderGroups(); renderRows(); }
+  }
+  function menuRows() {
+    const q = gmInput.value.trim();
+    const tree = LG.foldGroups(groups);
+    const out = [];
+    const groupRow = (g, label, depth) => ({ kind: 'group', group: g, label, depth });
+    if (!q) {
+      for (const n of tree) {
+        if (n.type === 'group') { out.push(groupRow(n.group, n.label, 0)); continue; }
+        const open = openFolders.has(n.name.toLowerCase());
+        out.push({ kind: 'folder', node: n, open });
+        if (open) for (const x of n.groups) out.push(groupRow(x.group, x.label, 1));
+      }
+      return out;
+    }
+    const hits = LG.filterTree(tree, q, (chanHits || []).map((c) => c.group).filter(Boolean));
+    if (hits.length) out.push({ kind: 'head', text: 'Groups' });
+    for (const n of hits) {
+      if (n.type === 'group') { out.push(groupRow(n.group, n.label, 0)); continue; }
+      out.push({ kind: 'folder', node: n, open: true });
+      for (const x of n.groups) out.push(groupRow(x.group, x.label, 1));
+    }
+    if (chanHits && chanHits.length) {
+      out.push({ kind: 'head', text: 'Channels' + (chanTotal > chanHits.length ? ` (first ${chanHits.length} of ${chanTotal})` : '') });
+      for (const c of chanHits) out.push({ kind: 'chan', ch: c });
+    }
+    if (!out.length) out.push({ kind: 'head', text: chanHits ? 'Nothing found' : 'Searching…' });
+    return out;
+  }
+  function renderMenu() {
+    mrows = menuRows();
+    if (mi >= mrows.length) mi = mrows.length - 1;
+    if (mi >= 0 && mrows[mi].kind === 'head') mi = nextRow(mi, 1);
+    if (mi >= 0 && mrows[mi].kind === 'head') mi = -1;
+    const pins = pinsOf();
+    gmList.innerHTML = '';
+    gmInput.classList.toggle('kf', mi < 0);
+    mrows.forEach((r, i) => {
+      if (r.kind === 'head') { gmList.append(h('div', { class: 'gm-head' }, r.text)); return; }
+      const cls = 'gm-row' + (i === mi ? ' kf' : '');
+      let el;
+      if (r.kind === 'folder') {
+        el = h('button', { class: cls + ' gm-folder' + (r.open ? ' open' : ''), type: 'button', tabindex: '-1', 'aria-expanded': String(!!r.open) },
+          h('span', { class: 'gm-chev', 'aria-hidden': 'true' }, '›'), h('span', { class: 'gm-name' }, r.node.name), h('span', { class: 'gm-n' }, String(r.node.count)));
+      } else if (r.kind === 'group') {
+        const g = r.group, pinned = pins.includes(g.name), cur = g.id === mem.group;
+        el = h('button', { class: cls + ' gm-group' + (r.depth ? ' sub' : '') + (cur ? ' cur' : ''), type: 'button', tabindex: '-1', title: g.name },
+          h('span', { class: 'gm-name' }, (g.locked ? '🔒 ' : '') + r.label), g.count != null ? h('span', { class: 'gm-n' }, String(g.count)) : null,
+          h('span', { class: 'gm-pin' + (pinned ? ' on' : ''), role: 'button', 'data-pin': '1', title: pinned ? 'Unpin (remove the tab)' : 'Pin as a tab', 'aria-label': (pinned ? 'Unpin ' : 'Pin ') + g.name, 'aria-pressed': String(pinned) }, pinned ? '📌' : '＋'));
+      } else {
+        const c = r.ch;
+        el = h('button', { class: cls + ' gm-chan', type: 'button', tabindex: '-1', title: c.name },
+          c.logo ? h('img', { class: 'gm-logo', alt: '', loading: 'lazy', src: api.img(c.logo) }) : h('span', { class: 'gm-logo' }),
+          h('span', { class: 'gm-name' }, c.name), h('span', { class: 'gm-grp' }, c.group || ''));
+      }
+      el.dataset.i = i;
+      el.onclick = (ev) => { mi = i; if (ev.target.closest('[data-pin]')) { pinFocused(); return; } menuAct(); };
+      gmList.append(el);
+    });
+    const kf = gmList.querySelector('.kf'); if (kf) kf.scrollIntoView({ block: 'nearest' });
+    else if (mi < 0) gmList.scrollTop = 0;
+  }
+  function nextRow(from, d) {
+    for (let i = from + d; i >= 0 && i < mrows.length; i += d) if (mrows[i].kind !== 'head') return i;
+    return d < 0 ? -1 : from;
+  }
+  function menuAct() {
+    const r = mrows[mi];
+    if (!r || r.kind === 'head') { const first = nextRow(-1, 1); if (first >= 0 && mrows[first] && mrows[first].kind !== 'head') { mi = first; menuAct(); } return; }
+    if (r.kind === 'folder') {
+      if (gmInput.value.trim()) return;      // while searching, folders stay open
+      const k = r.node.name.toLowerCase();
+      if (openFolders.has(k)) openFolders.delete(k); else openFolders.add(k);
+      renderMenu(); return;
+    }
+    if (r.kind === 'group') { chooseGroup(r.group.id); return; }
+    if (r.kind === 'chan') chooseChannel(r.ch);
+  }
+  /** A group from the menu: its channels in the guide, the panel closes, the focus goes to the guide. */
+  function chooseGroup(id) {
+    const g = groups.find((x) => x.id === id);
+    if (g && !pinsOf().includes(g.name)) mem.extra = id;
+    closeMenu(false);
+    selectGroup(id); toLabel();
+  }
+  /** A channel found by the search: shown in its own group (All when it has none), focused. */
+  function chooseChannel(c) {
+    const g = groups.find((x) => x.name === c.group);
+    const id = g ? g.id : '__all';
+    if (g && !pinsOf().includes(g.name)) mem.extra = id;
+    closeMenu(false);
+    zone = 'label'; focusProg = null;
+    if (id !== mem.group) { focusKey = c.key; mem.group = id; mem.row = 0; mem.scroll = -1; setPref('lastGroup', id); computeTabs(); gi = Math.max(0, tabIndexOf(id)); renderGroups(); loadGroup(id); return; }
+    const i = chans.findIndex((x) => x && x.key === c.key);
+    if (i >= 0) { mem.row = i; scrollRowIntoView(); }
+    renderGroupsKf(); renderRows(); renderHeader();
+  }
+  function pinFocused() {
+    const r = mrows[mi];
+    if (!r || r.kind !== 'group') { toast('Move to a group to pin it'); return; }
+    const name = r.group.name, was = pinsOf().includes(name), next = LG.togglePin(pinsOf(), name);
+    setPref(LG.PIN_PREF, next);
+    toast(was ? 'Unpinned: ' + name : `Pinned as a tab: ${name}` + (next.length >= LG.MAX_PINS ? ` (at most ${LG.MAX_PINS})` : ''));
+    if (!was && mem.extra === r.group.id) mem.extra = null;
+    renderGroups(); renderMenu();
+  }
+  const searchSoon = debounce(async () => {
+    const q = gmInput.value.trim(), tok = ++searchTok;
+    if (!q) { chanHits = null; renderMenu(); return; }
+    try {
+      const r = await api.channels('__all', 1, q, 40);
+      if (tok !== searchTok || !menuOpen) return;
+      chanHits = r.items || []; chanTotal = r.total || chanHits.length;
+    } catch { if (tok !== searchTok) return; chanHits = []; chanTotal = 0; }
+    renderMenu();
+  }, 250);
+  gmInput.addEventListener('input', () => { mi = -1; if (!gmInput.value.trim()) chanHits = null; renderMenu(); searchSoon(); });
+  /** Keys while the menu is open (from the field or from the screen). True when handled. */
+  function menuKey(e) {
+    const k = e.key;
+    if (k === 'Escape' || k === 'GoBack' || k === 'BrowserBack') { closeMenu(true); return true; }
+    if (COLOR_KEY[k] === 'red') { pinFocused(); return true; }
+    if (k === 'ArrowDown') { mi = nextRow(mi, 1); renderMenu(); return true; }
+    if (k === 'ArrowUp') { mi = mi <= 0 ? -1 : nextRow(mi, -1); renderMenu(); if (mi < 0 && !coarse()) gmInput.focus({ preventScroll: true }); return true; }
+    if (k === 'PageDown' || k === 'PageUp') { for (let n = 0; n < 8; n++) mi = k === 'PageDown' ? nextRow(mi, 1) : nextRow(mi, -1); renderMenu(); return true; }
+    if (k === 'Enter') { if (mi < 0 && !gmInput.value.trim()) { mi = nextRow(-1, 1); renderMenu(); return true; } menuAct(); return true; }
+    if (mi >= 0 && (k === 'ArrowRight' || k === 'ArrowLeft')) {
+      const r = mrows[mi];
+      if (r.kind === 'folder' && !gmInput.value.trim()) {
+        const key = r.node.name.toLowerCase();
+        if (k === 'ArrowRight') { if (!openFolders.has(key)) openFolders.add(key); else mi = nextRow(mi, 1); }
+        else openFolders.delete(key);
+        renderMenu(); return true;
+      }
+      if (k === 'ArrowLeft' && r.kind === 'group' && r.depth) {     // back to its folder
+        for (let i = mi - 1; i >= 0; i--) if (mrows[i].kind === 'folder') { mi = i; break; }
+        renderMenu();
+      }
+      return true;
+    }
+    // a letter typed while a row has the focus goes to the search field
+    if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && document.activeElement !== gmInput) { mi = -1; gmInput.focus({ preventScroll: true }); renderMenu(); return false; }
+    return false;
+  }
+  gmInput.addEventListener('keydown', (e) => {
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && mi < 0) return;     // the caret moves in the text
+    if (menuKey(e)) { e.preventDefault(); e.stopPropagation(); }
+  });
 
   async function loadGroup(id) {
     const tok = ++groupToken;
     chans = []; total = 0; loadingPages.clear(); rows.forEach((r) => r.remove()); rows.clear();
     empty.hidden = true;
-    if (id === '__fav') {
-      const keys = favKeys();
-      // show stored copies immediately, then refresh from the backend
-      chans = myList().filter((x) => x.kind === 'live').map((x) => x.ch || { key: x.key, name: x.name, logo: x.logo });
-      total = chans.length; layout();
-      if (keys.length) try { const r = await api.channelsByKeys(keys); if (tok === groupToken) { chans = r.items; total = chans.length; layout(); } } catch {}
+    if (id === '__fav' || id === '__recent') {
+      // show stored copies immediately, then refresh from the backend (Recent: the last channels watched)
+      const stored = id === '__fav' ? myList().filter((x) => x.kind === 'live').map((x) => x.ch || { key: x.key, name: x.name, logo: x.logo }) : recentOf();
+      const keys = stored.map((c) => c.key);
+      chans = stored.slice(); total = chans.length; layout();
+      if (keys.length) try {
+        const r = await api.channelsByKeys(keys);
+        if (tok === groupToken) { const by = new Map(r.items.map((c) => [c.key, c])); chans = keys.map((k) => by.get(k)).filter(Boolean); total = chans.length; layout(); }
+      } catch {}
     } else {
       const ck = 'chan:' + id + ':1';
       const cached = await cacheGet(ck);
@@ -155,7 +369,7 @@ export function tvScreen(main, nav) {
       try { const r = await api.channels(id, 1, '', PAGE); if (tok !== groupToken) return; cacheSet(ck, r); applyPage(1, r); }
       catch (e) { if (!cached) { empty.hidden = false; empty.textContent = 'Could not load channels: ' + e.message; } }
     }
-    if (!total) { empty.hidden = false; empty.textContent = id === '__fav' ? 'No favourite channels yet. Press F on a channel to add it.' : 'No channels in this group.'; }
+    if (!total) { empty.hidden = false; empty.textContent = id === '__fav' ? 'No favourite channels yet. Press F (or the ☆ next to a channel) to add one.' : id === '__recent' ? 'No channels watched yet.' : 'No channels in this group.'; }
     if (focusKey) { const i = chans.findIndex((c) => c && c.key === focusKey); if (i >= 0) mem.row = i; focusKey = null; mem.scroll = -1; }
     mem.row = Math.min(mem.row, Math.max(0, total - 1));
     // back to the same place: the remembered scroll position if the focused row is in it
@@ -177,11 +391,12 @@ export function tvScreen(main, nav) {
       renderGroupsKf(); renderRows(); renderHeader();
       return;
     }
-    const g = (play.groupId && groups.find((x) => x.id === play.groupId)) || groups.find((x) => x.name === pc.group) || groups.find((x) => x.id === '__all');
-    if (!g || g.id === mem.group) return;
-    mem.group = g.id; mem.row = play.groupId === g.id && play.row != null ? play.row : 0; mem.scroll = -1; zone = 'grid';
-    gi = Math.max(0, groups.indexOf(g)); focusKey = pc.key;
-    renderGroups(); loadGroup(g.id);
+    const gid = (play.groupId && groupExists(play.groupId) && play.groupId) || (groups.find((x) => x.name === pc.group) || {}).id || '__all';
+    if (gid === mem.group) return;
+    mem.group = gid; mem.row = play.groupId === gid && play.row != null ? play.row : 0; mem.scroll = -1; zone = 'grid';
+    if (!SPECIAL.includes(gid) && !pinsOf().includes((groups.find((x) => x.id === gid) || {}).name)) mem.extra = gid;
+    focusKey = pc.key;
+    renderGroups(); gi = Math.max(0, tabIndexOf(gid)); loadGroup(gid);
   }
   function applyPage(page, r) {
     total = r.total;
@@ -192,7 +407,7 @@ export function tvScreen(main, nav) {
     layout();
   }
   function ensurePages(first, last) {
-    if (mem.group === '__fav') return;
+    if (mem.group === '__fav' || mem.group === '__recent') return;
     for (let i = first; i <= last; i++) {
       if (i >= total || chans[i]) continue;
       const page = Math.floor(i / PAGE) + 1;
@@ -247,7 +462,8 @@ export function tvScreen(main, nav) {
     root.classList.toggle('narrow', narrow);
     // wide screens: the TV's proportions (a row is 80 px and the channel column 390 px of 1920)
     const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 10;
-    const rowH = narrow ? 52 : Math.max(52, Math.round(8 * rem));
+    // Channels (info block above): 64 px rows of 1080, so at least 8 fit; Guide alone keeps 80 px
+    const rowH = narrow ? 52 : Math.max(44, Math.round((root.classList.contains('guide-only') ? 8 : 6.4) * rem));
     if (rowH !== ROW_H) { ROW_H = rowH; rows.forEach((r) => r.remove()); rows.clear(); }
     root.style.setProperty('--rowh', ROW_H + 'px');
     LABEL_W = narrow ? 118 : Math.max(240, Math.round(39 * rem)); root.style.setProperty('--lw', LABEL_W + 'px');
@@ -279,7 +495,7 @@ export function tvScreen(main, nav) {
     if (id === 'recordings' || id === 'mylist') { location.hash = id; return; }
     root.classList.toggle('guide-only', id === 'guide');
     uiSave({ tvGuide: id === 'guide' });
-    si = i; layout(); renderRuler(); renderRows(); renderHeader(); renderSub();
+    si = i; layout(); scrollRowIntoView(); renderRuler(); renderRows(); renderHeader(); renderSub();
   }
 
   function renderRuler() {
@@ -374,26 +590,30 @@ export function tvScreen(main, nav) {
     const st = p ? G.progState(p, now, c) : null;
     const isCur = !!(play.playing && play.playing.key === c.key);
     const num = chanNum(c, mem.row);
+    // compact (so more guide rows fit): channel line with the Favourite button, a one-line title, time + progress
+    // + time left + next on one line, a one-line description
+    const fav = inMyList(c.key);
+    const flags = [c.catchup ? `⟲ Catch-up ${c.catchupDays || ''}d` : null, isCur ? (playerOpen ? '▶ Playing' : '▶ In the preview') : null].filter(Boolean);
     info.append(h('div', { class: 'hd-ch' },
       c.logo ? h('img', { class: 'hd-logo', alt: '', src: api.img(c.logo) }) : h('span', { class: 'hd-logo' }),
       h('span', { class: 'hd-chname' }, (num ? num + ' · ' : '') + c.name),
       st === 'now' ? h('span', { class: 'live-pill' }, 'LIVE') : null,
-      c.locked ? h('span', { class: 'hd-flag', title: 'Locked (parental PIN)' }, '🔒') : null));
+      c.locked ? h('span', { class: 'hd-flag', title: 'Locked (parental PIN)' }, '🔒') : null,
+      h('button', { class: 'hd-fav' + (fav ? ' on' : ''), type: 'button', tabindex: '-1', 'aria-pressed': String(fav), title: fav ? 'Remove from Favourites (F)' : 'Add to Favourites (F)',
+        onclick: () => { toggleFavChannel(c); renderRows(); renderHeader(); renderGroups(); } }, fav ? '★ Favourited' : '☆ Favourite'),
+      flags.length ? h('span', { class: 'hd-flags' }, flags.join('   ')) : null));
     info.append(h('div', { class: 'hd-title' }, p ? p.title : (progs ? 'No guide data' : 'Loading guide…')));
     if (p) {
       const pr = G.progress(p, now);
       const when = st === 'now' ? `${pr.minLeft} min left` : st === 'future' ? (fmtDate(p.start) + ' · starts in ' + Math.ceil((p.start - now) / 60) + ' min')
         : st === 'catchup' ? 'finished · catch-up available' : 'finished';
       const nx = G.nextProg(progs || [], p);
-      info.append(h('div', { class: 'hd-time' }, h('span', {}, `${fmtTime(p.start)} – ${fmtTime(p.stop)}`), h('span', { class: 'hd-left' }, when),
-        nx ? h('span', { class: 'hd-next' }, `Next: ${fmtTime(nx.start)} ${nx.title}`) : null));
-      const flags = [inMyList(c.key) ? '★ Favourite' : null, c.catchup ? `⟲ Catch-up ${c.catchupDays || ''}d` : null, isCur ? (playerOpen ? '▶ Playing' : '▶ In the preview') : null].filter(Boolean);
       const bar = st === 'now' ? h('div', { class: 'progress' }, h('i')) : null;
       if (bar) bar.firstChild.style.width = (pr.frac * 100).toFixed(1) + '%';
-      info.append(h('div', { class: 'hd-prog' }, bar, flags.length ? h('span', { class: 'hd-flags' }, flags.join('   ')) : null));
+      info.append(h('div', { class: 'hd-time' }, h('span', {}, `${fmtTime(p.start)} – ${fmtTime(p.stop)}`), bar, h('span', { class: 'hd-left' }, when),
+        nx ? h('span', { class: 'hd-next' }, `Next: ${fmtTime(nx.start)} ${nx.title}`) : null));
       const epl = [p.ep, p.sub].filter(Boolean).join(' ');
-      if (epl) info.append(h('div', { class: 'hd-ep' }, epl));
-      if (p.desc) info.append(h('div', { class: 'hd-desc' }, p.desc));
+      if (epl || p.desc) info.append(h('div', { class: 'hd-desc' }, epl ? h('b', { class: 'hd-ep' }, epl + (p.desc ? ' · ' : '')) : null, p.desc || ''));
     }
     side.append(h('div', { class: 'hd-group' }, c.group || ''));
     renderPreview();
@@ -458,7 +678,7 @@ export function tvScreen(main, nav) {
   /** Zones, left to right: nav rail < groups < channel name (label) < programmes (grid). */
   function toGroups() {
     zone = 'groups'; focusProg = null;
-    gi = Math.max(0, groups.findIndex((g) => g.id === mem.group));   // the selected group gets the focus
+    computeTabs(); gi = Math.max(0, tabIndexOf(mem.group));   // the selected group gets the focus
     renderGroups(); renderRows(); renderHeader();
   }
   function toLabel() { zone = 'label'; focusProg = null; renderGroupsKf(); renderRows(); renderHeader(); }
@@ -556,6 +776,7 @@ export function tvScreen(main, nav) {
   let escDown = 0, escFired = false;
   function onKey(e) {
     if (playerOpen || document.querySelector('.modal-back')) return false;
+    if (menuOpen) return menuKey(e) || e.key.startsWith('Arrow');
     const k = e.key;
     if (k === 'Escape') {
       if (e.type === 'keydown') {
@@ -579,9 +800,11 @@ export function tvScreen(main, nav) {
     if (zone === 'groups') {     // the group tabs: Left / Right pick one, Down goes into the guide
       if (k === 'ArrowLeft' || k === 'ArrowRight') {
         if (k === 'ArrowLeft' && gi === 0) { toNav(); return true; }
-        gi = Math.max(0, Math.min(groups.length - 1, gi + (k === 'ArrowRight' ? 1 : -1))); renderGroups(); if (groups[gi]) selectGroupSoon(groups[gi].id); return true;
+        gi = Math.max(0, Math.min(tabs.length - 1, gi + (k === 'ArrowRight' ? 1 : -1))); renderGroupsKf();
+        const t = tabs[gi]; if (t && t.kind !== 'menu') selectGroupSoon(t.id);    // "All groups" opens on OK / Down only
+        return true;
       }
-      if (k === 'ArrowDown' || k === 'Enter') { if (groups[gi]) selectGroup(groups[gi].id); toLabel(); return true; }
+      if (k === 'ArrowDown' || k === 'Enter') { const t = tabs[gi]; if (t && t.kind === 'menu') { openMenu(); return true; } if (t) selectGroup(t.id); toLabel(); return true; }
       if (k === 'ArrowUp') { toSub(); return true; }
       return k === 'PageUp' || k === 'PageDown';
     }
@@ -674,6 +897,7 @@ export function tvScreen(main, nav) {
   layout();
   // read-only snapshot for the browser tests (web/tests/e2e): where the guide's own focus is
   root.tvState = () => ({ zone, row: mem.row, group: mem.group, gi, winStart: mem.winStart, total,
+    tabs: tabs.map((t) => t.id), menuOpen, menuFocus: mi, pins: pinsOf(),
     focus: focusProg ? { start: focusProg.start, stop: focusProg.stop, title: focusProg.title } : null,
     current: play.playing ? play.playing.key : null, rowKey: chans[mem.row] ? chans[mem.row].key : null,
     previewKey: preview.key, previewPending: preview.pending || null, docked: !!preview.docked });
@@ -681,6 +905,6 @@ export function tvScreen(main, nav) {
     onKey, onKeyUp,
     virtualFocus: true,          // the guide draws its own focus; app.js must not move the DOM focus into it
     focusIn() { const z = mem.zone && mem.zone !== 'nav' && mem.zone !== 'sub' ? mem.zone : 'label'; if (z === 'groups') toGroups(); else { zone = z; renderGroupsKf(); renderRows(); renderHeader(); } },
-    destroy() { alive = false; setDock(null); preview.dispose(); clearInterval(tick); ro.disconnect(); window.removeEventListener('tvbro-player', onPlayer); window.removeEventListener('tvbro-layout', onLayout); window.removeEventListener('tvbro-unlocked', onUnlocked); window.removeEventListener('tvbro-epgmap', onEpgMap); epgTimers.forEach(clearTimeout); },
+    destroy() { alive = false; setDock(null); preview.dispose(); clearInterval(tick); ro.disconnect(); window.removeEventListener('tvbro-player', onPlayer); window.removeEventListener('tvbro-layout', onLayout); window.removeEventListener('tvbro-state', onState); window.removeEventListener('tvbro-unlocked', onUnlocked); window.removeEventListener('tvbro-epgmap', onEpgMap); epgTimers.forEach(clearTimeout); },
   };
 }
