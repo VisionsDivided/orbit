@@ -25,8 +25,8 @@ data class PlayReq(
     fun prevEpisode(): Episode? = episode?.let { e -> Watch.ordered(episodes).let { o -> o.getOrNull(o.indexOfFirst { it.id == e.id } - 1) } }
 }
 
-/** A pop-up list of actions (context menu). */
-class MenuState(val title: String, val items: List<Pair<String, () -> Unit>>)
+/** A pop-up list of actions (context menu). [onDismiss] runs when it closes without a choice (Esc). */
+class MenuState(val title: String, val items: List<Pair<String, () -> Unit>>, val onDismiss: (() -> Unit)? = null)
 /** A one-line text question (rename, PIN, share password). */
 class PromptState(val title: String, val initial: String, val secret: Boolean, val done: (String) -> Unit)
 /** A pick list with a search field: [fixed] rows first, then [search] (query -> rows). */
@@ -71,13 +71,18 @@ class AppState(private val scope: CoroutineScope, testSources: List<Source>? = n
     var toastMsg by mutableStateOf("")
     private var toastJob: Job? = null
     var dueReminder by mutableStateOf<Reminder?>(null)
-    val overlayOpen: Boolean get() = menu != null || prompt != null || dueReminder != null || picker != null
+    val overlayOpen: Boolean get() = menu != null || prompt != null || dueReminder != null || picker != null || orbit.streamAsk != null
 
     // ---- stores ----
     private var watchSave: Job? = null
     val watch = WatchStore(File(Paths.config, "watch.json"), saveLater = { f -> watchSave?.cancel(); watchSave = scope.launch(Dispatchers.IO) { delay(1500); f() } })
     val recorder = Recorder(this)
     val detailCache = HashMap<String, VodDetail>()
+    /** Orbit: this app signed in to a home server like a linked TV (Orbit.kt); without a sign-in, plain tvBro. */
+    val orbit = OrbitDesktop(this, scope)
+
+    /** Closes the pop-up menu without a choice. */
+    fun closeMenu() { val m = menu; menu = null; m?.onDismiss?.invoke() }
 
     // ---- parental PIN: a right PIN unlocks everything for 4 h; 5 wrong ones make every further try wait ----
     val pinGate = PinGate()
@@ -139,6 +144,35 @@ class AppState(private val scope: CoroutineScope, testSources: List<Source>? = n
         TimeFmt.mode = s.timeFmt
         scope.launch(Dispatchers.IO) { SettingsStore.save(s) }
     }
+    /** Orbit: [list] (the home server's playlists) replaces the playlists [remove]d, and their stored data. */
+    fun replaceSources(list: List<Source>, remove: Set<String>) {
+        val gone = sources.filter { it.id in remove }
+        io { for (s in gone) SourceRepo(s).cache.clear() }
+        saveSources(sources.filter { it.id !in remove && list.none { n -> n.id == it.id } } + list)
+    }
+
+    /** Orbit sign-out or another profile: My list, search history and the last channel of the account go. */
+    fun clearProfileData() {
+        update { it.copy(myList = emptyList(), searchHistory = emptyList(), lastChannel = "", lastUi = "") }
+    }
+
+    /** A My list / resume entry the web app can show: channels by name and logo, films and shows by poster and id. */
+    fun describe(key: String): kotlinx.serialization.json.JsonObject? {
+        fun obj(vararg p: Pair<String, String?>) = kotlinx.serialization.json.JsonObject(
+            p.filter { it.second != null }.associate { it.first to kotlinx.serialization.json.JsonPrimitive(it.second) })
+        if (key.startsWith("m|") || key.startsWith("s|")) {
+            val v = watch.snapOf(key) ?: findVod(key) ?: return null
+            val webId = if (v.sourceId == "p0") v.id else "${v.sourceId}~${v.id}"     // the web server's VOD id
+            return obj("key" to key, "kind" to (if (key.startsWith("m|")) "movie" else "series"), "name" to v.name,
+                "poster" to v.poster, "id" to webId, "ext" to v.ext)
+        }
+        val c = channels.firstOrNull { it.key == key } ?: return null
+        return obj("key" to key, "kind" to "live", "name" to c.name, "logo" to c.logo)
+    }
+
+    /** A film or show of the catalogue by key. */
+    fun findVod(key: String): VodItem? = (if (key.startsWith("s|")) series else movies).firstOrNull { it.key == key }
+
     fun saveSources(l: List<Source>) { sources = l; if (!temporary) scope.launch(Dispatchers.IO) { SourceStore.save(l)?.let { m -> runOnUi { toast(m) } } }; load(force = true) }
     fun editPrefs(f: (Prefs) -> Prefs) = update { it.copy(prefs = f(it.prefs)) }
 
@@ -147,6 +181,7 @@ class AppState(private val scope: CoroutineScope, testSources: List<Source>? = n
         val had = key in settings.myList
         update { s -> s.copy(myList = if (had) s.myList - key else s.myList + key) }
         toast(if (had) "Removed from My list" else "Added to My list")
+        orbit.changed()
     }
 
     fun runOnUi(f: () -> Unit) { scope.launch { f() } }
@@ -163,6 +198,8 @@ class AppState(private val scope: CoroutineScope, testSources: List<Source>? = n
         if (!temporary) SourceStore.problem?.let { m -> scope.launch { delay(1500); toast(m) } }
         io { SmbShare.password = Secrets.readString("smb"); SmbBridge.cfg = { settings.smb } }
         if (settings.resume.isNotEmpty()) { watch.importLegacy(settings.resume); update { it.copy(resume = emptyMap()) } }
+        watch.lookup = ::findVod
+        if (!temporary) orbit.start()
         scope.launch { while (true) { delay(15_000); now = System.currentTimeMillis() / 1000; if (pinOpen && !pinGate.unlocked) pinOpen = false } }
         // Scheduled refresh: cheap check every 30 min; downloads only what is older than 12 h (guide) / 24 h (catalogues).
         scope.launch { while (true) { delay(30 * 60_000L); if (playing == null || !full) load(false); recorder.scheduleSeries() } }
@@ -331,12 +368,33 @@ class AppState(private val scope: CoroutineScope, testSources: List<Source>? = n
         if (full || !settings.previewOn) return
         if (playing?.live?.key == ch.key && playing?.archive == null) return
         if (isLocked(ch)) return // a locked current channel waits for Enter and the PIN
-        setPlaying(PlayReq(ch.url, ch.name, live = ch))
+        setPlaying(PlayReq(ch.url, ch.name, live = ch), ask = false)
     }
 
-    fun stopPlayback() { player.close(); playing = null; full = false }
+    fun stopPlayback() {
+        val had = playing?.resumeKey != null
+        playGen++; player.close(); playing = null; full = false
+        orbit.releaseStream()
+        if (had) orbit.changed()                                   // the resume point goes to the home server soon
+    }
 
-    internal fun setPlaying(r: PlayReq?) { playing = r; docked = false; if (r != null) player.load(r) }
+    private var playGen = 0
+
+    /**
+     * Plays [r]. Signed in to Orbit, IPTV first joins the household's stream count: when every stream is in use the
+     * viewer picks one to stop ([ask]; the TV screen's preview does not ask and stays off). Recordings play at once.
+     */
+    internal fun setPlaying(r: PlayReq?, ask: Boolean = true) {
+        val gen = ++playGen
+        if (r == null || r.recording != null || !orbit.linked || orbit.holding) return applyPlaying(r)
+        scope.launch {
+            val ok = orbit.claimStream(r.live?.name ?: r.title, ask)
+            if (gen != playGen) return@launch
+            if (ok) applyPlaying(r) else { if (playing == null) full = false; if (ask) toast("Not played: every stream is in use") }
+        }
+    }
+
+    private fun applyPlaying(r: PlayReq?) { playing = r; docked = false; if (r != null) player.load(r) }
 
     /**
      * Enter / OK on a channel name or its programme on now (keyboard or mouse). The preview never follows focus:

@@ -101,10 +101,11 @@ fun main(args: Array<String>) {
             MaterialTheme(colorScheme = darkColorScheme(primary = Theme.accent, background = Theme.bg, surface = Theme.surface, onSurface = Theme.text)) {
                 if (app.videoSetup) VideoSetup(app) else {
                     Box(Modifier.fillMaxSize().background(Theme.bg)) {
-                        Home(app)
+                        if (app.orbit.picking) WhoScreen(app) else Home(app)
                         VideoHost(app) // last: drawn above Home, at a stable place in the tree
                     }
                     Overlays(app)
+                    StreamAskDialog(app)
                 }
             }
         }

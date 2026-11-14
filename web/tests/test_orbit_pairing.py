@@ -243,6 +243,13 @@ class Server(unittest.TestCase):
         self.assertEqual((code, pl), (200, {"playlists": []}))
         self.assertEqual(self.req("GET", "/v1/device/playlists", headers=auth(alex))[0], 403)
         self.assertEqual(self.req("GET", "/v1/device/playlists")[0], 401)
+        # the desktop app signs in with the account (X-TvBro, no Origin) and is a device like the TV
+        code, hd, dme = self.tv("/v1/auth/login", {"username": "alex", "password": "correct horse 1",
+                                                    "device": "Orbit on Windows", "kind": "desktop"})
+        self.assertEqual(code, 200)
+        desk = (hd["Set-Cookie"].split(";", 1)[0], dme["csrf"])
+        self.assertEqual(self.req("GET", "/v1/device/playlists", headers=auth(desk))[:3:2], (200, {"playlists": []}))
+        self.assertEqual(self.req("POST", "/v1/profiles/select", {"id": kids["id"]}, auth(desk))[2]["profile"]["name"], "Kids")
         # show progress of the TV's profile (episode sync)
         self.assertEqual(self.req("GET", "/v1/progress/shows", headers=auth(tvs))[2], {"episodes": [], "shows": []})
         code, _, r = self.req("POST", "/v1/progress/episodes", {"items": [{"seriesId": "7", "epId": "101", "secs": 120, "dur": 2400,

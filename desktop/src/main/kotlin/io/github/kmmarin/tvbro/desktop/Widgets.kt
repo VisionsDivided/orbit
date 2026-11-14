@@ -151,10 +151,10 @@ fun Overlays(app: AppState) {
         // header lines wrap at about 60 characters (a restore summary has long ones)
         val head = m.title.lines().take(6).sumOf { (it.length / 60 + 1).coerceAtMost(3) }.coerceAtMost(14)
         val st = rememberDialogState(position = WindowPosition(Alignment.Center), size = androidx.compose.ui.unit.DpSize(520.dp, (90 + head * 22 + rows * 46).dp))
-        DialogWindow(onCloseRequest = { app.menu = null }, state = st, title = "tvBro", undecorated = true, resizable = false) {
+        DialogWindow(onCloseRequest = { app.closeMenu() }, state = st, title = "tvBro", undecorated = true, resizable = false) {
             val first = remember { FocusRequester() }
             LaunchedEffect(m) { first.settle() }
-            Column(Modifier.fillMaxSize().background(Theme.surface).border(2.dp, Theme.accent).padding(14.dp).dialogKeys { app.menu = null }) {
+            Column(Modifier.fillMaxSize().background(Theme.surface).border(2.dp, Theme.accent).padding(14.dp).dialogKeys { app.closeMenu() }) {
                 val lines = m.title.lines()
                 T(lines.first(), 18, Theme.accent, bold = true, maxLines = 2)
                 for (l in lines.drop(1).take(5)) T(l, 13, Theme.dim, maxLines = 3)
