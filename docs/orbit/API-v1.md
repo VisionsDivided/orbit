@@ -13,6 +13,9 @@ It is written so another implementation (for example Rust) could replace the ser
   or the sign-in answer), exactly like the rest of the server. The two sign-in calls (`/v1/setup`, `/v1/auth/login`)
   have no session yet and send `X-TvBro: 1` instead.
 - The Host, Origin and `Sec-Fetch-Site` checks of the existing server apply to `/v1` unchanged.
+- "Client address" (throttles, the pairing `address`, logs) is the connection's address, or behind trusted reverse
+  proxies (`ORBIT_TRUSTED_PROXIES`, default loopback only) the right-most untrusted `X-Forwarded-For` entry; the
+  header is ignored from anyone else. See DEPLOY.md, "Client addresses and a TLS reverse proxy in front".
 - Ids are opaque random strings. Clients must not parse them.
 - Times are Unix seconds (integers).
 
@@ -51,8 +54,9 @@ It is written so another implementation (for example Rust) could replace the ser
 
 | Method | Path | Who | Body → Answer |
 |---|---|---|---|
-| POST | `/v1/pair/start` | the TV (public, `X-TvBro: 1`) | `{"device"}` → `{"pairId", "code", "expires", "interval"}`. `code` is `XXXX-XXXX` (letters without vowels, digits 2–9). At most 5 waiting pairings per address, 50 in all (429). 409 while the server has no accounts. |
+| POST | `/v1/pair/start` | the TV (public, `X-TvBro: 1`) | `{"device"}` → `{"pairId", "code", "expires", "interval"}`. `code` is `XXXX-XXXX` (letters without vowels, digits 2–9). At most 3 pairings per client address and 20 in all may wait at once (expired ones do not count); over that: 429 with a message saying which limit was hit and `Retry-After` (seconds until the oldest of those codes expires). 409 while the server has no accounts. |
 | POST | `/v1/pair/poll` | the TV (public, `X-TvBro: 1`) | `{"pairId"}` → `{"status": "pending"}` or, once, `{"status": "approved", "session", "csrf", "me": Me}`. 404 when expired, collected or cancelled. Poll every `interval` seconds. |
+| POST | `/v1/pair/peek` | signed in | `{"code"}` → `{"device", "address", "waitingSecs"}`: which TV is waiting behind a code (its name and client address), shown before approving. Unknown codes: 404, throttled like `approve`. |
 | POST | `/v1/pair/approve` | signed in | `{"code", "profileId"?}` → `{"ok": true, "device"}`. The profile must be your own (else 404); unknown or expired codes answer 404 and are throttled per address (429). |
 
 The TV keeps `session` (encrypted) and sends it as the `tvbro_s` cookie with the `X-CSRF-Token`, like a browser. It
@@ -68,10 +72,13 @@ The server checks the `Host` header, so the address the TV uses (for example `19
 
 | Method | Path | Who | Body → Answer |
 |---|---|---|---|
-| GET | `/v1/device/playlists` | a **linked TV** session only (403 for browser sign-ins) | → `{"playlists": [{"id", "name", "kind": "xtream"\|"m3u", "server", "user", "pass", "url", "epgUrl"}]}`: the household's enabled playlists with their logins, so the TV plays directly from the provider. Ids are the server's (`p0`, `p1` …), so channel and VOD keys are the same on every device. |
+| GET | `/v1/device/playlists` | a **linked TV** session of any account (owner, admin or member); 403 for browser sign-ins | → `{"playlists": [{"id", "name", "kind": "xtream"\|"m3u", "server", "user", "pass", "url", "epgUrl"}]}`: the household's enabled playlists with their logins, so the TV plays directly from the provider. Ids are the server's (`p0`, `p1` …), so channel and VOD keys are the same on every device. |
 
 Sessions have a kind (`orbit.db` migration 002): `web` for a browser sign-in, `tv` for a device linked with a pairing
-code. The TV keeps the playlists encrypted and removes them again when it is unlinked or signed out. It syncs My list
+code. Every linked TV gets the playlists, whatever its account's role: every household TV can watch IPTV.
+The flip side is that any account can read the provider logins by linking a device with its own approval, so only
+give accounts to people the household trusts with them. Browser sessions never get them (`session_kind` must be
+`tv`). The TV keeps the playlists encrypted and removes them again when it is unlinked or signed out. It syncs My list
 (three-way merge, so offline changes on either side survive) and film resume points (newest wins) through the
 existing `/api/state` routes of its profile, every minute and shortly after a change.
 
@@ -186,8 +193,12 @@ How it works:
   data folder, sealed with the server key like the provider logins (covered by `rotate_key` and the startup key
   check). Nothing is added to `orbit.db`, so no migration number is used.
 - **LAN access:** the configured Seerr host and port (only those) may be on the local network without switching
-  on "local network sources" (`net.set_private_hosts`). Loopback and link-local stay refused.
-- **Cache:** rows 10 minutes, titles 1 hour, searches 10 minutes, at most 256 answers. When Seerr cannot be reached
+  on "local network sources" (`net.set_private_hosts`). Loopback and link-local stay refused. While
+  `POST /v1/discover/settings` tests a new address, that address is allowed only for the test's own calls (that
+  request's thread, `net.private_host_here`); the household-wide allowlist changes only once the address is saved.
+- **Cache:** rows 10 minutes, titles 1 hour, searches 10 minutes, at most 256 answers. `GET /v1/requests` looks up
+  each distinct title once (cached ones not at all), at most 4 at a time; a title Seerr does not know (404) is
+  not asked for again for 10 minutes and shows as `"title": null`. When Seerr cannot be reached
   (or answers 5xx), the last answer is served with `"stale": true`; with nothing cached the call answers 503. After
   a failure the server does not try Seerr again for 15 seconds, so pages stay fast. `POST /v1/requests` always
   checks Seerr's current state first and answers 503 while Seerr is down.

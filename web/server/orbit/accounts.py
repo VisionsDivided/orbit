@@ -135,6 +135,7 @@ class Accounts:
         pw = password if isinstance(password, str) and len(password) <= MAX_LEN else ""
         ok = verify_password(pw, row[4] if row else self._dummy) and row is not None and not row[5]
         if not ok:
+            LOG.warning("wrong Orbit sign-in from %s", client)
             self.throttle.fail(client)
             if key:
                 self.user_throttle.fail("u:" + key)

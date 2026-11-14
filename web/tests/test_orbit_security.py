@@ -49,12 +49,19 @@ class Security(unittest.TestCase):
     def test_setup_ended_tvbro_sessions(self):
         self.assertIsNone(self.auth.session(self.old))
 
-    def test_member_tv_does_not_get_the_provider_login(self):
-        tv = self.link_tv(self.sam)
-        r = self.api.handle(Call("GET", "/v1/device/playlists", tv))
-        self.assertEqual(r.code, 403)
-        self.assertNotIn("secret", str(r.obj))
-        self.assertEqual(self.api.handle(Call("GET", "/v1/device/playlists", self.link_tv(self.alex))).code, 200)
+    def test_every_linked_tv_gets_the_playlists_but_never_a_browser(self):
+        # the owner's choice: every household TV can watch IPTV, whatever its account's role
+        self.acc.create_account(self.alex, "ada", "admin pass 123", None, "admin")
+        ada = self.acc.gate(self.auth.session(self.acc.login("ada", "admin pass 123", "192.0.2.21")))
+        for n, who in enumerate((self.alex, ada, self.sam)):
+            r = self.api.handle(Call("GET", "/v1/device/playlists", self.link_tv(who, "192.0.2.%d" % (30 + n))))
+            self.assertEqual(r.code, 200, who["account_role"])
+            self.assertEqual(r.obj["playlists"][0]["pass"], "secret")
+        # browser sign-ins (any role) never get the raw logins
+        for who in (self.alex, ada, self.sam):
+            r = self.api.handle(Call("GET", "/v1/device/playlists", who))
+            self.assertEqual(r.code, 403, who["account_role"])
+            self.assertNotIn("secret", str(r.obj))
 
     def test_tv_sessions_never_get_the_admin_role(self):
         tv = self.link_tv(self.alex)

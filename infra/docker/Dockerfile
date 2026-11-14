@@ -3,7 +3,7 @@
 #
 # The Orbit home server in one container: nginx (frontend + proxy, port 8080) in front of the Python server
 # (127.0.0.1:8750), as in tvBro's tested production setup. One container so the server sees each client's real
-# address (it trusts X-Real-IP only from 127.0.0.1) for its sign-in throttling. Runs as uid 1000, no root.
+# address (it believes X-Forwarded-For only from ORBIT_TRUSTED_PROXIES, default loopback) for its throttling. Runs as uid 1000, no root.
 # Build from the repository root:  docker build -f infra/docker/Dockerfile --build-arg ORBIT_VERSION=$(git rev-parse --short HEAD) .
 
 FROM python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
