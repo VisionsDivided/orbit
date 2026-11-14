@@ -70,10 +70,24 @@ open class EpgIndex(private val map: Map<String, Array<Programme>> = emptyMap())
          * runs into the next one ends where the next one starts. Some providers send overlapping entries (10:00-14:00
          * and 11:00-14:00); drawn as they were, blocks covered each other, focus went to a hidden block and the guide
          * window jumped.
+         *
+         * The rules (shared with the web app's guide, owner feedback 2026-11-14): sort by start; drop an entry that lies
+         * fully inside an earlier one with the same title (exact duplicates included); of entries starting at the same
+         * time keep the longest; trim each entry's end to the next one's start; drop what ends up zero-length.
          */
         fun tidy(a: Array<Programme>): Array<Programme> {
             if (a.size < 2) return a
-            val s = a.sortedWith(compareBy<Programme> { it.start }.thenByDescending { it.stop }).distinctBy { it.start }
+            val sorted = a.sortedWith(compareBy<Programme> { it.start }.thenByDescending { it.stop })
+            // the latest end of each title kept so far: a later-starting entry ending no later is inside one of them
+            val reach = HashMap<String, Long>()
+            val s = ArrayList<Programme>(sorted.size)
+            for (p in sorted) {
+                if (s.isNotEmpty() && s.last().start == p.start) continue        // same start: the longest came first
+                val r = reach[p.title]
+                if (r != null && r >= p.stop) continue                           // inside a longer one, same title
+                reach[p.title] = maxOf(r ?: Long.MIN_VALUE, p.stop)
+                s += p
+            }
             val out = ArrayList<Programme>(s.size)
             for (i in s.indices) {
                 val p = s[i]
