@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
 from .accounts import Accounts, ApiError
@@ -35,6 +36,8 @@ ROWS = (("trending", "Trending", "/discover/trending", None),
         ("tv", "Popular TV", "/discover/tv", "tv"))
 UPCOMING = (("/discover/movies/upcoming", "movie"), ("/discover/tv/upcoming", "tv"))
 MAX_REQUESTS = 50
+LOOKUP_WORKERS = 4         # title lookups for a request list run in parallel, at most this many at once
+MISSING_TTL = 600          # a title Seerr does not know (404) is not asked for again for this long
 NOT_LINKED = "your account is not linked to a Seerr user: ask the owner to link your Seerr user"
 
 
@@ -250,6 +253,36 @@ class Discover:
     def _lookup(self, cl: S.SeerrClient, kind: str, tmdb: int) -> tuple:
         return self._cached(("title", kind, tmdb), TITLE_TTL, lambda: self._fetch_title(cl, kind, tmdb))
 
+    def _lookup_many(self, cl: S.SeerrClient, keys: list) -> dict:
+        """{(kind, tmdb): Title or None} for many titles: each asked for once, cached ones not at all, titles Seerr
+        does not know remembered for MISSING_TTL, the rest fetched in parallel (at most LOOKUP_WORKERS at once)."""
+        out, todo = {}, []
+        for k in dict.fromkeys(keys):                        # each title once, in order
+            hit = self.cache.get(("title",) + k, TITLE_TTL)
+            if hit is not None:
+                out[k] = hit
+            elif self.cache.get(("missing",) + k, MISSING_TTL):
+                out[k] = None
+            else:
+                todo.append(k)
+
+        def one(k):
+            try:
+                return self._lookup(cl, *k)[0]
+            except S.SeerrError as e:
+                if e.code == 404:
+                    self.cache.put(("missing",) + k, True)
+                return None
+            except S.SeerrDown:
+                return None
+        if len(todo) == 1:
+            out[todo[0]] = one(todo[0])
+        elif todo:
+            with ThreadPoolExecutor(max_workers=min(LOOKUP_WORKERS, len(todo)), thread_name_prefix="seerr") as ex:
+                for k, t in zip(todo, ex.map(one, todo)):
+                    out[k] = t
+        return out
+
     def _title(self, c: Call) -> Reply:
         q = self._query(c)
         kind, tmdb = self._kind_tmdb(q.get("type"), q.get("tmdb"))
@@ -286,11 +319,10 @@ class Discover:
             r = S.normalize_request(raw)
             if r is None or (user is not None and r["requestedBy"]["seerrUserId"] not in (None, user)):
                 continue
-            try:
-                r["title"] = self._merge(self._lookup(cl, r["type"], r["tmdb"])[0])
-            except (S.SeerrDown, S.SeerrError):
-                r["title"] = None
             out.append(r)
+        titles = self._lookup_many(cl, [(r["type"], r["tmdb"]) for r in out])
+        for r in out:
+            r["title"] = self._merge(titles.get((r["type"], r["tmdb"])))
         if every:
             back = {v: k for k, v in self.cfg.mapping().items()}
             for r in out:
@@ -339,7 +371,7 @@ class Discover:
             if e.code == 409:                                # Seerr's own duplicate check
                 return Reply({"created": False, "title": self._merge(cur)})
             raise self._seerr_error(e)
-        self.cache.drop(lambda k: k == ("title", kind, tmdb) or k[0] == "rows")
+        self.cache.drop(lambda k: k in (("title", kind, tmdb), ("missing", kind, tmdb)) or k[0] == "rows")
         try:
             cur = self._fetch_title(cl, kind, tmdb)
             self.cache.put(("title", kind, tmdb), cur)

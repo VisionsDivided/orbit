@@ -56,6 +56,9 @@ class MockSeerr:
     def __init__(self):
         self.calls = []                       # (method, path, query, headers, body)
         self.down = False
+        self.title_delay = 0.0                # seconds each movie / tv details answer takes
+        self.in_flight = self.max_in_flight = 0
+        self._flight = threading.Lock()
         self.users = [{"id": 1, "displayName": "Admin", "email": "admin@example.com", "username": "admin"},
                       {"id": 2, "displayName": "Sam", "email": "sam@example.com", "plexUsername": "sammy"},
                       {"id": 3, "displayName": "Jo", "email": "jo@example.com", "jellyfinUsername": "jo"}]
@@ -143,6 +146,14 @@ class MockSeerr:
             return h._send(200, {"page": 1, "totalPages": 0, "results": []})
         for kind in ("movie", "tv"):
             if p.startswith(f"/api/v1/{kind}/"):
+                with self._flight:
+                    self.in_flight += 1
+                    self.max_in_flight = max(self.max_in_flight, self.in_flight)
+                try:
+                    time.sleep(self.title_delay)
+                finally:
+                    with self._flight:
+                        self.in_flight -= 1
                 t = self.titles.get((kind, int(p.rsplit("/", 1)[1])))
                 return h._send(200, t) if t else h._send(404, {"message": "Unable to retrieve"})
         if p == "/api/v1/user":
@@ -283,6 +294,44 @@ class Discover(unittest.TestCase):
         # remove
         self.assertEqual(self.call(self.owner, "POST", "/v1/discover/settings", {"remove": True})[1], {"configured": False})
         self.assertFalse(self.cfg.configured())
+
+    def test_request_list_title_lookups(self):
+        """Review P4: GET /v1/requests looks up each request's title. Measured against the mock with 9 requests for
+        6 different titles (one of them unknown to Seerr, asked for twice) and 0.2 s per title answer:
+
+        before: 7 title calls on the first listing (the unknown title twice), one after another (~1.4 s), and 2
+                again on every later listing (unknown titles were never remembered);
+        after:  6 on the first listing (each title once), at most LOOKUP_WORKERS at a time (~0.4 s), and 0 on
+                later listings (unknown titles are remembered for MISSING_TTL)."""
+        self.configure()
+        self.seerr.title_delay = 0.2
+        extra = [("movie", 550, 1), ("movie", 603, 2), ("movie", 550, 3), ("tv", 2000, 3), ("movie", 999, 2),
+                 ("movie", 999, 3), ("tv", 1399, 2)]
+        for n, (kind, tmdb, uid) in enumerate(extra):
+            self.seerr.requests.append({"id": 20 + n, "status": 2, "type": kind, "createdAt": "2026-11-03T10:00:00.000Z",
+                                        "media": {"tmdbId": tmdb, "mediaType": kind, "status": 3},
+                                        "requestedBy": {"id": uid, "displayName": "Someone"}})
+        titles = lambda: [c for c in self.seerr.calls if c[1].startswith(("/api/v1/movie/", "/api/v1/tv/"))]  # noqa: E731
+        t0 = time.monotonic()
+        code, j = self.call(self.owner, "GET", "/v1/requests", all=1)
+        took = time.monotonic() - t0
+        self.assertEqual(code, 200, j)
+        self.assertEqual(len(j["requests"]), 9)
+        self.assertEqual(len(titles()), 6, "each title once")
+        self.assertEqual({r["tmdb"]: (r["title"] or {}).get("title") for r in j["requests"]}[999], None)
+        self.assertEqual({r["tmdb"]: r["title"]["title"] for r in j["requests"] if r["title"]}[2000], "New Show")
+        self.assertLessEqual(self.seerr.max_in_flight, D.LOOKUP_WORKERS)
+        self.assertGreater(self.seerr.max_in_flight, 1, "looked up in parallel")
+        self.assertLess(took, 6 * 0.2, "faster than one after another")
+        # a later listing within the cache time asks Seerr for the list only
+        self.seerr.calls.clear()
+        self.call(self.owner, "GET", "/v1/requests", all=1)
+        self.assertEqual(len(titles()), 0)
+        self.assertEqual(len(self.seerr.last("GET", "/api/v1/request")), 1)
+        # unknown titles are asked again after MISSING_TTL, known ones after TITLE_TTL
+        self.clock.t += D.MISSING_TTL + 1
+        self.call(self.owner, "GET", "/v1/requests", all=1)
+        self.assertEqual([c[1] for c in titles()], ["/api/v1/movie/999"])
 
     def test_private_hosts_are_the_configured_seerr_only(self):
         self.assertEqual(self.disc.private_hosts(), set())

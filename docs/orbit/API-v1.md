@@ -196,7 +196,9 @@ How it works:
   on "local network sources" (`net.set_private_hosts`). Loopback and link-local stay refused. While
   `POST /v1/discover/settings` tests a new address, that address is allowed only for the test's own calls (that
   request's thread, `net.private_host_here`); the household-wide allowlist changes only once the address is saved.
-- **Cache:** rows 10 minutes, titles 1 hour, searches 10 minutes, at most 256 answers. When Seerr cannot be reached
+- **Cache:** rows 10 minutes, titles 1 hour, searches 10 minutes, at most 256 answers. `GET /v1/requests` looks up
+  each distinct title once (cached ones not at all), at most 4 at a time; a title Seerr does not know (404) is
+  not asked for again for 10 minutes and shows as `"title": null`. When Seerr cannot be reached
   (or answers 5xx), the last answer is served with `"stale": true`; with nothing cached the call answers 503. After
   a failure the server does not try Seerr again for 15 seconds, so pages stay fast. `POST /v1/requests` always
   checks Seerr's current state first and answers 503 while Seerr is down.
