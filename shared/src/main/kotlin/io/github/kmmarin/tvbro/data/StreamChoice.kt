@@ -4,13 +4,14 @@ package io.github.kmmarin.tvbro.data
 
 /**
  * Every stream of the provider is in use: the prompt lists each one with its own "Stop <name> and watch". The name is
- * the profile that started it (what a household calls a device: "Kitchen", "Bedroom"), else the device label; two
- * streams with the same name are told apart by their device, then by a number. Recordings are listed but cannot be
- * stopped from here.
+ * the device's own name ("Kitchen", "Bedroom": Settings ▸ Home server ▸ Name this TV, or the web app's device list),
+ * else the profile that started it, else the device label; two streams with the same name are told apart by their
+ * device label, then by a number. Recordings are listed but cannot be stopped from here.
  */
 object StreamChoice {
-    /** One active stream as the home server describes it (/v1/streams). */
-    data class Use(val id: String, val label: String, val profile: String, val what: String, val recording: Boolean)
+    /** One active stream as the home server describes it (/v1/streams); [device]: its name, "" when not named. */
+    data class Use(val id: String, val label: String, val profile: String, val what: String, val recording: Boolean,
+                   val device: String = "")
 
     /** A line of the prompt: [stoppable] streams get a button. */
     data class Row(val id: String, val name: String, val what: String, val recording: Boolean) {
@@ -21,6 +22,7 @@ object StreamChoice {
     fun rows(list: List<Use>): List<Row> {
         fun base(u: Use) = when {
             u.recording -> "Recording"
+            u.device.isNotBlank() -> u.device.trim()
             u.profile.isNotBlank() -> u.profile.trim()
             u.label.isNotBlank() -> u.label.trim()
             else -> "Another device"
@@ -30,7 +32,8 @@ object StreamChoice {
         val names = list.mapIndexed { i, u ->
             val b = bases[i]
             val dup = !u.recording && bases.count { it == b } > 1
-            if (dup && u.profile.isNotBlank() && u.label.isNotBlank() && u.label.trim() != b) "$b on ${u.label.trim()}" else b
+            val named = u.device.isNotBlank() || u.profile.isNotBlank()
+            if (dup && named && u.label.isNotBlank() && u.label.trim() != b) "$b on ${u.label.trim()}" else b
         }
         // still the same: number them
         val seen = HashMap<String, Int>()
