@@ -8,7 +8,8 @@ import io.github.kmmarin.tvbro.orbit.DiscoverRow
 import io.github.kmmarin.tvbro.orbit.DiscoverTitle
 import io.github.kmmarin.tvbro.orbit.DownloadInfo
 import io.github.kmmarin.tvbro.ui.discover.DiscoverFeed
-import io.github.kmmarin.tvbro.ui.discover.tabRows
+import io.github.kmmarin.tvbro.ui.discover.DiscoverLogic
+import io.github.kmmarin.tvbro.ui.discover.PagedRow
 import io.github.kmmarin.tvbro.ui.shell.isPhoneLayout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -104,12 +105,145 @@ class DiscoverLogicTest {
             DiscoverRow("upcoming", "Coming soon", listOf(m(7))),
         )
         val rows = DiscoverFeed.shapeRows(raw)
-        assertEquals(listOf("trending-movies", "trending-shows", "upcoming-movies", "popular"), rows.map { it.id })
+        assertEquals(listOf("trending-movies", "trending-shows", "upcoming-movies", "popular-movies", "popular-shows"), rows.map { it.id })
         assertEquals(listOf(1L, 3L), rows[0].items.map { it.tmdb })
-        assertEquals("films and shows interleaved", listOf(4L, 6L, 5L), rows.last().items.map { it.tmdb })
-        assertEquals(listOf("trending-movies", "upcoming-movies", "popular"), tabRows(rows, 1).map { it.id })
-        assertEquals(listOf(6L), tabRows(rows, 2).last().items.map { it.tmdb })
-        assertTrue(tabRows(rows, 3).isEmpty())
+        val paged = DiscoverLogic.initialRows(raw)
+        assertEquals(listOf("trending-movies", "upcoming-movies", "popular-movies"), DiscoverLogic.tabRows(paged, 1).map { it.id })
+        assertEquals(listOf("trending-shows", "popular-shows"), DiscoverLogic.tabRows(paged, 2).map { it.id })
+        assertTrue(DiscoverLogic.tabRows(paged, 3).isEmpty())
+        // a list the server could not load (pages 0) is an empty row that loads nothing
+        assertFalse(DiscoverLogic.initialRows(emptyList()).any { it.hasMore })
+    }
+
+    // ---- paged rows (orbit/tv-discover2) ----
+
+    private fun m(i: Long) = DiscoverTitle("movie", i, "m$i")
+    private fun s(i: Long) = DiscoverTitle("tv", i, "s$i")
+
+    @Test fun rowPagesAddEachTitleOnceAndOnlyTheirType() {
+        var row = DiscoverLogic.initialRows(listOf(DiscoverRow("trending", "Trending", listOf(m(1), s(2), m(3)), page = 1, pages = 30)))
+            .first { it.id == "trending-shows" }
+        assertEquals(listOf(2L), row.items.map { it.tmdb })
+        assertEquals(1, row.page); assertEquals(30, row.pages)
+        // a mostly-film list: the shows row keeps filling until it has 14, at most 4 pages a go
+        assertTrue(DiscoverLogic.keepFilling(row, 0))
+        row = DiscoverLogic.withPage(row, 2, 30, listOf(s(2), s(4), m(5), s(6)))
+        assertEquals(listOf(2L, 4L, 6L), row.items.map { it.tmdb })
+        assertEquals(2, row.page)
+        assertTrue(DiscoverLogic.keepFilling(row, 2))
+        assertFalse("a page that added enough stops the fill", DiscoverLogic.keepFilling(row, DiscoverLogic.NEAR_END))
+        row = DiscoverLogic.withPage(row, 3, 30, (10L..30L).map { s(it) })
+        assertTrue(row.items.size >= DiscoverLogic.MIN_FILL)
+        assertFalse(DiscoverLogic.keepFilling(row, 1))
+        // near the end (6 cards) of a row with more pages: load
+        assertTrue(DiscoverLogic.wantsMore(row, row.items.size - 6))
+        assertFalse(DiscoverLogic.wantsMore(row, row.items.size - 7))
+        assertFalse(DiscoverLogic.wantsMore(row.copy(page = 30), row.items.size - 1))
+        // an unfiltered row never "fills"
+        assertFalse(DiscoverLogic.keepFilling(PagedRow("x", "X", "upcoming", null, listOf(m(1)), 1, 9), 0))
+    }
+
+    @Test fun rowPageAndSearchParse() {
+        val j = Json.parseToJsonElement(
+            """{"id": "trending", "title": "Trending", "page": 3, "pages": 500, "stale": false,
+                "items": [{"type": "movie", "tmdb": 5, "title": "A", "poster": "/img?u=https%3A%2F%2Fimage.tmdb.org%2Ft%2Fp%2Fw342%2Fa.jpg&s=x"}]}""",
+        ).jsonObject
+        val r = DiscoverApi.parseRow(j, server)
+        assertEquals(3, r.page); assertEquals(500, r.pages)
+        assertEquals("signed /img links are loaded from the home server", "$server/img?u=https%3A%2F%2Fimage.tmdb.org%2Ft%2Fp%2Fw342%2Fa.jpg&s=x", r.items[0].poster)
+        val sj = Json.parseToJsonElement(
+            """{"results": [{"type": "tv", "tmdb": 9, "title": "Show"}], "page": 1, "pages": 4, "total": 71, "stale": false,
+                "people": [{"id": 31, "name": "Ada Example", "photo": "https://image.tmdb.org/t/p/w185/face_1.jpg",
+                            "knownFor": [{"type": "movie", "tmdb": 1, "title": "One"}, {"type": "movie", "tmdb": 2, "title": "Two"}]}]}""",
+        ).jsonObject
+        val sp = DiscoverApi.parseSearch(sj, server)
+        assertEquals(4, sp.pages); assertEquals(71, sp.total)
+        assertEquals("$server/v1/discover/image?p=%2Fw185%2Fface_1.jpg", sp.people.single().photo)
+        assertEquals(listOf("One", "Two"), sp.people.single().knownFor.map { it.title })
+        assertEquals(listOf(1L, 9L), DiscoverLogic.addResults(listOf(m(1)), listOf(m(1), s(9))).map { it.tmdb })
+    }
+
+    @Test fun imagesGoThroughTheHomeServer() {
+        assertEquals("$server/img?u=x&s=y", DiscoverApi.image(server, "/img?u=x&s=y"))
+        assertEquals("$server/v1/discover/image?p=%2Fw500%2Fb-2.png", DiscoverApi.image(server, "https://image.tmdb.org/t/p/w500/b-2.png"))
+        assertNull("an unknown size", DiscoverApi.image(server, "https://image.tmdb.org/t/p/w9999/b.jpg"))
+        assertNull("a path in the file name", DiscoverApi.image(server, "https://image.tmdb.org/t/p/w185/../b.jpg"))
+        assertNull("another host", DiscoverApi.image(server, "https://example.com/t/p/w185/b.jpg"))
+        assertNull(DiscoverApi.image(server, null))
+    }
+
+    @Test fun downloadPercentAndIsoEta() {
+        val d = DiscoverApi.download(Json.parseToJsonElement("""{"percent": 64.6, "size": 4000000000, "sizeLeft": 1000000000, "eta": "2026-11-14T10:18:00Z", "items": 3}"""))!!
+        assertEquals(65, d.percent)
+        assertEquals(3, d.items)
+        assertEquals("Downloading 65% · ~18 min", DiscoverApi.downloadLabel(d, now))
+        assertEquals("3.0 GB of 4.0 GB · 3 files", DiscoverLogic.downloadDetail(d))
+        assertEquals("1 MB", DiscoverLogic.bytes(10))
+    }
+
+    @Test fun titlePageParses() {
+        val j = Json.parseToJsonElement(
+            """{"type": "tv", "tmdb": 1399, "title": "Tidewater", "year": 2024, "status": "partial", "rating": 8.4,
+                "genres": ["Drama", "Mystery", "Crime", "Thriller"], "tagline": "The sea keeps score.", "date": "2024-03-01", "runtime": 52,
+                "seasonCount": 3, "episodeCount": 24, "networks": ["Example TV"], "showStatus": "Returning Series",
+                "seasons": [{"season": 0, "episodes": 2, "name": "Specials", "status": "requestable"},
+                            {"season": 1, "episodes": 8, "name": "Season 1", "status": "available"},
+                            {"season": 2, "episodes": 8, "name": "Season 2", "status": "requestable"},
+                            {"season": 3, "episodes": 8, "name": "", "status": "requestable"}],
+                "cast": [{"id": 7, "name": "Ada Example", "character": "Mara", "photo": "https://image.tmdb.org/t/p/w185/ada.jpg"},
+                         {"id": 8, "name": "Ben Example", "character": "", "photo": null}],
+                "trailer": {"name": "Trailer", "url": "https://www.youtube.com/watch?v=abcdef12"},
+                "requests": [{"id": 4, "status": "pending", "created": "2026-11-01T09:30:00.000Z", "by": "Sam", "seasons": [2]},
+                             {"id": 3, "status": "completed", "created": "2026-01-01T09:30:00.000Z", "by": "Dani", "seasons": [1]}],
+                "seerrUrl": "http://192.0.2.20:5055/tv/1399", "stale": false}""",
+        ).jsonObject
+        val p = DiscoverApi.parseTitlePage(j, server)!!
+        assertEquals(listOf(1, 2, 3), p.seasons.map { it.season })   // specials left out
+        assertEquals("Season 3", p.seasons[2].name)
+        assertEquals("$server/v1/discover/image?p=%2Fw185%2Fada.jpg", p.cast[0].photo)
+        assertNull(p.cast[1].photo)
+        assertEquals("https://www.youtube.com/watch?v=abcdef12", p.trailer)
+        assertEquals("http://192.0.2.20:5055/tv/1399", p.seerrUrl)
+        assertEquals(listOf("2024", "3 seasons · 24 episodes", "Drama · Mystery · Crime"), DiscoverLogic.metaParts(p))
+        assertEquals(listOf("Requested by Sam on 1 Nov 2026 · season 2 · waiting for approval"),
+            DiscoverLogic.requestLines(p.requests, java.util.Locale.UK, java.util.TimeZone.getTimeZone("UTC")))
+        assertTrue(DiscoverLogic.canRequest(p))
+        assertEquals("Request more", DiscoverLogic.requestLabel(p))
+        // a trailer link that is not a youtube.com watch page is dropped
+        val bad = Json.parseToJsonElement("""{"type": "movie", "tmdb": 1, "title": "X", "trailer": {"url": "https://example.com/x"}, "runtime": 125}""").jsonObject
+        val bp = DiscoverApi.parseTitlePage(bad, server)!!
+        assertNull(bp.trailer)
+        assertEquals(listOf("2 h 5 min"), DiscoverLogic.metaParts(bp))
+        assertTrue(DiscoverLogic.canRequest(bp))
+        assertFalse("in the catalogue: Play, not Request", DiscoverLogic.canRequest(bp.copy(title = bp.title.copy(play = io.github.kmmarin.tvbro.orbit.CatalogItem("m|p0|1", "movie", "X")))))
+        assertFalse("already requested", DiscoverLogic.canRequest(bp.copy(title = bp.title.copy(requestStatus = "pending"))))
+    }
+
+    @Test fun seasonChooser() {
+        val seasons = listOf(
+            io.github.kmmarin.tvbro.orbit.DiscoverSeason(1, 8, "Season 1", "available"),
+            io.github.kmmarin.tvbro.orbit.DiscoverSeason(2, 8, "Season 2", "requestable"),
+            io.github.kmmarin.tvbro.orbit.DiscoverSeason(3, 8, "Season 3", "requestable"),
+        )
+        assertEquals(setOf(2, 3), DiscoverLogic.toggleAll(emptySet(), seasons))
+        assertEquals(emptySet<Int>(), DiscoverLogic.toggleAll(setOf(2, 3), seasons))
+        assertEquals(setOf(2), DiscoverLogic.toggleSeason(setOf(2, 3), 3, seasons))
+        assertEquals("a season already there cannot be picked", setOf(2), DiscoverLogic.toggleSeason(setOf(2), 1, seasons))
+        assertEquals("all seasons", DiscoverLogic.seasonsText(listOf(3, 2), 2))
+        assertEquals("season 2", DiscoverLogic.seasonsText(listOf(2), 2))
+        assertEquals("seasons 1, 3", DiscoverLogic.seasonsText(listOf(3, 1), 5))
+        val body = DiscoverApi.requestBody(s(1399), listOf(3, 2))
+        assertEquals("""{"type":"tv","tmdb":1399,"seasons":[2,3]}""", body.toString())
+        assertEquals("""{"type":"movie","tmdb":5}""", DiscoverApi.requestBody(m(5), listOf(1)).toString())
+        assertEquals("""{"type":"tv","tmdb":7}""", DiscoverApi.requestBody(s(7), null).toString())
+    }
+
+    @Test fun pollsOnlyWhileSomethingIsOnItsWay() {
+        assertTrue(DiscoverLogic.shouldPoll(m(1).copy(download = DownloadInfo(5, 0, 0, null))))
+        assertTrue(DiscoverLogic.shouldPoll(m(1).copy(status = "processing")))
+        assertFalse(DiscoverLogic.shouldPoll(m(1).copy(status = "available")))
+        assertEquals(400L, DiscoverLogic.HERO_SETTLE_MS)
+        assertEquals(30_000L, DiscoverLogic.TITLE_POLL_MS)
     }
 
     @Test fun phoneOrTvLayout() {
