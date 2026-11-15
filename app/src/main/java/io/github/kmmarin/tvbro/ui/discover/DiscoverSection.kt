@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.kmmarin.tvbro.ui.discover
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,22 +23,22 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,13 +50,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.clickable
 import io.github.kmmarin.tvbro.AppModel
 import io.github.kmmarin.tvbro.Screen
 import io.github.kmmarin.tvbro.orbit.Badge
 import io.github.kmmarin.tvbro.orbit.DiscoverApi
 import io.github.kmmarin.tvbro.orbit.DiscoverRequest
-import io.github.kmmarin.tvbro.orbit.DiscoverRow
 import io.github.kmmarin.tvbro.orbit.DiscoverTitle
 import io.github.kmmarin.tvbro.ui.FocusMemory
 import io.github.kmmarin.tvbro.ui.MenuState
@@ -78,6 +76,8 @@ import io.github.kmmarin.tvbro.ui.orbit5.O5Row
 import io.github.kmmarin.tvbro.ui.orbit5.O5Space
 import io.github.kmmarin.tvbro.ui.orbit5.O5Type
 import io.github.kmmarin.tvbro.ui.orbit5.PhoneButton
+import io.github.kmmarin.tvbro.ui.orbit5.PhoneChip
+import io.github.kmmarin.tvbro.ui.orbit5.PhoneChipRow
 import io.github.kmmarin.tvbro.ui.orbit5.PhoneLandscapeCard
 import io.github.kmmarin.tvbro.ui.orbit5.PhonePosterCard
 import io.github.kmmarin.tvbro.ui.orbit5.PhoneRowHeading
@@ -97,7 +97,13 @@ val DiscoverTabs = listOf("For you", "Movies", "Shows", "Your requests")
 class DiscoverActions(
     val request: (DiscoverTitle) -> Unit = {},
     val play: (DiscoverTitle) -> Unit = {},
+    /** Opens the title page. */
+    val open: (DiscoverTitle) -> Unit = {},
+    /** The More menu (blue, long press). */
+    val more: (DiscoverTitle) -> Unit = {},
     val current: (DiscoverTitle) -> DiscoverTitle = { it },
+    /** Focus reached card (index) of row (id): the row may load its next page. */
+    val nearEnd: (String, Int) -> Unit = { _, _ -> },
     val canRequest: Boolean = true,
     val busy: String? = null,
     val retry: () -> Unit = {},
@@ -106,9 +112,10 @@ class DiscoverActions(
 
 /**
  * Discover (top bar): trending, upcoming and popular titles and the account's requests through the household's Seerr
- * (server: /v1/discover/rows, /v1/requests; spec section 11). Titles in the catalogue offer Play, the others Request;
- * badges show Requested, Approved, Downloading N% · ~T and Available, and the requests are asked for again every 20 s
- * while something downloads (2 min otherwise). When Seerr is not set up it says where the owner sets it up.
+ * (server: the /v1/discover routes and /v1/requests; spec section 11), a search, and a title page. Rows load Seerr's next page
+ * near their end; badges show Requested, Approved, Downloading N% · ~T and Available, and the requests are asked for
+ * again every 20 s while something downloads (2 min otherwise). When Seerr is not set up it says where the owner
+ * sets it up.
  */
 @Composable
 fun DiscoverSection(m: AppModel) {
@@ -117,16 +124,43 @@ fun DiscoverSection(m: AppModel) {
     LaunchedEffect(feed.state) {
         while (feed.state == DiscoverState.READY) { delay(if (feed.active) 20_000 else 120_000); feed.refreshRequests() }
     }
-    val actions = DiscoverActions(
-        request = { feed.request(it) }, play = { playTitle(m, it) }, current = { feed.current(it) },
+    val v = feed.title
+    if (v != null) { DiscoverTitleScreen(m, feed, v); return }
+    // the search runs once the typed text settles
+    LaunchedEffect(feed.query) {
+        val q = feed.query.trim()
+        if (q.isEmpty()) return@LaunchedEffect
+        delay(DiscoverLogic.SEARCH_SETTLE_MS)
+        feed.runSearch(q)
+    }
+    val launcher = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { r ->
+        r.data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let { feed.type(it); feed.runSearch(it, force = true) }
+    }
+    val sa = SearchActions(
+        onType = { feed.type(it) }, onSubmit = { feed.runSearch(it, force = true) }, onClear = { feed.clearSearch() },
+        onMic = {
+            try {
+                launcher.launch(android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                    .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM))
+            } catch (e: Exception) { m.toast("Voice search is not available on this device") }
+        },
+        more = { feed.searchMore() }, person = { feed.showPerson(it) },
+    )
+    val overlay = m.menu != null || m.prompt != null || m.progMenu != null
+    BackHandler(enabled = feed.search != null && !overlay && m.screen == Screen.LIST) { if (feed.search?.person != null) feed.showPerson(null) else feed.clearSearch() }
+    lateinit var actions: DiscoverActions
+    actions = DiscoverActions(
+        request = { feed.request(it) }, play = { playTitle(m, it) },
+        open = { feed.ui.restore = true; feed.openTitle(it) }, more = { moreMenu(m, it, actions) },
+        current = { feed.current(it) }, nearEnd = { id, i -> feed.nearEnd(id, i) },
         canRequest = feed.canRequest, busy = feed.busy, retry = { feed.refresh(force = true) },
         link = { m.orbit.clearMessage(); m.screen = Screen.ORBIT_LINK },
     )
-    DiscoverContent(feed.state, feed.rows, feed.requests, actions, admin = feed.admin, onMore = { t -> moreMenu(m, t, actions) })
+    DiscoverContent(feed.state, feed.rows, feed.requests, actions, admin = feed.admin, ui = feed.ui, query = feed.query, search = feed.search, searchActions = sa)
 }
 
-/** The title's page or playback: a catalogue title opens like on Home (IPTV plays on the TV; Plex / Jellyfin not yet). */
-private fun playTitle(m: AppModel, t: DiscoverTitle) {
+/** The title's page or playback: a catalogue title opens like on Home (IPTV plays on the TV). */
+internal fun playTitle(m: AppModel, t: DiscoverTitle) {
     val c = t.play ?: return
     io.github.kmmarin.tvbro.ui.home.open(m, Tile(c.key, c.title, source = c.source, show = c.isShow, vod = HomeFeed.vodOf(c), locked = c.locked), play = false)
 }
@@ -134,31 +168,26 @@ private fun playTitle(m: AppModel, t: DiscoverTitle) {
 private fun moreMenu(m: AppModel, t0: DiscoverTitle, a: DiscoverActions) {
     val t = a.current(t0)
     val items = ArrayList<Pair<String, () -> Unit>>()
+    items += "Details" to { a.open(t) }
     if (t.play != null) items += "Play" to { a.play(t) }
-    if (DiscoverApi.badge(t) == null) items += "Request" to { a.request(t) }
+    if (DiscoverApi.badge(t) == null && a.canRequest) items += "Request" to { a.request(t) }
     items += "Refresh" to { a.retry() }
     m.menu = MenuState(t.title, items)
 }
 
-/** Discover without the app model (the design shot draws it with stand-in data). */
+/** Discover without the app model (the design shots draw it with stand-in data). */
 @Composable
 fun DiscoverContent(
-    state: DiscoverState, rows: List<DiscoverRow>, requests: List<DiscoverRequest>, actions: DiscoverActions,
-    admin: Boolean = false, onMore: (DiscoverTitle) -> Unit = {},
+    state: DiscoverState, rows: List<PagedRow>, requests: List<DiscoverRequest>, actions: DiscoverActions,
+    admin: Boolean = false, ui: DiscoverUi = remember { DiscoverUi() }, query: String = "", search: DiscoverSearch? = null,
+    searchActions: SearchActions = SearchActions(),
 ) {
     if (state != DiscoverState.READY) { DiscoverEmpty(state, admin, actions); return }
-    if (LocalIsPhone.current) PhoneDiscover(rows, requests, actions, onMore) else TvDiscover(rows, requests, actions, onMore)
+    if (LocalIsPhone.current) PhoneDiscover(rows, requests, actions, ui, query, search, searchActions)
+    else TvDiscover(rows, requests, actions, ui, query, search, searchActions)
 }
 
 // ---------------------------------------------------------------- shared helpers
-
-/** The rows a sub-menu tab shows (Your requests is its own row and not in [rows]). */
-fun tabRows(rows: List<DiscoverRow>, tab: Int): List<DiscoverRow> = when (tab) {
-    1 -> rows.map { r -> r.copy(items = r.items.filter { !it.isShow }) }.filter { it.items.isNotEmpty() }
-    2 -> rows.map { r -> r.copy(items = r.items.filter { it.isShow }) }.filter { it.items.isNotEmpty() }
-    3 -> emptyList()
-    else -> rows
-}
 
 private fun typeName(t: DiscoverTitle) = if (t.isShow) "Show" else "Film"
 
@@ -168,15 +197,16 @@ private fun requestMeta(r: DiscoverRequest): String {
     return (if (r.type == "tv") "Show" else "Film") + seasons + by
 }
 
-private fun meta(t: DiscoverTitle) = listOfNotNull(t.year, typeName(t)).joinToString(" · ")
+internal fun meta(t: DiscoverTitle) = listOfNotNull(t.year, typeName(t)).joinToString(" · ")
 
 /** #1 trending title for the hero when nothing is focused. */
-private fun featured(rows: List<DiscoverRow>): Pair<DiscoverTitle, String>? {
-    val r = rows.firstOrNull() ?: return null
-    val t = r.items.firstOrNull() ?: return null
+private fun featured(rows: List<PagedRow>): Pair<DiscoverTitle, String>? {
+    val r = rows.firstOrNull { it.items.isNotEmpty() } ?: return null
     val what = if (r.id.startsWith("trending")) "#1 " + r.title.removeSuffix("s").lowercase().replaceFirstChar { it.uppercase() } else r.title
-    return t to what
+    return r.items.first() to what
 }
+
+private const val REQUESTS_ROW = "requests"
 
 // ---------------------------------------------------------------- TV
 
@@ -185,35 +215,52 @@ private val RowsTop = 532.dp
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun TvDiscover(rows: List<DiscoverRow>, requests: List<DiscoverRequest>, a: DiscoverActions, onMore: (DiscoverTitle) -> Unit) {
-    var tab by remember { mutableIntStateOf(0) }
-    val shown = remember(rows, tab) { tabRows(rows, tab) }
-    var focused by remember { mutableStateOf<Pair<DiscoverTitle, String>?>(null) }
+private fun TvDiscover(
+    rows: List<PagedRow>, requests: List<DiscoverRequest>, a: DiscoverActions, ui: DiscoverUi,
+    query: String, search: DiscoverSearch?, sa: SearchActions,
+) {
+    val tab = ui.tab
+    val shown = remember(rows, tab) { DiscoverLogic.tabRows(rows, tab) }
+    var focused by remember { mutableStateOf(ui.hero) }
     var inRows by remember { mutableStateOf(false) }
-    val subject = (if (inRows) focused else null) ?: featured(rows) ?: requests.firstOrNull()?.let { DiscoverApi.requestTitle(it) to "Your requests" }
-    val settled by produceState(subject, subject?.first?.key) { delay(250); value = subject }
+    val subject = (if (inRows) focused else null) ?: featured(shown.ifEmpty { rows }) ?: requests.firstOrNull()?.let { DiscoverApi.requestTitle(it) to "Your requests" }
+    // the hero (and its backdrop) follow focus only once it settles: moving along a row loads nothing
+    val settled by produceState(subject, subject?.first?.key) { delay(DiscoverLogic.HERO_SETTLE_MS); value = subject }
     val t = settled?.first?.let { a.current(it) }
     val badge = t?.let { DiscoverApi.badge(it) }
+    val onCard = { x: DiscoverTitle, rowId: String, label: String ->
+        focused = x to label; ui.hero = focused; ui.lastFocus = "$rowId|${x.key}"
+    }
 
-    val ft = focused?.first?.takeIf { inRows }?.let { a.current(it) }
+    val ft = focused?.first?.takeIf { inRows || search != null }?.let { a.current(it) }
     ColorKeyActions(
-        red = ft?.takeIf { DiscoverApi.badge(it) == null && a.canRequest }?.let { x -> KeyAction("Request") { a.request(x) } },
-        blue = ft?.let { x -> KeyAction("More") { onMore(x) } },
+        red = ft?.takeIf { DiscoverApi.badge(it) == null && it.play == null && a.canRequest }?.let { x -> KeyAction("Request") { a.request(x) } },
+        blue = ft?.let { x -> KeyAction("More") { a.more(x) } },
     )
 
-    val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val mainFr = remember { SafeFocus() }
-    LaunchedEffect(Unit) { repeat(10) { delay(120); if (FocusMemory.anyFocus || mainFr.request()) return@LaunchedEffect } }
+    val restoreFr = remember { SafeFocus() }
+    val searchFr = remember { SafeFocus() }
+    val restoreKey = ui.lastFocus.takeIf { ui.restore }
+    LaunchedEffect(Unit) {
+        if (ui.restore) { repeat(20) { delay(60); if (restoreFr.request()) { ui.restore = false; return@LaunchedEffect } }; ui.restore = false }
+        repeat(10) { delay(120); if (FocusMemory.anyFocus || mainFr.request()) return@LaunchedEffect }
+    }
 
     Box(Modifier.fillMaxSize().testTag("discover")) {
-        CinematicBackdrop(t?.let { BackdropSpec(it.backdrop ?: it.poster) }, Modifier.fillMaxSize())
-        SubMenuRow(DiscoverTabs, tab, { tab = it }, Modifier.padding(top = O5Space.SubMenuTop))
+        CinematicBackdrop(if (search != null) null else t?.let { BackdropSpec(it.backdrop ?: it.poster) }, Modifier.fillMaxSize(), dim = search != null)
+        SubMenuRow(DiscoverTabs, tab, { ui.tab = it; if (search != null) sa.onClear() }, Modifier.padding(top = O5Space.SubMenuTop))
+        DiscoverSearchField(query, sa, searchFr, Modifier.align(Alignment.TopEnd).padding(top = O5Space.SubMenuTop - 2.dp, end = O5Space.Side))
+        if (search != null) {
+            TvSearchResults(search, a, sa, ui.grid, onFocus = { x -> onCard(x, "search", "Search") }, focusKey = restoreKey?.substringAfter("search|", ""), focus = restoreFr)
+            return@Box
+        }
         Column(Modifier.padding(start = O5Space.Side, top = 192.dp).widthIn(max = 1200.dp)) {
             if (t != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(settled?.second?.uppercase() ?: "", style = O5Type.Eyebrow, color = O5.Accent, maxLines = 1)
-                    Text(if (t.play != null) "· In your library" else "· Not in your library", style = O5Type.Eyebrow, maxLines = 1)
+                    Text(if (t.play != null) "· In your library" else badge?.let { "· " + it.label } ?: "· Not in your library", style = O5Type.Eyebrow, maxLines = 1)
                 }
                 Text(t.title, style = O5Type.SectionHeroTitle.copy(fontSize = 88.sp, lineHeight = 86.sp), maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 10.dp, bottom = 8.dp))
@@ -225,33 +272,38 @@ private fun TvDiscover(rows: List<DiscoverRow>, requests: List<DiscoverRequest>,
             }
             Row(
                 Modifier.padding(top = 22.dp).focusProperties { enter = { mainFr.target() } }.focusGroup(),
-                horizontalArrangement = Arrangement.spacedBy(22.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(22.dp), verticalAlignment = Alignment.CenterVertically,
             ) {
                 when {
                     t == null -> {}
                     t.play != null -> O5Button("Play", icon = Icons.Filled.PlayArrow, primary = true, compact = true, focus = mainFr) { a.play(t) }
-                    badge == null -> O5Button(if (a.busy == t.key) "Requesting…" else "Request", icon = Icons.Filled.Add, primary = true, compact = true, focus = mainFr,
+                    badge == null && a.canRequest -> O5Button(if (a.busy == t.key) "Requesting…" else "Request", icon = Icons.Filled.Add, primary = true, compact = true, focus = mainFr,
                         modifier = Modifier.testTag("discover-request")) { a.request(t) }
-                    else -> O5Button("Refresh", icon = Icons.Filled.Refresh, compact = true, focus = mainFr) { a.retry() }
+                    else -> {}
                 }
+                if (t != null) O5Button("Details", icon = Icons.Filled.Info, compact = true, focus = if (t.play == null && (badge != null || !a.canRequest)) mainFr else null,
+                    modifier = Modifier.testTag("discover-details")) { a.open(t) }
                 if (t != null && badge != null) StatusBadge(badge)
             }
         }
         LazyColumn(
             Modifier.fillMaxSize().padding(top = RowsTop - FocusRoom).onFocusChanged {
-                if (inRows != it.hasFocus) { inRows = it.hasFocus; if (!it.hasFocus) scope.launch { listState.animateScrollToItem(0) } }
+                if (inRows != it.hasFocus) { inRows = it.hasFocus; if (!it.hasFocus) scope.launch { ui.list.animateScrollToItem(0) } }
             }.testTag("discover-rows"),
-            state = listState, contentPadding = PaddingValues(bottom = 420.dp), userScrollEnabled = false,
+            state = ui.list, contentPadding = PaddingValues(bottom = 420.dp), userScrollEnabled = false,
         ) {
             val showRequests = (tab == 0 || tab == 3) && requests.isNotEmpty()
-            if (showRequests) item(key = "requests") {
+            if (showRequests) item(key = REQUESTS_ROW) {
+                val st = ui.row(REQUESTS_ROW)
+                PrefetchImages(st, requests.map { r -> DiscoverApi.requestTitle(r).let { it.backdrop ?: it.poster } }, ImgSize.LANDSCAPE)
                 O5Row("Your requests", Modifier.padding(bottom = O5Space.BetweenRows - FocusRoom * 2 + 20.dp)
-                    .onFocusChanged { if (it.hasFocus) scope.launch { listState.animateScrollToItem(0) } }, gap = 26.dp) {
+                    .onFocusChanged { if (it.hasFocus) scope.launch { ui.list.animateScrollToItem(0) } }, gap = 26.dp, state = st) {
                     items(requests, key = { "r" + it.id + it.tmdb }) { r ->
                         val rt = DiscoverApi.requestTitle(r)
                         Column {
                             LandscapeCard(rt.backdrop ?: rt.poster, CardInfo(rt.title, requestMeta(r)), width = 300.dp, height = 168.dp,
-                                onFocus = { focused = rt to "Your requests" }, onLongClick = { onMore(rt) }) { if (rt.play != null) a.play(rt) else onMore(rt) }
+                                focus = if (restoreKey == "$REQUESTS_ROW|${rt.key}") restoreFr else null,
+                                onFocus = { onCard(rt, REQUESTS_ROW, "Your requests") }, onLongClick = { a.more(rt) }) { a.open(rt) }
                             StatusBadge(DiscoverApi.requestBadge(r), Modifier.padding(top = 12.dp))
                         }
                     }
@@ -261,20 +313,17 @@ private fun TvDiscover(rows: List<DiscoverRow>, requests: List<DiscoverRequest>,
                 Text("Nothing requested yet. Choose a title and press Request (or the red key).", style = O5Type.Body, modifier = Modifier.padding(start = O5Space.Side, top = FocusRoom))
             }
             itemsIndexed(shown, key = { _, r -> r.id }) { i, row ->
+                val st = ui.row(row.id)
+                PrefetchImages(st, row.items.map { it.poster })
                 O5Row(row.title, Modifier.padding(bottom = O5Space.BetweenRows - FocusRoom * 2 + 20.dp)
-                    .onFocusChanged { if (it.hasFocus) scope.launch { listState.animateScrollToItem(i + if (showRequests) 1 else 0) } }, gap = 24.dp) {
-                    items(row.items, key = { it.key }) { x ->
+                    .onFocusChanged { if (it.hasFocus) scope.launch { ui.list.animateScrollToItem(i + if (showRequests) 1 else 0) } }, gap = 24.dp, state = st) {
+                    itemsIndexed(row.items, key = { _, x -> x.key }) { idx, x ->
                         val cur = a.current(x)
                         val b = DiscoverApi.badge(cur)
                         Column {
                             PosterCard(cur.poster, CardInfo(cur.title, meta(cur)), width = 160.dp, height = 240.dp,
-                                onFocus = { focused = cur to row.title }, onLongClick = { onMore(cur) }) {
-                                when {
-                                    cur.play != null -> a.play(cur)
-                                    b == null && a.canRequest -> a.request(cur)
-                                    else -> onMore(cur)
-                                }
-                            }
+                                focus = if (restoreKey == "${row.id}|${cur.key}") restoreFr else null,
+                                onFocus = { onCard(cur, row.id, row.title); a.nearEnd(row.id, idx) }, onLongClick = { a.more(cur) }) { a.open(cur) }
                             if (b != null) StatusBadge(b, Modifier.padding(top = 8.dp).width(160.dp), small = true)
                         }
                     }
@@ -330,24 +379,32 @@ private fun DiscoverEmpty(state: DiscoverState, admin: Boolean, a: DiscoverActio
 
 // ---------------------------------------------------------------- phone
 
+/** Columns of the phone's search grid: 3 upright, more on its side. */
+internal fun phoneSearchColumns(widthDp: Int): Int = (widthDp / 130).coerceIn(3, 8)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PhoneDiscover(rows: List<DiscoverRow>, requests: List<DiscoverRequest>, a: DiscoverActions, onMore: (DiscoverTitle) -> Unit) {
-    var tab by remember { mutableIntStateOf(0) }
-    val shown = remember(rows, tab) { tabRows(rows, tab) }
+private fun PhoneDiscover(
+    rows: List<PagedRow>, requests: List<DiscoverRequest>, a: DiscoverActions, ui: DiscoverUi,
+    query: String, search: DiscoverSearch?, sa: SearchActions,
+) {
+    val tab = ui.tab
+    val shown = remember(rows, tab) { DiscoverLogic.tabRows(rows, tab) }
     val insets = LocalPhoneInsets.current
-    val tap = { x: DiscoverTitle -> if (x.play != null) a.play(x) else onMore(x) }
-    LazyColumn(Modifier.fillMaxSize().testTag("discover"), contentPadding = PaddingValues(top = insets.top + 4.dp, bottom = insets.bottom + 20.dp)) {
+    val cols = phoneSearchColumns(androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp)
+    LazyColumn(Modifier.fillMaxSize().testTag("discover"), state = ui.list, contentPadding = PaddingValues(top = insets.top + 4.dp, bottom = insets.bottom + 20.dp)) {
         item(key = "tabs") {
-            Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DiscoverTabs.forEachIndexed { i, s -> PhoneChip(s, i == tab) { tab = i } }
+            PhoneChipRow(Modifier.padding(vertical = 6.dp)) {
+                DiscoverTabs.forEachIndexed { i, s -> PhoneChip(s, i == tab) { ui.tab = i; if (search != null) sa.onClear() } }
             }
         }
+        item(key = "field") { PhoneSearchField(query, sa, Modifier.padding(start = 20.dp, end = 20.dp, top = 6.dp, bottom = 4.dp)) }
+        if (search != null) { phoneSearchResults(search, a, sa, cols); return@LazyColumn }
         featured(shown.ifEmpty { rows })?.let { (t0, what) ->
             val t = a.current(t0)
             item(key = "hero") {
                 Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 22.dp)) {
-                    Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)).background(Color(0xFF111111)).combinedClickable { tap(t) }) {
+                    Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)).background(Color(0xFF111111)).combinedClickable { a.open(t) }) {
                         NetImage(t.backdrop ?: t.poster, ImgSize.BACKDROP, Modifier.fillMaxSize(), ContentScale.Crop)
                     }
                     Text(what.uppercase(), style = PhoneType.Eyebrow, color = O5.Accent, modifier = Modifier.padding(top = 12.dp))
@@ -358,53 +415,50 @@ private fun PhoneDiscover(rows: List<DiscoverRow>, requests: List<DiscoverReques
                         Text(typeName(t), style = PhoneType.Meta)
                     }
                     val b = DiscoverApi.badge(t)
-                    Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                         when {
                             t.play != null -> PhoneButton("Play", icon = Icons.Filled.PlayArrow, primary = true) { a.play(t) }
-                            b == null -> PhoneButton(if (a.busy == t.key) "Requesting…" else "Request", icon = Icons.Filled.Add, primary = true) { a.request(t) }
-                            else -> StatusBadge(b)
+                            b == null && a.canRequest -> PhoneButton(if (a.busy == t.key) "Requesting…" else "Request", icon = Icons.Filled.Add, primary = true) { a.request(t) }
+                            b != null -> StatusBadge(b)
+                            else -> {}
                         }
+                        PhoneButton("Details", icon = Icons.Filled.Info) { a.open(t) }
                     }
                 }
             }
         }
-        if ((tab == 0 || tab == 3) && requests.isNotEmpty()) item(key = "requests") {
+        if ((tab == 0 || tab == 3) && requests.isNotEmpty()) item(key = REQUESTS_ROW) {
             Column(Modifier.padding(bottom = 22.dp)) {
                 PhoneRowHeading("Your requests")
-                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                LazyRow(state = ui.row(REQUESTS_ROW), contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(requests, key = { "r" + it.id + it.tmdb }) { r ->
                         val rt = DiscoverApi.requestTitle(r)
                         PhoneLandscapeCard(rt.backdrop ?: rt.poster, rt.title, requestMeta(r), below = {
                             StatusBadge(DiscoverApi.requestBadge(r), Modifier.padding(top = 6.dp), small = true)
-                        }, onLongClick = { onMore(rt) }) { tap(rt) }
+                        }, onLongClick = { a.more(rt) }) { a.open(rt) }
                     }
                 }
             }
         }
         if (tab == 3 && requests.isEmpty()) item(key = "none") {
-            Text("Nothing requested yet. Tap a title to request it.", style = PhoneType.Body, modifier = Modifier.padding(20.dp))
+            Text("Nothing requested yet. Open a title to request it.", style = PhoneType.Body, modifier = Modifier.padding(20.dp))
         }
         items(shown, key = { it.id }) { row ->
             Column(Modifier.padding(bottom = 22.dp)) {
                 PhoneRowHeading(row.title)
-                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(row.items, key = { it.key }) { x ->
+                val st = ui.row(row.id)
+                PrefetchImages(st, row.items.map { it.poster })
+                LazyRow(state = st, contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    itemsIndexed(row.items, key = { _, x -> x.key }) { idx, x ->
+                        // a phone has no focus: the row loads more when its end comes into view
+                        if (idx >= row.items.size - DiscoverLogic.NEAR_END) LaunchedEffect(row.items.size) { a.nearEnd(row.id, idx) }
                         val cur = a.current(x)
                         val b: Badge? = DiscoverApi.badge(cur)
                         PhonePosterCard(cur.poster, cur.title, meta(cur), below = b?.let { { StatusBadge(it, Modifier.padding(top = 5.dp), small = true) } },
-                            onLongClick = { onMore(cur) }) { tap(cur) }
+                            onLongClick = { a.more(cur) }) { a.open(cur) }
                     }
                 }
             }
         }
     }
-}
-
-/** Phone chip (13 px, 7 x 13): the phone sub-menu. */
-@Composable
-private fun PhoneChip(text: String, on: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier.clip(RoundedCornerShape(999.dp)).background(if (on) Color.White else Color(0x1AFFFFFF))
-            .clickable(onClick = onClick).padding(horizontal = 13.dp, vertical = 9.dp),
-    ) { Text(text, style = PhoneType.CardTitle.copy(fontSize = PhoneType.Body.fontSize * 0.87f), color = if (on) O5.Bg else Color.White, maxLines = 1) }
 }

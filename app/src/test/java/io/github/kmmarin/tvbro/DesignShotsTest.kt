@@ -96,6 +96,17 @@ import io.github.kmmarin.tvbro.ui.home.Tile
 import io.github.kmmarin.tvbro.ui.discover.DiscoverActions
 import io.github.kmmarin.tvbro.ui.discover.DiscoverContent
 import io.github.kmmarin.tvbro.ui.discover.DiscoverState
+import io.github.kmmarin.tvbro.ui.discover.DiscoverSearch
+import io.github.kmmarin.tvbro.ui.discover.DiscoverTitleView
+import io.github.kmmarin.tvbro.ui.discover.PagedRow
+import io.github.kmmarin.tvbro.ui.discover.QrInfo
+import io.github.kmmarin.tvbro.ui.discover.TitleActions
+import io.github.kmmarin.tvbro.ui.discover.TitleView
+import io.github.kmmarin.tvbro.orbit.CastMember
+import io.github.kmmarin.tvbro.orbit.DiscoverPerson
+import io.github.kmmarin.tvbro.orbit.DiscoverSeason
+import io.github.kmmarin.tvbro.orbit.DiscoverTitlePage
+import io.github.kmmarin.tvbro.orbit.TitleRequest
 import io.github.kmmarin.tvbro.ui.SettingsFrame
 import io.github.kmmarin.tvbro.ui.PickerPreview
 import io.github.kmmarin.tvbro.ui.profileRows
@@ -567,9 +578,9 @@ class DesignShotsTest {
         fun t(i: Long, n: String, type: String = "movie", status: String = "requestable", req: String? = null, dl: DownloadInfo? = null) =
             DiscoverTitle(type, i, n, "2025", rating = "8.0", status = status, requestStatus = req, download = dl)
         val rows = listOf(
-            DiscoverRow("trending-movies", "Trending movies", listOf(t(1, "Starfall Ridge"), t(2, "The Last Cartographer"), t(3, "Mirror Lake", status = "available"),
-                t(4, "Saffron Engine", req = "pending", status = "pending"), t(5, "Halcyon Drift"), t(6, "Paper Comets"), t(7, "Orchid Protocol"), t(8, "The Long Meridian"), t(9, "Quiet Machines"))),
-            DiscoverRow("trending-shows", "Trending shows", listOf(t(11, "Tidewater", "tv"), t(12, "Undertow Club", "tv"))),
+            PagedRow("trending-movies", "Trending movies", "trending", "movie", listOf(t(1, "Starfall Ridge"), t(2, "The Last Cartographer"), t(3, "Mirror Lake", status = "available"),
+                t(4, "Saffron Engine", req = "pending", status = "pending"), t(5, "Halcyon Drift"), t(6, "Paper Comets"), t(7, "Orchid Protocol"), t(8, "The Long Meridian"), t(9, "Quiet Machines")), 1, 9),
+            PagedRow("trending-shows", "Trending shows", "trending", "tv", listOf(t(11, "Tidewater", "tv"), t(12, "Undertow Club", "tv")), 1, 9),
         )
         val dl = DownloadInfo(42, 100, 58, iso(18 * 60_000L + 20_000))
         fun r(id: Long, n: String, type: String, st: String, ms: String, by: String, d: DownloadInfo? = null, seasons: List<Int> = emptyList()) =
@@ -586,6 +597,92 @@ class DesignShotsTest {
             ShellFrame(active = NavTab.DISCOVER, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani") {
                 DiscoverContent(DiscoverState.READY, rows, reqs, DiscoverActions())
             }
+        }
+    }
+
+    // ---- Discover search and title page (orbit/tv-discover2) ----
+
+    private fun dt(i: Long, n: String, type: String = "movie", status: String = "requestable", req: String? = null, dl: DownloadInfo? = null) =
+        DiscoverTitle(type, i, n, "2025", rating = "7.6", status = status, requestStatus = req, download = dl)
+
+    private val found = DiscoverSearch(
+        "star",
+        results = listOf(
+            dt(1, "Starfall Ridge"), dt(2, "Star Harbour", "tv", status = "available"), dt(3, "Starlit Avenue", req = "pending", status = "pending"),
+            dt(4, "The Star Keeper"), dt(5, "Stars Over Ashford", "tv"), dt(6, "Starboard"), dt(7, "North Star Line", status = "processing", req = "approved"),
+            dt(8, "Starling"), dt(9, "Lone Star Radio", "tv"), dt(10, "Starfield Nine"), dt(11, "Stardust Motel"), dt(12, "Seven Stars", "tv"),
+        ),
+        people = listOf(
+            DiscoverPerson(31, "Ada Starling", null, listOf(dt(1, "Starfall Ridge"), dt(8, "Starling"))),
+            DiscoverPerson(32, "Ben Example", null, listOf(dt(4, "The Star Keeper"))),
+            DiscoverPerson(33, "Cleo Example", null, emptyList()),
+        ),
+        page = 1, pages = 6, total = 117, loading = false,
+    )
+
+    @Test fun discoverSearch() = shot("discover-search") {
+        OrbitCanvas {
+            ColorKeyActions(red = KeyAction("Request") {}, blue = KeyAction("More") {})
+            ShellFrame(active = NavTab.DISCOVER, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani") {
+                DiscoverContent(DiscoverState.READY, emptyList(), emptyList(), DiscoverActions(), query = "star", search = found)
+            }
+        }
+    }
+
+    private fun titlePage(choosing: Boolean): TitleView {
+        val dl = DownloadInfo(65, 4_000_000_000, 1_400_000_000, iso(18 * 60_000L + 20_000), 3)
+        val t = dt(1399, "Tidewater", "tv", status = "partial", req = "approved", dl = dl).copy(
+            overview = "A harbour town's ferry captain finds a ledger in the hull of a wreck, and every name in it is still alive. Three seasons of a quiet, salt-stained mystery.",
+        )
+        val p = DiscoverTitlePage(
+            t, listOf("Drama", "Mystery", "Crime"), "The sea keeps score.", "2024-03-01", 52,
+            cast = listOf(CastMember(1, "Ada Example", "Mara Quinn", null), CastMember(2, "Ben Example", "Tom Hale", null), CastMember(3, "Cleo Example", "Iris", null),
+                CastMember(4, "Dev Example", "The Harbourmaster", null), CastMember(5, "Eve Example", "June", null), CastMember(6, "Finn Example", "Rook", null)),
+            trailer = "https://www.youtube.com/watch?v=abcdef12",
+            requests = listOf(TitleRequest(4, "approved", iso(-13 * 86_400_000L), "Sam", listOf(2))),
+            seerrUrl = "http://192.0.2.20:5055/tv/1399",
+            seasons = listOf(DiscoverSeason(1, 8, "Season 1", "available"), DiscoverSeason(2, 8, "Season 2", "processing"),
+                DiscoverSeason(3, 10, "Season 3", "requestable"), DiscoverSeason(4, 10, "Season 4", "requestable")),
+            seasonCount = 4, episodeCount = 36, networks = listOf("Example TV"), showStatus = "Returning Series",
+        )
+        return TitleView(t, p, choosing = choosing, pick = if (choosing) setOf(3, 4) else emptySet())
+    }
+
+    @Test fun discoverTitle() = shot("discover-title") {
+        OrbitCanvas {
+            ShellFrame(active = NavTab.DISCOVER, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani") {
+                DiscoverTitleView(titlePage(false), TitleActions())
+            }
+        }
+    }
+
+    @Test fun discoverTitleSeasons() = shot("discover-title-seasons") {
+        OrbitCanvas {
+            ShellFrame(active = NavTab.DISCOVER, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani") {
+                DiscoverTitleView(titlePage(true), TitleActions())
+            }
+        }
+    }
+
+    @Test fun discoverTitleQr() = shot("discover-title-qr") {
+        OrbitCanvas {
+            ShellFrame(active = NavTab.DISCOVER, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani") {
+                DiscoverTitleView(titlePage(false), TitleActions(), QrInfo("Open Tidewater in Seerr", "http://192.0.2.20:5055/tv/1399"))
+            }
+        }
+    }
+
+    @Config(sdk = [34], qualifiers = "w412dp-h915dp-port-xxhdpi")
+    @Test fun phoneDiscoverSearch() = shot("phone-discover-search") {
+        PhoneFrame(active = NavTab.DISCOVER, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani", title = "Discover") {
+            DiscoverContent(DiscoverState.READY, emptyList(), emptyList(), DiscoverActions(), query = "star", search = found)
+        }
+    }
+
+    @Config(sdk = [34], qualifiers = "w412dp-h915dp-port-xxhdpi")
+    @Test fun phoneDiscoverTitle() = shot("phone-discover-title") {
+        PhoneFrame(active = NavTab.DISCOVER, onTab = {}, onSearch = {}, onAvatar = {}, profileName = "Dani", title = "Discover") {
+            DiscoverTitleView(titlePage(true), TitleActions())
         }
     }
 

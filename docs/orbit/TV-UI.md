@@ -39,7 +39,7 @@ are: `96.dp` side margin, `112.sp` hero title. Legacy tvBro screens, written in 
 | `ui/live/RecordingsPage.kt`, `LiveCards.kt` | Live TV ▸ Recordings in direction 5 (`RecordingsSection` / `RecordingsView`); `ChannelArtCard` (logo on a gradient, badge, progress) | Live TV / player |
 | `ui/search/SearchSection.kt` | Search (top-bar magnifier) in direction 5: mic, big field, history chips, rows Channels · Live now · Movies · Shows · Later and catch-up | shell |
 | `ui/live/StreamPrompt.kt` | Stream-limit dialog (`StreamPromptCard`), used by `OrbitStreamPrompt` | Live TV / player |
-| `ui/discover/` | `DiscoverSection` (TV and phone), `DiscoverFeed` (rows, requests, live progress); client in `orbit/DiscoverApi.kt` | Discover / Settings / phone agent |
+| `ui/discover/` | `DiscoverSection` (TV and phone), `DiscoverFeed` (paged rows, requests, search, title page), `DiscoverLogic`, `DiscoverSearchUi`, `DiscoverTitlePage`; client in `orbit/DiscoverApi.kt` | Discover / Settings / phone agent |
 | `ui/SettingsUi.kt` | Settings page: categories in the sub-menu, `SettingRow` / `ToggleRow` / `SegmentRow`, Profiles, Requests | Discover / Settings / phone agent |
 | `ui/shell/PhoneShell.kt` | Phone 5b: `LocalIsPhone`, `LocalPhoneInsets`, `PhoneShell`, `PhoneFrame` | Discover / Settings / phone agent |
 | `ui/orbit5/Phone.kt`, `StatusBadge.kt` | Phone bottom bar, header, buttons, cards; Discover status pills | shared |
@@ -179,7 +179,7 @@ the server is not answering, the title cannot be played). No IPTV stream slot is
 - `DesignShotsTest` (Robolectric native graphics) renders Home, Browse, both pickers, Movies Recommended and Browse,
   a collection, a title page, Live TV ▸ Channels (`live-compact`), the side menu of groups (`live-sidemenu`,
   `live-sidemenu-search`), Recordings (`recordings`, `recordings-scheduled`), Search (`search`, `search-results`), the full guide (`guide`), the player overlay
-  (`player`) and the stream prompt (`stream-prompt`) at 1920 × 1080 to
+  (`player`), the stream prompt (`stream-prompt`) and Discover search and title page (`discover-search`, `discover-title`, `discover-title-seasons`, `discover-title-qr`; phone: `phone-discover-search`, `phone-discover-title`) at 1920 × 1080 to
   `app/build/orbit-shots/*.png`. It is a visual check only; nothing compares the images.
 
 ## Live TV and the player
@@ -228,11 +228,35 @@ the server is not answering, the title cannot be played). No IPTV stream slot is
 
 `DiscoverFeed` asks `/v1/discover/rows` (cached by the server) and `/v1/requests` (fresh; download progress comes from
 there, again every 20 s while something downloads, 2 min otherwise). Rows: Your requests (landscape cards with a
-status badge), Trending movies, Trending shows, Upcoming movies, Upcoming shows, Popular; the sub-menu filters them
-(For you · Movies · Shows · Your requests). Badges: `DiscoverApi.badge` (Requested, Approved, Downloading N% · ~T,
-Available, Pending). A title with `play` (in the profile's catalogue) offers Play and opens like a Home card; the others
-offer Request (OK on a poster, the hero button, or red). Blue opens a menu. Green (trailer) and yellow (not
-interested) have no action yet. Not set up (409), not linked to Orbit and Seerr down each get a calm page.
+status badge), Trending movies, Trending shows, Upcoming movies, Upcoming shows, Popular movies, Popular shows; the
+sub-menu filters them (For you · Movies · Shows · Your requests). Badges: `DiscoverApi.badge` (Requested, Approved,
+Downloading N% · ~T from `download.percent` and the ISO `eta`, Available, Pending). Not set up (409), not linked to
+Orbit and Seerr down each get a calm page.
+
+- **Paged rows** (`DiscoverLogic`, `PagedRow`): each row keeps `page` / `pages` and loads the next page
+  (`/v1/discover/rows/{id}?page=`) when focus is 6 cards from its end (on a phone: when the end comes into view). The
+  film / show rows cut from a mixed list (trending, upcoming) keep loading, at most 4 pages a go, until they have 14
+  titles. A page is fetched once and shared by both rows.
+- **Hero**: follows the focused card after focus has stayed 400 ms, so moving along a row loads no backdrop. Buttons:
+  Play (in the catalogue) or Request, and Details.
+- **Cards**: OK (tap) opens the title page; red requests (a film at once, a show opens the title page with the season
+  chooser); blue / long press opens the menu (Details, Play, Request, Refresh). Card artwork of the next 8 cards past
+  the visible ones is loaded ahead (`PrefetchImages`).
+- **Images**: posters and backdrops arrive as signed relative `/img?u=…` links and load from the home server with the
+  session cookie; raw TMDB cast and people photos go through `/v1/discover/image` (`DiscoverApi.image`).
+- **Search** (`DiscoverSearchUi.kt`): a mic and a field at the right of the sub-menu row (OK types with the on-screen
+  keyboard, letters from a remote keyboard go straight in, voice through the speech recogniser). It runs 400 ms after
+  typing stops (`/v1/discover/search`), then shows "Results for …", a People row (OK shows what the person is known
+  for, "All results" goes back) and an 8-column poster grid with badges that loads more within 16 cards of its end.
+  Back clears the search. Phone: a field under the chips, a People row, a 3-column grid.
+- **Title page** (`DiscoverTitlePage.kt`, `/v1/discover/title/{movie|tv}/{tmdb}`): drawn at once from the card, then
+  filled in: backdrop, poster, title, year, rating, runtime or seasons and episodes, genres, tagline, overview,
+  status, download bar ("Downloading 65% · ~18 min", size, files), "Requested by X on <date>", then Play, Request /
+  Request more (shows: a season chooser with "All seasons"; closed seasons show their status), Trailer (opens
+  YouTube, else a QR code) and Open in Seerr (a QR code on the TV, the browser on a phone), then the seasons and the
+  cast. Colour keys: red Request, green Trailer, blue Open in Seerr. It asks again every 30 s while a download runs.
+  Back closes the QR code or the chooser first, then returns to the same tab, row, card, pages and search (the lazy
+  states live in `DiscoverFeed.ui`). Phone: backdrop header with Back, wide Request / Play, round Trailer / Seerr.
 
 ## Settings
 
