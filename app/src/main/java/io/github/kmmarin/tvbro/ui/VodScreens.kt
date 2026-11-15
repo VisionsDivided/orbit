@@ -216,7 +216,7 @@ fun VodPlayerScreen(m: AppModel) {
     val mediaNext = media?.p?.next
     val nextLabel: String? = mediaNext?.let { it.title.ifBlank { "Next episode" } }
         ?: nextEp?.let { "${io.github.kmmarin.tvbro.data.Watch.code(it)} - ${io.github.kmmarin.tvbro.data.VodFmt.cleanTitle(m.playingSeries()?.name ?: "", it.title)}" }
-    // progress for the media server: every 10 s while playing, at once on pause, "stopped" when the screen goes
+    // progress for the media server: every 10 s (also while paused), at once on pause, "stopped" when the screen goes
     val clock = remember(media?.p?.session) { io.github.kmmarin.tvbro.orbit.MediaProgressClock() }
     val clockNow by rememberUpdatedState(clock)
     val fellBack = remember { booleanArrayOf(false) }

@@ -191,8 +191,9 @@ class MediaApi(private val api: OrbitApi = OrbitApi()) {
 }
 
 /**
- * When to report progress (`/v1/media/progress`): every [intervalMs] while playing, at once when playing pauses or
- * goes on, and "stopped" once at the end. [tick] is called often (every second or so) with the player's state.
+ * When to report progress (`/v1/media/progress`): every [intervalMs] while playing and while paused (the server ends
+ * a session that sends nothing for 90 s), at once when playing pauses or goes on, and "stopped" once at the end.
+ * [tick] is called often (every second or so) with the player's state.
  */
 class MediaProgressClock(private val intervalMs: Long = 10_000) {
     private var last: String? = null
@@ -205,7 +206,7 @@ class MediaProgressClock(private val intervalMs: Long = 10_000) {
         val s = if (playing) MediaApi.PLAYING else MediaApi.PAUSED
         // nothing until it first plays (a paused first state is the player still opening)
         if (last == null && !playing) return null
-        if (s != last || (playing && nowMs - lastAt >= intervalMs)) { last = s; lastAt = nowMs; return s }
+        if (s != last || nowMs - lastAt >= intervalMs) { last = s; lastAt = nowMs; return s }
         return null
     }
 

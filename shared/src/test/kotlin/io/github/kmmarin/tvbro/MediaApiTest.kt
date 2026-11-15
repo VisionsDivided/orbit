@@ -124,8 +124,9 @@ class MediaApiTest {
         assertNull(c.tick(5_000, true))
         assertEquals("playing", c.tick(11_000, true))
         assertEquals("paused", c.tick(12_000, false))
-        assertNull(c.tick(40_000, false))                           // paused: once
-        assertEquals("playing", c.tick(41_000, true))
+        assertNull(c.tick(20_000, false))
+        assertEquals("paused", c.tick(22_000, false))               // paused: every 10 s too (the server's idle stop)
+        assertEquals("playing", c.tick(23_000, true))
         assertEquals("stopped", c.stop())
         assertNull(c.stop()); assertNull(c.tick(60_000, true))
         assertEquals("stopped", MediaProgressClock().stop())        // closed before it played: the server still ends the session
