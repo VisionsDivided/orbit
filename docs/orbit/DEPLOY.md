@@ -109,6 +109,13 @@ server relays everything from the provider: catalogue, guide and **every byte of
   `ORBIT_HIDE_PROVIDER_LOGIN: "0"` in the compose file (which then overrides the setting; `"1"` pins it on). TVs
   switch at their next playlist sync (within 30 minutes, or when the app starts). Unlinking a TV, signing it out from
   another device or disabling its account ends its facade login at once, including a stream it is playing.
+- **Keys.** The TVs' facade logins and the sealed stream addresses use keys derived from `orbit.key` (outside the
+  data folder), not from `sign.key` in it, so a copy of `/data` alone gives no facade login. The first start of a
+  server with this change writes `keys-derived.json` and, for one hour after that only, still accepts the old
+  logins and sealed addresses, for TVs that have not synced yet; each TV switches at its next playlist sync (when
+  the app starts and every 30 minutes), after which its old login no longer works. A TV that was off for longer
+  than that hour gets the new login as soon as it starts. Rotating `orbit.key` changes the facade logins too: TVs
+  pick up the new ones at their next playlist sync (restart the TV app to make it immediate).
 - **A provider on the LAN** (e.g. a tvheadend box) needs "Playlists and streams on your local network" allowed, as
   for browsers: the relay follows the same address rules (`net.py`).
 - The container's nginx proxies `/xt/` without buffering (`infra/docker/nginx.conf`); a TLS proxy in front needs

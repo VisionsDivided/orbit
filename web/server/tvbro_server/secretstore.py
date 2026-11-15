@@ -9,12 +9,15 @@ request needs to reach the provider.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
 from typing import Optional
 
 from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from .secfile import read_key_file, write_secret
 
@@ -78,8 +81,19 @@ class SecretStore:
             raise RuntimeError(ROTATION_UNFINISHED)
         self.enc_path = os.path.join(data_dir, name)
         self.key_path = os.path.join(data_dir, "key.bin")
-        self._fernet = Fernet(self._load_key())
+        self._key = self._load_key()
+        self._fernet = Fernet(self._key)
         self._cache: Optional[dict] = None
+
+    def derive(self, label: bytes, length: int = 32) -> bytes:
+        """A key for another purpose, derived from the encryption key (HKDF-SHA256, ``label`` keeps the purposes
+        apart). The encryption key normally lives outside the data folder (credential / TVBRO_KEY_FILE), so a copy
+        of the data folder alone does not give these keys either."""
+        try:
+            ikm = base64.urlsafe_b64decode(self._key)
+        except (ValueError, TypeError):
+            ikm = bytes(self._key)
+        return HKDF(algorithm=hashes.SHA256(), length=length, salt=b"orbit-derived-keys/v1", info=label).derive(ikm)
 
     def _load_key(self) -> bytes:
         k = key_source()

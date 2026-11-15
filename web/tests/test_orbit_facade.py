@@ -149,6 +149,23 @@ class Keys(unittest.TestCase):
         self.acc.revoke(self.alex, dev["id"])
         self.assertIsNone(self.keys.check(u, p), "unlinked: dead at once")
 
+    def test_old_data_folder_key_only_until_the_device_renews(self):
+        """L2: the old key (sign.key in the data folder) opens a facade login only during the upgrade grace and
+        only until that device fetched its new login (its next playlist sync)."""
+        t = [1000.0]
+        old_key = b"o" * 32
+        keys = F.DeviceKeys(self.acc, b"n" * 32, clock=lambda: t[0], legacy_key=old_key, legacy_until=2000.0)
+        u = "tv" + self.acc.db.one("SELECT id FROM account_sessions WHERE sess_hash=?", (self.tv["h"],))[0]
+        legacy = F.DeviceKeys(self.acc, old_key).creds(self.tv)[1]
+        self.assertEqual(keys.check(u, legacy), self.tv["h"], "a TV that has not synced yet keeps playing")
+        t[0] = 2001.0
+        self.assertIsNone(keys.check(u, legacy), "the grace is over")
+        t[0] = 1500.0
+        _, new = keys.creds(self.tv)                 # the TV's playlist sync
+        self.assertNotEqual(new, legacy)
+        self.assertEqual(keys.check(u, new), self.tv["h"])
+        self.assertIsNone(keys.check(u, legacy), "renewed: the old login is dead for this device")
+
     def test_desktop_app_sessions_get_their_own_login(self):
         desk = self.acc.gate(self.auth.session(self.acc.login("alex", "correct horse 1", "192.0.2.7", "Desktop", kind="desktop")))
         u, p = self.keys.creds(desk)
@@ -465,6 +482,20 @@ class Server(unittest.TestCase):
         self.assertEqual(pl["p1"]["kind"], "m3u")
         self.assertTrue(pl["p1"]["url"].startswith(self.base + "/xt/p1/get.php?"))
         self.assertEqual(self.req("GET", "/v1/device/playlists", headers=self.alex)[0], 403, "browsers: still never")
+
+    def test_1b_the_data_folder_alone_yields_no_facade_login(self):
+        """L2: with sign.key (the data folder) one could once compute every TV's facade secret. Now the facade key
+        comes from the encryption key outside the data folder; after the TV synced, the old secret is refused."""
+        import hashlib
+        import hmac as HM
+        server, user, pw = self.facade()                       # the TV's playlist sync: its new login
+        with open(os.path.join(self.data, "sign.key"), "rb") as f:
+            sign_key = f.read().strip()
+        h = hashlib.sha256(self.tv_sess["Cookie"].split("=", 1)[1].encode()).hexdigest()
+        legacy = HM.new(sign_key, ("orbit-xt|" + h).encode(), hashlib.sha256).hexdigest()[:32]
+        self.assertNotEqual(legacy, pw)
+        self.assertEqual(self.raw("%s/player_api.php?username=%s&password=%s" % (server, user, legacy))[0], 401)
+        self.assertEqual(self.raw("%s/player_api.php?username=%s&password=%s" % (server, user, pw))[0], 200)
 
     def test_2_catalogue_passthrough(self):
         server, user, pw = self.facade()

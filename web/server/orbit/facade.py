@@ -113,23 +113,42 @@ def safe_err(e: BaseException) -> str:
 
 
 class DeviceKeys:
-    """The facade login of each linked TV session: user ``tv<public session id>``, secret = HMAC(server key,
-    session hash). Valid exactly as long as the session is (auth.py) and its account link is (accounts.py)."""
+    """The facade login of each linked TV session: user ``tv<public session id>``, secret = HMAC(facade key,
+    session hash). Valid exactly as long as the session is (auth.py) and its account link is (accounts.py).
 
-    def __init__(self, accounts, key: bytes, clock: Callable[[], float] = time.time):
+    The facade key is derived from the encryption key kept outside the data folder (app.py), so the data folder alone
+    does not give anyone a facade login. ``legacy_key`` (the old key from the data folder) is accepted only until
+    ``legacy_until`` and only for a session that has not fetched its new login yet: a linked TV picks up the new login
+    at its next playlist sync (at start and every 30 minutes) and keeps playing in between."""
+
+    def __init__(self, accounts, key: bytes, clock: Callable[[], float] = time.time,
+                 legacy_key: Optional[bytes] = None, legacy_until: float = 0.0):
         self.acc, self.key, self.clock = accounts, key, clock
+        self.legacy_key, self.legacy_until = legacy_key, legacy_until
+        self._renewed: set = set()                  # session hashes that fetched the new login
         self._users: dict[str, tuple[float, Optional[str]]] = {}     # user -> (until, session hash or None)
         self._lock = threading.Lock()
 
-    def _secret(self, h: str) -> str:
-        return hmac.new(self.key, ("orbit-xt|" + h).encode(), sha256).hexdigest()[:32]
+    def _secret(self, h: str, key: Optional[bytes] = None) -> str:
+        return hmac.new(key or self.key, ("orbit-xt|" + h).encode(), sha256).hexdigest()[:32]
 
     def creds(self, sess: dict) -> Optional[tuple[str, str]]:
         """(user, secret) for a linked TV or desktop app session, else None."""
         row = self.acc.db.one("SELECT id FROM account_sessions WHERE sess_hash=? AND kind IN ('tv','desktop')", (sess["h"],))
         if row is None:
             return None
+        if self.legacy_key is not None:
+            with self._lock:
+                self._renewed.add(sess["h"])        # from now on only the new login works for this device
         return "tv" + row[0], self._secret(sess["h"])
+
+    def _legacy_ok(self, h: str, secret: str) -> bool:
+        if self.legacy_key is None or self.clock() >= self.legacy_until:
+            return False
+        with self._lock:
+            if h in self._renewed:
+                return False
+        return hmac.compare_digest(self._secret(h, self.legacy_key), secret)
 
     def _hash_of(self, user: str) -> Optional[str]:
         now = self.clock()
@@ -150,7 +169,7 @@ class DeviceKeys:
         if not isinstance(user, str) or not isinstance(secret, str) or not USER_RE.match(user) or not PASS_RE.match(secret):
             return None
         h = self._hash_of(user)
-        if h is None or not hmac.compare_digest(self._secret(h), secret):
+        if h is None or not (hmac.compare_digest(self._secret(h), secret) or self._legacy_ok(h, secret)):
             return None
         return h if self.alive(h) else None
 

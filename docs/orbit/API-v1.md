@@ -122,10 +122,13 @@ With it on, `/v1/device/playlists` answers, for each playlist:
   (one guide address per configured one; empty when none is set), `server` / `user` / `pass` empty.
 
 `<origin>` is the scheme and `Host` the TV used for this request. The user is the TV session's public id, the
-password an HMAC of the session with the server key, so both stay the same for as long as the TV stays linked (the
+password an HMAC of the session with the facade key, so both stay the same for as long as the TV stays linked (the
 TV's playlist list does not change between syncs). They stop working at once when the session ends: unlinked,
-signed out from another device (`/v1/sessions/revoke`), account disabled or password reset, or expiry. Rotating the
-server key changes every password; TVs get the new one at their next playlist sync. A TV app that predates the
+signed out from another device (`/v1/sessions/revoke`), account disabled or password reset, or expiry. The facade
+key, and the key of the sealed `s/` / `t/` and `/seg` addresses, are derived (HKDF-SHA256, one label per purpose)
+from the encryption key that is kept outside the data folder (`orbit.key`), not from `sign.key` in it: a copy of
+the data folder alone gives no facade login and cannot forge a sealed address. Rotating the encryption key changes
+every password; TVs get the new one at their next playlist sync (at start and every 30 minutes). A TV app that predates the
 facade just sees an Xtream server and works unchanged.
 
 Facade routes (Host check as everywhere; no cookie, the device login is in the address; wrong or dead logins get
