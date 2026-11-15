@@ -8,8 +8,8 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- In-app updates from GitHub Releases: hands the downloaded APK to the system installer (user confirms). -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- REQUEST_INSTALL_PACKAGES (in-app updates) is not here: Orbit builds have the self-update off. A build with
+         -Ptvbro.updateCheck=true adds it from src/selfupdate/AndroidManifest.xml (app/build.gradle.kts). -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
 

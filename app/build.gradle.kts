@@ -83,6 +83,11 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1,INDEX.LIST,DEPENDENCIES}" }
+    // The install permission only where the in-app update can use it (Orbit builds have it off)
+    if (updateCheck) {
+        sourceSets.getByName("debug").manifest.srcFile("src/selfupdate/AndroidManifest.xml")
+        sourceSets.getByName("release").manifest.srcFile("src/selfupdate/AndroidManifest.xml")
+    }
     testOptions {
         unitTests.isReturnDefaultValues = true
         unitTests.isIncludeAndroidResources = true // Robolectric UI tests load the app's drawables
