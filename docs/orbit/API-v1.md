@@ -140,8 +140,8 @@ Facade routes (Host check as everywhere; no cookie, the device login is in the a
 | `xmltv.php?username&password[&n=i]` | the guide, streamed through: Xtream's own `xmltv.php`, or the M3U playlist's i-th guide address. |
 | `get.php?username&password` | the M3U playlist (for Xtream: the provider's `get.php`), rewritten: every stream line, the `url-tvg` / `x-tvg-url` guide addresses and absolute `catchup-source` templates point here. Logos stay as they are. |
 | `live\|movie\|series\|timeshift/<user>/<pass>/<rest>` | relayed from the provider's same path with the real login (Xtream only). |
-| `s/<user>/<pass>/<token>[.ext]` | a sealed provider address (HLS segment, M3U stream, guide); a query string the TV adds (catch-up "append") is passed on. |
-| `t/<user>/<pass>/<token>[.ext]?v0=…&v1=…` | a sealed catch-up template; its placeholders were handed to the TV in order as `v0`, `v1` …, so it fills them in as usual. |
+| `s/<user>/<pass>/<token>[.ext]` | a sealed provider address (HLS segment, M3U stream, guide); a query string the TV adds (catch-up "append") is passed on, re-encoded: at most 8 `name=value` pairs, names of letters, digits, `_` or `-`, values of letters, digits and `:_+.-` only (anything else: 400). |
+| `t/<user>/<pass>/<token>[.ext]?v0=…&v1=…` | a sealed catch-up template; its placeholders were handed to the TV in order as `v0`, `v1` …, so it fills them in as usual. Values may hold only letters, digits and `:_+.-` (URL-quoted into the template); anything else answers 400 and never reaches the provider. |
 
 Relaying: bytes are piped through 64 KiB at a time as they arrive (no buffering beyond one chunk; a TV that stops
 reading stops the provider read too), `Range` / `Content-Range` / `Accept-Ranges` pass through for films, the

@@ -274,9 +274,34 @@ def template_link(tpl: str, seal: Callable[[str], str], prefix: str) -> str:
     return prefix + seal(tpl) + _ext(PLACEHOLDER.sub("", tpl)) + ("?" + q if q else "")
 
 
+_CATCHUP_VALUE = re.compile(r"^[A-Za-z0-9:_+.\-]{0,64}$")     # times, durations, offsets: what templates need
+_CATCHUP_KEY = re.compile(r"^[A-Za-z0-9_\-]{1,32}$")
+
+
+def _catchup_value(v: str) -> str:
+    if not isinstance(v, str) or not _CATCHUP_VALUE.match(v):
+        raise ValueError("catch-up value not allowed")
+    return urllib.parse.quote(v, safe=":_.-")
+
+
 def fill_template(tpl: str, values: dict) -> str:
+    """The template with the TV's values (v0, v1 …) put back. Only letters, digits and ``:_+.-`` are accepted,
+    URL-quoted; anything else raises ValueError (it could otherwise change the provider address)."""
     it = iter(range(10_000))
-    return PLACEHOLDER.sub(lambda m: values.get(f"v{next(it)}", ""), tpl)
+    return PLACEHOLDER.sub(lambda m: _catchup_value(values.get(f"v{next(it)}", "")), tpl)
+
+
+def safe_append(raw_query: str) -> str:
+    """A catch-up "append" query the TV added (``utc=…&lutc=…``), re-encoded; ValueError for anything else."""
+    pairs = urllib.parse.parse_qsl(raw_query, keep_blank_values=True, strict_parsing=True)
+    if not pairs or len(pairs) > 8:
+        raise ValueError("catch-up query not allowed")
+    out = []
+    for k, v in pairs:
+        if not _CATCHUP_KEY.match(k):
+            raise ValueError("catch-up query not allowed")
+        out.append(f"{k}={_catchup_value(v)}")
+    return "&".join(out)
 
 
 class Scrub:
@@ -469,10 +494,13 @@ class Facade:
             url = self.unseal(tok)
             if not url or not url.lower().startswith(("http://", "https://")):
                 return self._err(h, 403, "bad token")
-            if kind == "t":
-                url = fill_template(url, query)
-            elif raw_query:                                   # catch-up "append": the TV added ?utc=… to the address
-                url += ("&" if "?" in url else "?") + raw_query
+            try:
+                if kind == "t":
+                    url = fill_template(url, query)
+                elif raw_query:                               # catch-up "append": the TV added ?utc=… to the address
+                    url += ("&" if "?" in url else "?") + safe_append(raw_query)
+            except ValueError:
+                return self._err(h, 400, "catch-up values: letters, digits and :_+.- only")
             return self.relay(h, url, dev, pid, None, link)
         return self._err(h, 404, "not found")
 

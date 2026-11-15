@@ -89,6 +89,20 @@ class Pure(unittest.TestCase):
         self.assertIn('tvg-logo="http://img.example.com/a.png"', out)   # images load directly
         self.assertIn("S(http://tv.example.com/live/%s/1.ts)" % M3U_TOKEN, out)
         self.assertEqual(F.fill_template("http://h/{utc}/x/${end}", {"v0": "100", "v1": "200"}), "http://h/100/x/200")
+        self.assertEqual(F.fill_template("http://h/{start}?o={offset}", {"v0": "2026-11-15:20-30", "v1": "+3600"}),
+                         "http://h/2026-11-15:20-30?o=%2B3600")
+
+    def test_catch_up_values_cannot_change_the_address(self):
+        """L3: only the characters real catch-up values need; anything else is refused, never injected."""
+        for bad in ("100&password=x", "../x", "1/2", "a b", "100#x", "%2e", "x?y=1", "@evil.example.com", "\r\nX: y"):
+            with self.assertRaises(ValueError, msg=bad):
+                F.fill_template("http://h/ts/{utc}.ts", {"v0": bad})
+            with self.assertRaises(ValueError, msg=bad):
+                F.safe_append("utc=" + urllib.parse.quote(bad, safe=""))
+        self.assertEqual(F.safe_append("utc=1700000000&lutc=1700003600"), "utc=1700000000&lutc=1700003600")
+        for bad in ("utc=1&x%2fy=2", "a", "=1", "utc=1&" * 9 + "z=1"):
+            with self.assertRaises(ValueError, msg=bad):
+                F.safe_append(bad)
 
     def test_scrub(self):
         sc = F.Scrub("http://tv.example.com", USER, PW, "tvdev", "devsecret", "http://192.0.2.10:8750",
@@ -574,12 +588,17 @@ class Server(unittest.TestCase):
         # catch-up "append": what the TV adds reaches the provider
         self.assertEqual(self.raw(stream + "?utc=5")[1].get("X-Query"), None)    # (not echoed back to the TV)
         self.assertTrue(any(p.endswith("/m1.ts?utc=5") for p, _ in Provider.seen))
+        self.assertEqual(self.raw(stream + "?utc=5%26t=other")[0], 400, "an injected parameter is refused")
         # catch-up template: placeholders stay fillable, values reach the provider
         tpl = re.search(r'catchup-source="([^"]+)"', text).group(1)
         self.assertNotIn(M3U_TOKEN, tpl)
         self.assertIn("{utc}", tpl)
         self.assertEqual(self.raw(tpl.replace("{utc}", "1700000000").replace("{duration}", "3600"))[2],
                          b"CATCHUP utc=1700000000 d=3600")
+        before = len(Provider.seen)
+        code = self.raw(tpl.replace("{utc}", "1700000000%26t%3Dx").replace("{duration}", "3600"))[0]
+        self.assertEqual(code, 400, "a value that would add a parameter is refused")
+        self.assertEqual(len(Provider.seen), before, "and never reaches the provider")
         # guides: the playlist's own guide address and the one in the M3U header
         self.assertEqual(self.raw(pl["epgUrl"])[2], b"<tv/>")
         hdr_epg = re.search(r'url-tvg="([^"]+)"', text).group(1)
