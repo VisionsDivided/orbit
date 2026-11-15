@@ -14,6 +14,7 @@ import { parseVtt } from './vtt.js';
 import { h, fmtTime, fmtDur, nowSec, menu, toast } from './util.js';
 import { prefs, setPref } from './prefs.js';
 import { upNextDue, pickTrack, UPNEXT_COUNT } from './vodutil.js';
+import { contentBox } from './cropbars.js';
 
 let cur = null;   // active session (see openPlayer)
 
@@ -30,10 +31,13 @@ export function playerReplace(opts) { return !!(cur && cur.replace && cur.replac
 /** Audio delay (ms) chosen in this page session; carried across zaps. */
 let sessionDelay = null;
 const ASPECTS = [
-  { name: 'Normal', fit: 'contain' }, { name: 'Fill', fit: 'fill' }, { name: 'Zoom', fit: 'cover' },
+  { name: 'Normal', fit: 'contain' }, { name: 'Fit, crop black bars', fit: 'contain', crop: true },
+  { name: 'Fill', fit: 'fill' }, { name: 'Zoom', fit: 'cover' },
   { name: '16:9', fit: 'fill', ratio: '16 / 9' }, { name: '4:3', fit: 'fill', ratio: '4 / 3' },
 ];
-let aspectIdx = 0;
+// remembered in this browser: films with black bars baked into a 16:9 picture fill a wide screen once chosen
+let aspectIdx = (() => { try { const i = ASPECTS.findIndex((a) => a.name === localStorage.getItem('orbit.aspect')); return i >= 0 ? i : 0; } catch { return 0; } })();
+
 let sleepAt = 0, sleepTimer = null;
 
 /**
@@ -53,6 +57,8 @@ export function openPlayer(opts) {
   const isVod = opts.mode === 'vod';
   const seekable = isVod || !!opts.catchup;
   const video = h('video', { playsinline: true });
+  // "Fit, crop black bars": the largest content box seen in this video (a dark scene never zooms in further)
+  const crop = { box: null, timer: null, canvas: null };
   const stage = h('div', { class: 'pl-stage' }, video);
   const clock = h('div', { class: 'pl-clock' });
   const titleEl = h('div', { class: 'player-title' }, opts.title || '');
@@ -622,8 +628,39 @@ export function openPlayer(opts) {
   function saveAudio(lang) { if (lang && opts.onAudioChange) { opts.audioPref = lang; opts.onAudioChange(lang); } }
   if (video.textTracks) video.textTracks.addEventListener('addtrack', () => applyCaptionDefaults());
   // --- aspect / sleep / fullscreen ---
+  function cropTick() {
+    if (!ASPECTS[aspectIdx].crop || !video.videoWidth || video.paused) return;
+    try {
+      const cw = 96, ch = Math.max(16, Math.round(96 * video.videoHeight / video.videoWidth));
+      const c = crop.canvas || (crop.canvas = document.createElement('canvas'));
+      c.width = cw; c.height = ch;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(video, 0, 0, cw, ch);
+      const b = contentBox(g.getImageData(0, 0, cw, ch).data, cw, ch);
+      if (!b) return;
+      const o = crop.box;
+      crop.box = o ? { x0: Math.min(o.x0, b.x0), x1: Math.max(o.x1, b.x1), y0: Math.min(o.y0, b.y0), y1: Math.max(o.y1, b.y1) } : b;
+      cropApply();
+    } catch { clearInterval(crop.timer); crop.timer = null; }   // a frame the page may not read: plain fit
+  }
+  function cropApply() {
+    const b = crop.box, W = video.clientWidth, H = video.clientHeight;
+    if (!b || !ASPECTS[aspectIdx].crop || !W || !H || !video.videoWidth) { video.style.transform = ''; return; }
+    const k = Math.min(W / video.videoWidth, H / video.videoHeight);
+    const fw = video.videoWidth * k, fh = video.videoHeight * k;
+    const cw = (b.x1 - b.x0) * fw, ch = (b.y1 - b.y0) * fh;
+    const sc = Math.min(W / cw, H / ch);
+    if (!(sc > 1.02 && sc < 3)) { video.style.transform = ''; return; }
+    const dx = ((b.x0 + b.x1) / 2 - 0.5) * fw, dy = ((b.y0 + b.y1) / 2 - 0.5) * fh;
+    video.style.transform = `scale(${sc.toFixed(4)}) translate(${(-dx).toFixed(1)}px, ${(-dy).toFixed(1)}px)`;
+  }
+  video.addEventListener('loadedmetadata', () => { crop.box = null; video.style.transform = ''; });
+  window.addEventListener('resize', cropApply);
   function applyAspect() {
     const a = ASPECTS[aspectIdx];
+    try { localStorage.setItem('orbit.aspect', a.name); } catch {}
+    clearInterval(crop.timer); crop.timer = null; video.style.transform = '';
+    if (a.crop) { crop.timer = setInterval(cropTick, 2000); setTimeout(cropTick, 600); cropApply(); }
     video.style.objectFit = a.fit;
     if (a.ratio) Object.assign(video.style, { aspectRatio: a.ratio, width: 'auto', height: '100%', maxWidth: '100%' });
     else Object.assign(video.style, { aspectRatio: '', width: '100%', height: '100%', maxWidth: '' });
@@ -783,6 +820,7 @@ export function openPlayer(opts) {
     endMedia();
     window.removeEventListener('pagehide', onPageHide);
     clearUpNext(); clearTimeout(qsHideTimer); clearTimeout(recTimer); clearTimeout(note.t); if (stall) stall.stop();
+    clearInterval(crop.timer); window.removeEventListener('resize', cropApply);
     clearInterval(tickTimer); clearInterval(saveTimer); clearInterval(subTimer); clearTimeout(seekTo.timer); clearTimeout(infoTimer); clearTimeout(hideTimer); clearTimeout(digitTimer);
     try { s.eng.destroy(); } catch {}
     try { if (s.audio) s.audio.ctx.close(); } catch {}

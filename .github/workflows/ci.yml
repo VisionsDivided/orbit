@@ -102,5 +102,5 @@ jobs:
       - run: >-
           node --test web/tests/guide.test.mjs web/tests/vod.test.mjs web/tests/reminders.test.mjs
           web/tests/playfmt.test.mjs web/tests/resume.test.mjs web/tests/livefix.test.mjs
-          web/tests/streamprompt.test.mjs web/tests/signout.test.mjs
+          web/tests/streamprompt.test.mjs web/tests/signout.test.mjs web/tests/cropbars.test.mjs
           web/tests/colors.test.mjs web/tests/catalog.test.mjs web/tests/discover.test.mjs
