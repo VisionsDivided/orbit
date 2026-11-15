@@ -102,6 +102,22 @@ class Devices(unittest.TestCase):
         self.assertEqual(self.call(self.alex, "POST", "/v1/devices/rename", {"id": ids["Alex TV"], "name": ""})[0], 400)
 
 
+    def test_desktop_app_sessions_are_listed_renamed_and_unlinked(self):
+        """L7: a member's desktop-app sign-in is a watch device too: owner and admins can see, rename and sign it out."""
+        sam_desk = self.acc.gate(self.auth.session(self.acc.login("sam", "another pass 3", "192.0.2.30", "Sam laptop",
+                                                                   kind="desktop")))
+        tv = self.link(self.alex, "Alex TV")
+        kinds = {d["device"]: d["kind"] for d in self.acc.devices(self.alex)}
+        self.assertEqual(kinds, {"Sam laptop": "desktop", "Alex TV": "tv"}, "browsers are still not listed")
+        self.assertEqual({d["device"] for d in self.acc.devices(self.bea)}, set(kinds))
+        self.assertEqual([d["device"] for d in self.acc.devices(self.sam)], ["Sam laptop"])
+        did = next(d["id"] for d in self.acc.devices(self.alex) if d["kind"] == "desktop")
+        self.assertEqual(self.call(self.bea, "POST", "/v1/devices/rename", {"id": did, "name": "Study"})[1]["name"], "Study")
+        self.assertEqual(self.call(self.bea, "POST", "/v1/devices/unlink", {"id": did}), (200, {"ok": True}))
+        self.assertNotIn(sam_desk["h"], self.auth.sessions, "the desktop app is signed out")
+        self.assertIn(tv["h"], self.auth.sessions)
+
+
 class StreamNames(unittest.TestCase):
     def test_device_name_then_profile_then_label(self):
         r = StreamRegistry(3)

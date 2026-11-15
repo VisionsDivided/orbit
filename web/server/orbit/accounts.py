@@ -324,12 +324,13 @@ class Accounts:
         return {"ok": True, "name": n}
 
     _DEV_COLS = ("SELECT s.id, s.name, s.device, s.created, s.last_seen, s.sess_hash, s.account_id, a.display_name, "
-                 "a.role, p.name FROM account_sessions s JOIN accounts a ON a.id = s.account_id "
+                 "a.role, p.name, s.kind FROM account_sessions s JOIN accounts a ON a.id = s.account_id "
                  "LEFT JOIN profiles p ON p.id = s.profile_id ")
+    _DEV_KINDS = "s.kind IN ('tv', 'desktop')"     # linked TVs and desktop-app sign-ins (watch and sync devices)
 
     def _device(self, r, sess: dict) -> dict:
-        return {"id": r[0], "name": r[1], "device": r[2], "created": r[3], "lastSeen": r[4], "current": r[5] == sess["h"],
-                "account": {"id": r[6], "displayName": r[7]}, "profile": r[9] or "",
+        return {"id": r[0], "name": r[1], "device": r[2], "kind": r[10], "created": r[3], "lastSeen": r[4],
+                "current": r[5] == sess["h"], "account": {"id": r[6], "displayName": r[7]}, "profile": r[9] or "",
                 "canUnlink": self._may_unlink(sess, r[6], r[8])}
 
     @staticmethod
@@ -339,29 +340,29 @@ class Accounts:
         return account_id == sess["account_id"] or me == "owner" or (me == "admin" and account_role == "member")
 
     def devices(self, sess: dict) -> list[dict]:
-        """Linked TVs: owner / admin see the household's, members their own account's."""
+        """Linked TVs and desktop apps: owner / admin see the household's, members their own account's."""
         if sess.get("account_role") in ("owner", "admin"):
-            rows = self.db.q(self._DEV_COLS + "WHERE s.kind='tv' ORDER BY s.last_seen DESC")
+            rows = self.db.q(self._DEV_COLS + f"WHERE {self._DEV_KINDS} ORDER BY s.last_seen DESC")
         else:
-            rows = self.db.q(self._DEV_COLS + "WHERE s.kind='tv' AND s.account_id=? ORDER BY s.last_seen DESC",
+            rows = self.db.q(self._DEV_COLS + f"WHERE {self._DEV_KINDS} AND s.account_id=? ORDER BY s.last_seen DESC",
                              (sess["account_id"],))
         return [self._device(r, sess) for r in rows]
 
     def _device_row(self, sess: dict, dev_id):
-        r = self.db.one(self._DEV_COLS + "WHERE s.id=? AND s.kind='tv'", (dev_id if isinstance(dev_id, str) else "",))
+        r = self.db.one(self._DEV_COLS + f"WHERE s.id=? AND {self._DEV_KINDS}", (dev_id if isinstance(dev_id, str) else "",))
         if r is None or (r[6] != sess["account_id"] and sess.get("account_role") not in ("owner", "admin")):
             raise ApiError(404, "no such device")         # another account's ids look like nothing
         return r
 
     def rename_device(self, sess: dict, dev_id, name) -> dict:
-        """Owner / admin: any linked TV; members: their own account's."""
+        """Owner / admin: any linked TV or desktop app; members: their own account's."""
         n = device_name(name)
         r = self._device_row(sess, dev_id)
         self.db.run("UPDATE account_sessions SET name=? WHERE id=?", (n, r[0]))
         return self._device(self._device_row(sess, r[0]), sess)
 
     def unlink_device(self, sess: dict, dev_id) -> None:
-        """Sign a linked TV out (it wipes the account's data on its next request)."""
+        """Sign a linked TV or desktop app out (it wipes the account's data on its next request)."""
         r = self._device_row(sess, dev_id)
         if not self._may_unlink(sess, r[6], r[8]):
             raise ApiError(403, "only the owner can unlink the owner's or an admin's TVs")

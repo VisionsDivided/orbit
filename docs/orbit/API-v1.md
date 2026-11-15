@@ -33,8 +33,9 @@ It is written so another implementation (for example Rust) could replace the ser
   `""` while it has none.
 - `Me`: `{"account": Account, "profiles": [Profile], "profile": Profile|null, "csrf", "deviceName"}`. `deviceName` is
   the calling device's own `name` (`""` when not named).
-- `Device` (a linked TV): `{"id", "name", "device", "created", "lastSeen", "current": bool, "account": {"id",
-  "displayName"}, "profile": "<profile name>", "canUnlink": bool}`. `id` is the same as the `Session` id.
+- `Device` (a linked TV or a desktop-app sign-in): `{"id", "name", "device", "kind": "tv"|"desktop", "created",
+  "lastSeen", "current": bool, "account": {"id", "displayName"}, "profile": "<profile name>", "canUnlink": bool}`.
+  `id` is the same as the `Session` id.
 
 ## Endpoints
 
@@ -76,16 +77,16 @@ link again.
 | Method | Path | Who | Body → Answer |
 |---|---|---|---|
 | POST | `/v1/device/name` | signed in (the device itself: a TV after linking or from Settings ▸ Home server ▸ Name this TV) | `{"name"}` → `{"ok": true, "name"}` (the name as stored). |
-| GET | `/v1/devices` | signed in | → `{"devices": [Device]}`: linked TVs (sessions of kind `tv`), newest first. Owner and admins get the household's; members their own account's. |
-| POST | `/v1/devices/rename` | signed in | `{"id", "name"}` → `Device`. Owner and admins may rename any linked TV; members only their own account's (others answer 404). |
-| POST | `/v1/devices/unlink` | signed in | `{"id"}` → `{"ok": true}`: the TV's session ends (it removes the account's data on its next request). Your own account's TVs; the owner any; admins also members' (never the owner's or another admin's: 403). Unknown ids, browser sessions and (for members) other accounts' TVs answer 404. |
+| GET | `/v1/devices` | signed in | → `{"devices": [Device]}`: linked TVs and desktop apps (sessions of kind `tv` or `desktop`), newest first. Owner and admins get the household's; members their own account's. |
+| POST | `/v1/devices/rename` | signed in | `{"id", "name"}` → `Device`. Owner and admins may rename any linked TV or desktop app; members only their own account's (others answer 404). |
+| POST | `/v1/devices/unlink` | signed in | `{"id"}` → `{"ok": true}`: the TV's or desktop app's session ends (it removes the account's data on its next request). Your own account's devices; the owner any; admins also members' (never the owner's or another admin's: 403). Unknown ids, browser sessions and (for members) other accounts' TVs answer 404. |
 
 Names (`orbit.db` migration 004, column `account_sessions.name`): 1 to 32 characters, letters (any language), digits,
 spaces and `' - . _ ( ) & + #`; leading and trailing spaces are dropped and runs of spaces become one; anything else
 (control characters, quotes, `<`, emoji) is 400. A name belongs to the session, so linking a TV again starts unnamed.
 Right after linking, the TV offers to name itself (the field offers its model, e.g. "SHIELD Android TV"); the step can
-be skipped. The web app lists linked TVs for the owner and admins under Settings ▸ Accounts ▸ Linked TVs, with Rename
-and Unlink.
+be skipped. The web app lists linked TVs and desktop apps for the owner and admins under Settings ▸ Accounts ▸ TVs and
+computers, with Rename and Unlink.
 
 The server checks the `Host` header, so the address the TV uses (for example `192.0.2.10:8750`) must be listed in
 `TVBRO_ALLOWED_HOSTS`.

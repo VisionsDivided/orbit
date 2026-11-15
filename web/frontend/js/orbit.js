@@ -342,7 +342,7 @@ export function orbitSettingsCard(isAdmin) {
           try { await post('/v1/sessions/revoke', { id: s.id }); toast('That device is signed out'); refresh(); } catch (e) { toast(e.message); }
         }))),
         btn('Link a TV…', 'orbit-pair', async () => { if (await approveTvDialog('')) refresh(); }))));
-      if (a.role !== 'member') kids.push(row('Linked TVs', linkedTvs()));
+      if (a.role !== 'member') kids.push(row('TVs and computers', linkedTvs()));
       if (a.role !== 'member') {
         kids.push(row('Household accounts', h('div', { class: 'orbit-list' }, ...accounts.map((x) => h('div', { class: 'orbit-li' },
           h('span', {}, `${x.displayName} (${x.username})`), h('span', { class: 'hint' }, (ROLE[x.role] || x.role) + (x.disabled ? ', disabled' : '')),
@@ -359,18 +359,19 @@ export function orbitSettingsCard(isAdmin) {
     if (focusKey) { const f = card.querySelector(`[data-k="${focusKey}"]`); if (f) f.focus(); }
   }
 
-  /** Owner / admin: every linked TV of the household, with Rename and Unlink (the server says which may be
-   *  unlinked: the owner any, admins their own and members'). The name is what the stream prompt shows. */
+  /** Owner / admin: every linked TV and desktop app of the household, with Rename and Unlink (the server says which
+   *  may be unlinked: the owner any, admins their own and members'). The name is what the stream prompt shows. */
   function linkedTvs() {
-    if (!tvs.length) return h('span', { class: 'hint' }, 'No TV is linked yet. Link one with "Link a TV…" above.');
+    if (!tvs.length) return h('span', { class: 'hint' }, 'No TV or computer is linked yet. Link a TV with "Link a TV…" above; the desktop app signs in with an account.');
     return h('div', { class: 'orbit-list' }, ...tvs.map((d) => h('div', { class: 'orbit-li' },
-      h('span', {}, d.name || d.device || 'TV', d.current ? ' (this device)' : ''),
-      h('span', { class: 'hint' }, [d.name ? d.device : 'not named', `${d.account.displayName}${d.profile ? ', profile ' + d.profile : ''}`,
+      h('span', {}, d.name || d.device || (d.kind === 'desktop' ? 'Computer' : 'TV'), d.current ? ' (this device)' : ''),
+      h('span', { class: 'hint' }, [d.kind === 'desktop' ? 'computer' : 'TV', d.name ? d.device : 'not named',
+        `${d.account.displayName}${d.profile ? ', profile ' + d.profile : ''}`,
         'last used ' + fmtSeen(d.lastSeen)].filter(Boolean).join(' · ')),
       btn('Rename', 'orbit-tvren-' + d.id, () => renameTv(d)),
       d.canUnlink ? btn('Unlink', 'orbit-tvunl-' + d.id, async () => {
-        if (!confirm(`Unlink "${d.name || d.device}"? It is signed out and removes ${d.account.displayName}'s playlists, My list and watch progress from that TV.`)) return;
-        try { await post('/v1/devices/unlink', { id: d.id }); toast('That TV is unlinked'); refresh(); } catch (e) { toast(e.message); }
+        if (!confirm(`Unlink "${d.name || d.device}"? It is signed out and removes ${d.account.displayName}'s playlists, My list and watch progress from that ${d.kind === 'desktop' ? 'computer' : 'TV'}.`)) return;
+        try { await post('/v1/devices/unlink', { id: d.id }); toast(d.kind === 'desktop' ? 'That computer is signed out' : 'That TV is unlinked'); refresh(); } catch (e) { toast(e.message); }
       }) : null)));
   }
 
