@@ -19,6 +19,7 @@ from __future__ import annotations
 import calendar
 import json
 import logging
+import posixpath
 import re
 import socket
 import time
@@ -95,16 +96,72 @@ def safe_id(v, what: str = "id") -> str:
     return s
 
 
+_PATH_SAFE = "/-._~:+,;=!$&'()*"           # left as they are when a canonical path is encoded again
+
+
+def canonical_path(path, prefixes: tuple = ("/",), ignore_case: bool = False, relative: bool = False) -> Optional[str]:
+    """The canonical, re-encoded form of an upstream path (no query), or None when it is not acceptable.
+
+    The path is percent-decoded until it no longer changes (so ``%252e%252e`` is seen as ``..``, as a server that
+    decodes it would); an encoded slash (``%2f``) or backslash, NUL / control characters, ``@``, ``#`` and any
+    ``.`` or ``..`` segment are refused; the result is collapsed with posixpath, checked against ``prefixes``
+    again and percent-encoded once, which is what is sent upstream. ``relative``: a path that follows a fixed
+    prefix (no leading slash; ``prefixes`` is not used)."""
+    p = path if isinstance(path, str) else ""
+    if not p or len(p) > 1000 or any(ord(c) < 33 or ord(c) == 127 for c in p):
+        return None
+    cur = p
+    for _ in range(6):
+        if re.search(r"%(2f|5c|00)", cur, re.I):
+            return None
+        try:
+            nxt = urllib.parse.unquote(cur, errors="strict") if "%" in cur else cur
+        except UnicodeDecodeError:
+            return None
+        if nxt == cur:
+            break
+        cur = nxt
+    else:
+        return None                           # still changing: encoded more often than any real client does
+    if ("\\" in cur or "@" in cur or "#" in cur or "?" in cur or "%" in cur
+            or any(ord(c) < 32 or ord(c) == 127 for c in cur)):      # an encoded space is fine (sent as %20)
+        return None
+    segs = cur.split("/")
+    if any(sg in (".", "..") for sg in segs):
+        return None
+    if relative:
+        if cur.startswith("/") or "//" in cur:
+            return None
+        canon = posixpath.normpath(cur)
+        if canon.startswith(("/", "..")) or canon == ".":
+            return None
+    else:
+        if not cur.startswith("/") or "//" in cur:
+            return None
+        canon = posixpath.normpath(cur)
+        if cur.endswith("/") and not canon.endswith("/"):
+            canon += "/"
+        low = canon.lower() if ignore_case else canon
+        if not any(low.startswith(px.lower() if ignore_case else px) for px in prefixes):
+            return None
+    return urllib.parse.quote(canon, safe=_PATH_SAFE)
+
+
 def safe_path(path, prefixes: tuple) -> str:
     """A server-relative artwork path the image route may fetch: one of the connector's prefixes, no host,
-    no '..', no control characters, no credentials in the query."""
+    no '..' (also percent-encoded), no control characters, no credentials in the query. Returns the canonical,
+    re-encoded path (plus the query as given)."""
     p = path if isinstance(path, str) else ""
     low = p.lower()
     if (not p or len(p) > 600 or not p.startswith(prefixes) or "//" in p or ".." in p or "\\" in p or "@" in p
             or "#" in p or any(ord(c) < 33 or ord(c) == 127 for c in p)
             or any(k in low for k in ("token", "api_key", "apikey"))):
         raise ConnectorError(400, "path: not an artwork path of this server")
-    return p
+    base, sep, query = p.partition("?")
+    canon = canonical_path(base, prefixes)
+    if canon is None:
+        raise ConnectorError(400, "path: not an artwork path of this server")
+    return canon + sep + query
 
 
 def normalize_base_url(url) -> str:

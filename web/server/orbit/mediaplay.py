@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from .accounts import ApiError
-from .connectors.base import MIME, ConnectorError, error_body, redact, safe_id
+from .connectors.base import MIME, ConnectorError, canonical_path, error_body, redact, safe_id
 from .facade import rewrite_hls
 
 LOG = logging.getLogger("orbit.mediaplay")
@@ -102,12 +102,12 @@ def clean_query(raw: str) -> str:
     return urllib.parse.urlencode(keep)
 
 
-def safe_rel(rel: str, prefixes: tuple) -> bool:
-    """An upstream path the relay may fetch: under one of the prefixes, nothing that climbs out or names a host."""
-    low = rel.lower()
-    return (bool(rel) and len(rel) <= 1000 and any(low.startswith(p.lower()) for p in prefixes) and ".." not in rel
-            and "//" not in rel and "\\" not in rel and "@" not in rel and "#" not in rel
-            and not any(ord(c) < 33 or ord(c) == 127 for c in rel))
+def safe_rel(rel: str, prefixes: tuple) -> Optional[str]:
+    """An upstream path the relay may fetch: under one of the prefixes, nothing that climbs out (also when
+    percent-encoded) or names a host. Returns the canonical, re-encoded path to send upstream, or None."""
+    if not rel or ".." in rel or "//" in rel or "\\" in rel:
+        return None
+    return canonical_path(rel, prefixes, ignore_case=True)
 
 
 class Plays:
@@ -385,8 +385,8 @@ class Plays:
         if tail == "master.m3u8" and p.kind == "hls":
             return self._relay(h, p, p.path, master=True)
         if tail.startswith("u/") and p.kind == "hls":
-            rel = "/" + tail[2:]
-            if not safe_rel(rel, p.prefixes):
+            rel = safe_rel("/" + tail[2:], p.prefixes)
+            if rel is None:
                 return _err(h, 404, "not found")
             q = clean_query(raw_query)
             return self._relay(h, p, rel + ("?" + q if q else ""))

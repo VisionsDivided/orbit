@@ -463,6 +463,11 @@ class Server(unittest.TestCase):
             self.assertEqual(json.loads(body)["user_info"]["auth"], 0)
         self.assertEqual(self.raw("%s/live/%s/%s/101.ts" % (server.replace("/p0", "/p9"), user, pw))[0], 404)
         self.assertEqual(self.raw("/xt/p1/live/%s/%s/1.ts" % (user, pw))[0], 404, "p1 is an M3U playlist")
+        for tail in ("%2e%2e/%2e%2e/player_api.php", "%252e%252e/x.ts", "..%2f..%2fx.ts", "a%5c..%5cx.ts",
+                     "%2E%2E/1.ts"):
+            self.assertEqual(self.raw("%s/live/%s/%s/%s" % (server, user, pw, tail))[0], 404, tail)
+        self.assertFalse([p for p, _ in Provider.seen if "%2e" in p.lower() or "%5c" in p.lower() or "%2f" in p.lower()],
+                         "an encoded dot segment never reaches the provider")
 
     def test_8_setting_off_gives_the_logins_again(self):
         self.assertEqual(self.req("POST", "/api/settings", {"hideProviderLogin": False}, self.alex)[0], 200)

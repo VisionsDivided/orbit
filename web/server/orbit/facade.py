@@ -39,6 +39,8 @@ import urllib.parse
 from hashlib import sha256
 from typing import Callable, Optional
 
+from .connectors.base import canonical_path
+
 LOG = logging.getLogger("orbit.facade")
 
 ENV = "ORBIT_HIDE_PROVIDER_LOGIN"
@@ -411,6 +413,9 @@ class Facade:
             link = self._linker(pid, user, secret)
             if kind in STREAM_KINDS:
                 if prov.get("kind") != "xtream" or not REST_RE.match(tail) or ".." in tail:
+                    return self._err(h, 404, "not found")
+                tail = canonical_path(tail, relative=True)          # %2e%2e etc.: decoded, refused, re-encoded
+                if tail is None:
                     return self._err(h, 404, "not found")
                 from tvbro_server import parsers as P            # the server's own URL rules
                 url = f"{P.normalize_server(prov['server'])}/{kind}/{prov['user']}/{prov['pass']}/{tail}"

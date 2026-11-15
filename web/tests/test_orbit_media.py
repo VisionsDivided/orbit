@@ -707,7 +707,10 @@ class Helpers(unittest.TestCase):
 
     def test_safe_path(self):
         self.assertEqual(safe_path("/Items/a/Images/Primary?tag=1", ("/Items/",)), "/Items/a/Images/Primary?tag=1")
-        for bad in ("/Items/a b", "/Items/a\r\nX: y", "/Items/a#x", "/Items/a?X-Plex-Token=1", None):
+        self.assertEqual(safe_path("/Items/a%20b/Images/Primary", ("/Items/",)), "/Items/a%20b/Images/Primary")
+        for bad in ("/Items/a b", "/Items/a\r\nX: y", "/Items/a#x", "/Items/a?X-Plex-Token=1", None,
+                    "/Items/%2e%2e/System/Info", "/Items/%252e%252e/System/Info", "/Items/..%2fSystem/Info",
+                    "/Items/a%5c..%5cSystem", "/Items/a%2fb"):
             with self.assertRaises(ConnectorError):
                 safe_path(bad, ("/Items/",))
 
