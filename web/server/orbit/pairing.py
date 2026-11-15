@@ -13,13 +13,14 @@ Pairings live in memory for 10 minutes. A session approved but never collected i
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import logging
 import secrets
 import threading
 import time
 from typing import Callable
 
-from tvbro_server.auth import Throttle, Wait
+from tvbro_server.auth import Throttle, Wait, client_key
 
 from .accounts import Accounts, ApiError
 
@@ -29,8 +30,20 @@ ALPHABET = "BCDFGHJKLMNPQRSTVWXZ23456789"   # no vowels (no words), no 0/O or 1/
 CODE_LEN = 8                                # 28^8 ≈ 3.8e11 codes
 TTL = 600
 POLL_EVERY = 3
-MAX_PER_CLIENT = 3                          # waiting pairings per client address (a TV needs one)
-MAX_PENDING = 20                            # waiting pairings in all (a household links a few TVs at a time)
+MAX_PER_CLIENT = 3                          # waiting pairings per client address (a TV needs one; IPv6 per /64)
+MAX_PER_NETWORK = 6                         # per /24 (IPv4) or /64 (IPv6): one client cannot fill the server alone
+MAX_PENDING = 50                            # waiting pairings in all (a household links a few TVs at a time)
+
+
+def network_of(client: str) -> str:
+    """The network a client address counts against: its /24 (IPv4) or /64 (IPv6); other values as they are."""
+    try:
+        ip = ipaddress.ip_address(str(client).split("%", 1)[0].strip("[]"))
+    except ValueError:
+        return str(client)
+    if ip.version == 6 and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return str(ipaddress.ip_network(f"{ip}/{24 if ip.version == 4 else 64}", strict=False))
 
 
 def _key(pair_id: str) -> str:
@@ -69,10 +82,16 @@ class Pairings:
             self._prune()
             # every pairing in memory counts (an approved one is collected by its TV within seconds)
             waiting = list(self._p.values())
-            if sum(1 for p in waiting if p["client"] == client) >= MAX_PER_CLIENT:
+            net = network_of(client)
+            ck = client_key(client)
+            if sum(1 for p in waiting if client_key(p["client"]) == ck) >= MAX_PER_CLIENT:
                 LOG.warning("pairing refused: %s already has %d codes waiting", client, MAX_PER_CLIENT)
                 raise ApiError(429, f"this device already has {MAX_PER_CLIENT} pairing codes waiting; use one of "
                                     "them or try again in a few minutes", self._retry(client))
+            if sum(1 for p in waiting if p.get("net") == net) >= MAX_PER_NETWORK:
+                LOG.warning("pairing refused: network %s already has %d codes waiting", net, MAX_PER_NETWORK)
+                raise ApiError(429, f"{MAX_PER_NETWORK} pairing codes are already waiting from this network; use one "
+                                    "of them or try again in a few minutes", self._retry(None, net))
             if len(waiting) >= MAX_PENDING:
                 LOG.warning("pairing refused for %s: %d codes waiting in all", client, MAX_PENDING)
                 raise ApiError(429, f"too many TVs are waiting to be linked ({MAX_PENDING}); try again in a few "
@@ -83,12 +102,14 @@ class Pairings:
                 code = "".join(secrets.choice(ALPHABET) for _ in range(CODE_LEN))
             pair_id = secrets.token_urlsafe(32)
             exp = self.clock() + TTL
-            self._p[_key(pair_id)] = {"code": code, "device": dev, "client": client, "exp": exp}
+            self._p[_key(pair_id)] = {"code": code, "device": dev, "client": client, "net": net, "exp": exp}
         return {"pairId": pair_id, "code": pretty(code), "expires": int(exp), "interval": POLL_EVERY}
 
-    def _retry(self, client) -> int:
-        """Seconds until the oldest waiting code (of ``client``, or of anyone) expires: the Retry-After."""
-        exps = [p["exp"] for p in self._p.values() if client is None or p["client"] == client]
+    def _retry(self, client, net=None) -> int:
+        """Seconds until the oldest waiting code (of ``client``, of network ``net``, or of anyone) expires: the
+        Retry-After."""
+        exps = [p["exp"] for p in self._p.values()
+                if (client is None or client_key(p["client"]) == client_key(client)) and (net is None or p.get("net") == net)]
         return max(1, int(min(exps) - self.clock()) + 1) if exps else 60
 
     def tick(self):

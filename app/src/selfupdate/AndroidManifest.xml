@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright 2026 The Orbit authors. SPDX-License-Identifier: Apache-2.0 -->
+<!-- Merged only into builds with the in-app update on (-Ptvbro.updateCheck=true, app/build.gradle.kts): it hands the
+     downloaded APK to the system installer (the user confirms). Orbit builds leave it out. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+</manifest>

@@ -255,6 +255,47 @@ class Units(unittest.TestCase):
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
+    def test_static_files_stay_in_their_folder(self):
+        """L10: realpath + commonpath, so a sibling folder that shares the name prefix is not reachable."""
+        from tvbro_server import app as A
+        d = tempfile.mkdtemp()
+        try:
+            root = os.path.join(d, "frontend")
+            os.makedirs(os.path.join(root, "js"))
+            os.makedirs(os.path.join(d, "frontend-old"))
+            for p in (os.path.join(root, "index.html"), os.path.join(root, "js", "a.js"),
+                      os.path.join(d, "frontend-old", "secret.txt")):
+                with open(p, "w") as f:
+                    f.write("x")
+            real = os.path.realpath(root)
+            self.assertEqual(A.static_path(root, "/js/a.js"), os.path.join(real, "js", "a.js"))
+            self.assertEqual(A.static_path(root, "/"), os.path.join(real, "index.html"))
+            for bad in ("/../frontend-old/secret.txt", "/js/../../frontend-old/secret.txt", "/../../etc/passwd",
+                        "/..\\frontend-old\\secret.txt", "/a\x00b"):
+                self.assertIsNone(A.static_path(root, bad), bad)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_nginx_static_cache_location_does_not_catch_api_paths(self):
+        """The container's nginx: the long-cache location for .js / .css must not take /api, /v1, /xt ... paths
+        (nginx uses the first regex location that matches, in file order)."""
+        import re as RE
+        conf = os.path.join(os.path.dirname(__file__), "..", "..", "infra", "docker", "nginx.conf")
+        with open(conf, encoding="utf-8") as f:
+            text = f.read()
+        regexes = RE.findall(r"location ~ (\S+) \{", text)
+        self.assertGreaterEqual(len(regexes), 2)
+
+        def first(uri):
+            return next((r for r in regexes if RE.search(r, uri)), None)
+        static = next(r for r in regexes if "js|css" in r)
+        proxy = next(r for r in regexes if r.startswith("^/(api|v1"))
+        for uri in ("/v1/catalog/x.js", "/api/state.css", "/xt/p0/movie/u/p/1.js", "/stream/a.css", "/img/x.js",
+                    "/v1", "/api/health"):
+            self.assertEqual(first(uri), proxy, uri)
+        for uri in ("/js/app.js", "/style.css", "/js/v1/x.js", "/apis.js"):
+            self.assertEqual(first(uri), static, uri)
+
     def test_password_hash_and_throttle(self):
         h = AU.hash_password("correct horse", iterations=1000)
         self.assertTrue(h.startswith("pbkdf2_sha256$1000$"))

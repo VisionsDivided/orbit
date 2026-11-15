@@ -87,7 +87,11 @@ export function requestsSetupCard() {
     refresh();                                             // your own link shows in the status too
   }
   async function autoLink() {
-    try { const r = await post('/v1/discover/map', { auto: true }); toast(`${(r.linked || []).length} account(s) linked`); } catch (e) { toast(e.message); }
+    try {
+      const r = await post('/v1/discover/map', { auto: true });
+      const skipped = (r.skipped || []).length;
+      toast(`${(r.linked || []).length} account(s) linked` + (skipped ? `; ${skipped} left for the owner (Seerr admin)` : ''));
+    } catch (e) { toast(e.message); }
     refresh();
   }
 

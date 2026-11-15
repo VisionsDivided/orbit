@@ -217,6 +217,8 @@ object Updater {
      * the global "Unknown sources" switch.
      */
     fun install(ctx: Context, rel: ReleaseInfo, f: File) {
+        // without the update built in the app has no REQUEST_INSTALL_PACKAGES permission (src/selfupdate)
+        if (!supported) { state = State.Failed("Update check is not part of this build", rel); return }
         if (!canInstall(ctx)) {
             val (intent, hint) = if (Build.VERSION.SDK_INT >= 26) {
                 Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + ctx.packageName)) to

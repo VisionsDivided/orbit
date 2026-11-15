@@ -94,7 +94,7 @@ async function req(path, opts = {}) {
   const r = await fetch(path, { ...opts, headers, credentials: 'same-origin' });
   if (r.status === 401) { let j = {}; try { j = await r.json(); } catch {} signedOut(j); const e = new Error('sign in first'); e.status = 401; throw e; }
   if (r.status === 423) { const e = new Error('locked: the parental PIN is needed'); e.locked = true; e.status = 423; throw e; }
-  if (r.status === 403) { let m = 'forbidden'; try { m = (await r.json()).error || m; } catch {} const e = new Error(m); e.status = 403; throw e; }
+  if (r.status === 403) { let m = 'forbidden', j = {}; try { j = await r.json(); m = j.error || m; } catch {} const e = new Error(m); e.status = 403; e.pinRequired = !!j.pinRequired; throw e; }
   if (!r.ok) {
     let j = {}; try { j = await r.json(); } catch {}
     // Orbit: this session has no (valid) profile: "Who's watching?" (signin.js)

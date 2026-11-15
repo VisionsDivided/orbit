@@ -26,6 +26,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /** A pairing in progress: the code shown on screen while the TV waits for approval. */
 data class Pairing(val server: String, val code: String, val expires: Long)
@@ -458,17 +459,19 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
      * Who's watching?: this TV continues as profile [id] (of the same account). The current profile's changes are
      * sent first; then everything the old profile brought onto the TV goes (My list, favourites, recently watched,
      * resume points, show progress, as on unlink, the playlists stay) and the new profile's state is synced in.
-     * Returns an error text, or null when switched. Call from a coroutine on the main thread.
+     * Returns how it ended ([ProfileSwitch]): leaving a kids profile may need the parental PIN ([pin]). Call from a
+     * coroutine on the main thread.
      */
-    suspend fun switchProfile(id: String): String? {
-        val l = link ?: return "This TV is not linked to Orbit"
+    suspend fun switchProfile(id: String, pin: String? = null): ProfileSwitch {
+        val l = link ?: return ProfileSwitch.Failed("This TV is not linked to Orbit")
         withContext(Dispatchers.IO) { runCatching { syncState() } }
+        val body = if (pin != null) mapOf("id" to JsonPrimitive(id), "pin" to JsonPrimitive(pin)) else mapOf("id" to JsonPrimitive(id))
         val me = try {
-            withContext(Dispatchers.IO) { api.postJson(l, "/v1/profiles/select", JsonObject(mapOf("id" to JsonPrimitive(id)))) }
-        } catch (e: Exception) { return describe(e) }
+            withContext(Dispatchers.IO) { api.postJson(l, "/v1/profiles/select", JsonObject(body)) }
+        } catch (e: Exception) { return ProfileSwitch.of(e, describe(e)) }
         val nl = OrbitApi.linkFrom(l.server, l.session, (me["csrf"] as? JsonPrimitive)?.content ?: l.csrf, me)
         syncLock.withLock {
-            if (link !== l) return "This TV was unlinked meanwhile"
+            if (link !== l) return ProfileSwitch.Failed("This TV was unlinked meanwhile")
             store.save(nl)
             store.listBase = emptySet()
             cached = null; legacy = false
@@ -477,7 +480,7 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
             link = nl
         }
         withContext(Dispatchers.IO) { syncState() }
-        return null
+        return ProfileSwitch.Done((me["warning"] as? JsonPrimitive)?.contentOrNull)
     }
 
     private fun describe(e: Exception): String = when (e) {

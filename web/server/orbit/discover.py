@@ -89,6 +89,19 @@ class _Guarded:
         return self._run(self._c.post, *a, **k)
 
 
+SEERR_ADMIN = 2                     # Seerr's Permission.ADMIN bit (implies every other permission, auto-approve too)
+
+
+def seerr_admin(u: dict) -> bool:
+    """A Seerr user with the ADMIN permission, or Seerr's first user (its owner, always an admin). Requests made as
+    such a user are approved automatically, so only the Orbit owner may link an account to one."""
+    try:
+        perms = int(u.get("permissions") or 0)
+    except (TypeError, ValueError):
+        perms = 0
+    return bool(perms & SEERR_ADMIN) or u.get("id") == 1
+
+
 class Discover:
     def __init__(self, accounts: Accounts, config: S.SeerrConfig,
                  client_factory: Callable[[str, str], S.SeerrClient] = S.SeerrClient,
@@ -608,7 +621,8 @@ class Discover:
                                                            or u.get("email"), 100),
                             "email": S._text(u.get("email"), 200), "username": S._text(u.get("username"), 100),
                             "plexUsername": S._text(u.get("plexUsername"), 100),
-                            "jellyfinUsername": S._text(u.get("jellyfinUsername"), 100)})
+                            "jellyfinUsername": S._text(u.get("jellyfinUsername"), 100),
+                            "admin": seerr_admin(u)})
         return out
 
     @staticmethod
@@ -636,16 +650,20 @@ class Discover:
     def _map(self, c: Call) -> Reply:
         self._admin(c)
         b = c.body
+        owner = c.sess.get("account_role") == "owner"
         if b.get("auto") is True:                            # link every unlinked account with one clear match
             users = self._seerr_users(self._client())
-            m, linked = self.cfg.mapping(), []
+            admins = {u["id"] for u in users if u["admin"]}
+            m, linked, skipped = self.cfg.mapping(), [], []
             for a in self.acc.accounts(c.sess):
                 if a["id"] not in m:
                     uid = self._suggest(a, users)
-                    if uid:
+                    if uid and uid in admins and not owner:  # a Seerr admin auto-approves: the owner decides
+                        skipped.append({"accountId": a["id"], "seerrUserId": uid})
+                    elif uid:
                         self.cfg.set_mapping(a["id"], uid)
                         linked.append({"accountId": a["id"], "seerrUserId": uid})
-            return Reply({"linked": linked})
+            return Reply({"linked": linked, "skipped": skipped})
         aid = b.get("accountId")
         if not isinstance(aid, str):
             raise ApiError(400, "accountId")
@@ -657,12 +675,15 @@ class Discover:
         if isinstance(uid, bool) or not isinstance(uid, int) or uid <= 0:
             raise ApiError(400, "seerrUserId: a Seerr user id, or null to unlink")
         try:
-            self._client().get(f"/user/{uid}")
+            user = self._client().get(f"/user/{uid}")
         except S.SeerrDown as e:
             raise self._down(e)
         except S.SeerrError as e:
             if e.code == 404:
                 raise ApiError(400, "Seerr has no user with this id")
             raise self._seerr_error(e)
+        if seerr_admin(user if isinstance(user, dict) else {"id": uid}) and not owner:
+            raise ApiError(403, "only the owner can link an account to a Seerr admin (their requests are approved "
+                                "automatically)")
         self.cfg.set_mapping(aid, uid)
         return Reply({"accountId": aid, "seerrUserId": uid})

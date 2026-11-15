@@ -132,7 +132,7 @@ fun WhoIsWatching(m: AppModel) {
     val posters by produceState(emptyList<String>()) { value = withContext(Dispatchers.IO) { wallPosters(m) } }
     ProfilePicker(
         p.list, p.currentId, p.style, p.message, posters,
-        onChoose = { pr -> if (pr != null) p.choose(pr) else m.prompt = PromptState("Name of the new profile", "", false) { name -> p.add(name) } },
+        onChoose = { pr -> if (pr != null) p.choose(pr, askPin = { title, then -> m.prompt = PromptState(title, "", true, then) }) else m.prompt = PromptState("Name of the new profile", "", false) { name -> p.add(name) } },
         onManage = { manageMenu(m) },
     )
 }

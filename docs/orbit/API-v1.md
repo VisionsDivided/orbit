@@ -33,8 +33,9 @@ It is written so another implementation (for example Rust) could replace the ser
   `""` while it has none.
 - `Me`: `{"account": Account, "profiles": [Profile], "profile": Profile|null, "csrf", "deviceName"}`. `deviceName` is
   the calling device's own `name` (`""` when not named).
-- `Device` (a linked TV): `{"id", "name", "device", "created", "lastSeen", "current": bool, "account": {"id",
-  "displayName"}, "profile": "<profile name>", "canUnlink": bool}`. `id` is the same as the `Session` id.
+- `Device` (a linked TV or a desktop-app sign-in): `{"id", "name", "device", "kind": "tv"|"desktop", "created",
+  "lastSeen", "current": bool, "account": {"id", "displayName"}, "profile": "<profile name>", "canUnlink": bool}`.
+  `id` is the same as the `Session` id.
 
 ## Endpoints
 
@@ -43,12 +44,12 @@ It is written so another implementation (for example Rust) could replace the ser
 | GET | `/v1/hello` | anyone (public, **any Host**) | → `{"app": "orbit", "api": 1, "hostOk": bool}`. Recognises an Orbit server (the TV's "Find my server" scan). It is answered before the Host check, so a scan by IP address works; `hostOk` says whether the Host the client used is allowed (else the address must be added to `TVBRO_ALLOWED_HOSTS` before the TV can link). It names no version, account or setting. |
 | GET | `/v1/status` | anyone (public) | → `{"accounts": bool, "setup": bool}`. `setup` is true while the first owner can be created. |
 | POST | `/v1/setup` | anyone, only while no account exists | `{"token", "username", "password", "displayName"?}` → `Me` + session cookie. `token` is the one-time setup token from the server's data folder (`orbit-setup-token`). |
-| POST | `/v1/auth/login` | anyone | `{"username", "password", "device"?, "kind"?}` → `Me` + session cookie. Wrong username or password: 403, the same message either way. Throttled like tvBro's login. `"kind": "desktop"` makes a desktop-app session (see "The desktop app" below); anything else is a browser session. |
+| POST | `/v1/auth/login` | anyone | `{"username", "password", "device"?, "kind"?}` → `Me` + session cookie. Wrong username or password: 403, the same message either way. Throttled per client address (an IPv6 client per /64) and per (client, username): 5 free tries, then 30 s doubling up to 15 min (429). Wrong guesses at one username from many addresses get 429 too, but only after the password was checked: the right password from a client that has not been failing always signs in. There is no overall bucket, so strangers cannot lock everyone out. `"kind": "desktop"` makes a desktop-app session (see "The desktop app" below); anything else is a browser session. |
 | POST | `/v1/auth/logout` | signed in | `{}` → `{"ok": true}`, session ends, cookie cleared. The web app then removes what the browser cached for the account and profile (localStorage `tvbro.ui`, `tvbro.reminders`; sessionStorage `tvbro.parental`, `tvbro.sid`; no IndexedDB is used), and does the same whenever it shows the sign-in page because the server ended its session, so the next person starts clean. |
 | GET | `/v1/me` | signed in | → `Me` |
 | GET | `/v1/profiles` | signed in | → `{"profiles": [Profile]}` (own account only) |
 | POST | `/v1/profiles` | signed in | `{"name", "kids"?}` → `Profile` (at most 8 per account) |
-| POST | `/v1/profiles/select` | signed in | `{"id"}` → `Me` (the profile must be your own) |
+| POST | `/v1/profiles/select` | signed in | `{"id", "pin"?}` → `Me` (the profile must be your own). **Kids lock:** when the session is on a kids profile and the target is not, the household's parental PIN is needed in `pin` (403 `{"error", "pinRequired": true}` without it or when wrong; wrong PINs share the parental PIN's throttle: 429). An owner's or admin's browser sign-in can always pick; TVs, desktop apps and members' browsers cannot. With no parental PIN set the switch is allowed and `Me` carries `"warning"` saying so. |
 | POST | `/v1/profiles/delete` | signed in | `{"id"}` → `{"ok": true}` (not your last profile) |
 | GET | `/v1/sessions` | signed in | → `{"sessions": [Session]}` (own account only) |
 | POST | `/v1/sessions/revoke` | signed in | `{"id"}` → `{"ok": true}` (own sessions only) |
@@ -60,7 +61,7 @@ It is written so another implementation (for example Rust) could replace the ser
 
 | Method | Path | Who | Body → Answer |
 |---|---|---|---|
-| POST | `/v1/pair/start` | the TV (public, `X-TvBro: 1`) | `{"device"}` → `{"pairId", "code", "expires", "interval"}`. `code` is `XXXX-XXXX` (letters without vowels, digits 2–9). At most 3 pairings per client address and 20 in all may wait at once (expired ones do not count); over that: 429 with a message saying which limit was hit and `Retry-After` (seconds until the oldest of those codes expires). 409 while the server has no accounts. |
+| POST | `/v1/pair/start` | the TV (public, `X-TvBro: 1`) | `{"device"}` → `{"pairId", "code", "expires", "interval"}`. `code` is `XXXX-XXXX` (letters without vowels, digits 2–9). At most 3 pairings per client address (an IPv6 client per /64), 6 per network (IPv4 /24, IPv6 /64) and 50 in all may wait at once (expired ones do not count); over that: 429 with a message saying which limit was hit and `Retry-After` (seconds until the oldest of those codes expires). 409 while the server has no accounts. |
 | POST | `/v1/pair/poll` | the TV (public, `X-TvBro: 1`) | `{"pairId"}` → `{"status": "pending"}` or, once, `{"status": "approved", "session", "csrf", "me": Me}`. 404 when expired, collected or cancelled. Poll every `interval` seconds. |
 | POST | `/v1/pair/peek` | signed in | `{"code"}` → `{"device", "address", "waitingSecs"}`: which TV is waiting behind a code (its name and client address), shown before approving. Unknown codes: 404, throttled like `approve`. |
 | POST | `/v1/pair/approve` | signed in | `{"code", "profileId"?}` → `{"ok": true, "device"}`. The profile must be your own (else 404); unknown or expired codes answer 404 and are throttled per address (429). |
@@ -76,16 +77,16 @@ link again.
 | Method | Path | Who | Body → Answer |
 |---|---|---|---|
 | POST | `/v1/device/name` | signed in (the device itself: a TV after linking or from Settings ▸ Home server ▸ Name this TV) | `{"name"}` → `{"ok": true, "name"}` (the name as stored). |
-| GET | `/v1/devices` | signed in | → `{"devices": [Device]}`: linked TVs (sessions of kind `tv`), newest first. Owner and admins get the household's; members their own account's. |
-| POST | `/v1/devices/rename` | signed in | `{"id", "name"}` → `Device`. Owner and admins may rename any linked TV; members only their own account's (others answer 404). |
-| POST | `/v1/devices/unlink` | signed in | `{"id"}` → `{"ok": true}`: the TV's session ends (it removes the account's data on its next request). Your own account's TVs; the owner any; admins also members' (never the owner's or another admin's: 403). Unknown ids, browser sessions and (for members) other accounts' TVs answer 404. |
+| GET | `/v1/devices` | signed in | → `{"devices": [Device]}`: linked TVs and desktop apps (sessions of kind `tv` or `desktop`), newest first. Owner and admins get the household's; members their own account's. |
+| POST | `/v1/devices/rename` | signed in | `{"id", "name"}` → `Device`. Owner and admins may rename any linked TV or desktop app; members only their own account's (others answer 404). |
+| POST | `/v1/devices/unlink` | signed in | `{"id"}` → `{"ok": true}`: the TV's or desktop app's session ends (it removes the account's data on its next request). Your own account's devices; the owner any; admins also members' (never the owner's or another admin's: 403). Unknown ids, browser sessions and (for members) other accounts' TVs answer 404. |
 
 Names (`orbit.db` migration 004, column `account_sessions.name`): 1 to 32 characters, letters (any language), digits,
 spaces and `' - . _ ( ) & + #`; leading and trailing spaces are dropped and runs of spaces become one; anything else
 (control characters, quotes, `<`, emoji) is 400. A name belongs to the session, so linking a TV again starts unnamed.
 Right after linking, the TV offers to name itself (the field offers its model, e.g. "SHIELD Android TV"); the step can
-be skipped. The web app lists linked TVs for the owner and admins under Settings ▸ Accounts ▸ Linked TVs, with Rename
-and Unlink.
+be skipped. The web app lists linked TVs and desktop apps for the owner and admins under Settings ▸ Accounts ▸ TVs and
+computers, with Rename and Unlink.
 
 The server checks the `Host` header, so the address the TV uses (for example `192.0.2.10:8750`) must be listed in
 `TVBRO_ALLOWED_HOSTS`.
@@ -122,10 +123,13 @@ With it on, `/v1/device/playlists` answers, for each playlist:
   (one guide address per configured one; empty when none is set), `server` / `user` / `pass` empty.
 
 `<origin>` is the scheme and `Host` the TV used for this request. The user is the TV session's public id, the
-password an HMAC of the session with the server key, so both stay the same for as long as the TV stays linked (the
+password an HMAC of the session with the facade key, so both stay the same for as long as the TV stays linked (the
 TV's playlist list does not change between syncs). They stop working at once when the session ends: unlinked,
-signed out from another device (`/v1/sessions/revoke`), account disabled or password reset, or expiry. Rotating the
-server key changes every password; TVs get the new one at their next playlist sync. A TV app that predates the
+signed out from another device (`/v1/sessions/revoke`), account disabled or password reset, or expiry. The facade
+key, and the key of the sealed `s/` / `t/` and `/seg` addresses, are derived (HKDF-SHA256, one label per purpose)
+from the encryption key that is kept outside the data folder (`orbit.key`), not from `sign.key` in it: a copy of
+the data folder alone gives no facade login and cannot forge a sealed address. Rotating the encryption key changes
+every password; TVs get the new one at their next playlist sync (at start and every 30 minutes). A TV app that predates the
 facade just sees an Xtream server and works unchanged.
 
 Facade routes (Host check as everywhere; no cookie, the device login is in the address; wrong or dead logins get
@@ -133,12 +137,12 @@ Facade routes (Host check as everywhere; no cookie, the device login is in the a
 
 | Path under `/xt/<id>/` | Does |
 |---|---|
-| `player_api.php?username&password[&action&…]` | the provider's answer for the same action and parameters (Xtream only). `user_info.username` / `password` become the device's, `server_info` names this server, and any value that carries the provider login in an address is replaced by a sealed `s/` address. Other answers pass through unchanged. gzip when the TV accepts it. |
+| `player_api.php?username&password[&action&…]` | the provider's answer for the same action and parameters (Xtream only). `user_info.username` / `password` become the device's, `server_info` names this server, and any value that carries the provider login in an address is replaced by a sealed `s/` address. Other answers pass through unchanged. gzip when the TV accepts it. Catalogue calls (`player_api.php`, `get.php`) run one at a time per device and at most 2 at once server-wide (a call waits its turn, 503 after 3 minutes); the device's scrubbed answer is reused for 60 s for the same call and parameters. A gzip playlist is inflated to at most 200 MB (502 beyond). |
 | `xmltv.php?username&password[&n=i]` | the guide, streamed through: Xtream's own `xmltv.php`, or the M3U playlist's i-th guide address. |
 | `get.php?username&password` | the M3U playlist (for Xtream: the provider's `get.php`), rewritten: every stream line, the `url-tvg` / `x-tvg-url` guide addresses and absolute `catchup-source` templates point here. Logos stay as they are. |
 | `live\|movie\|series\|timeshift/<user>/<pass>/<rest>` | relayed from the provider's same path with the real login (Xtream only). |
-| `s/<user>/<pass>/<token>[.ext]` | a sealed provider address (HLS segment, M3U stream, guide); a query string the TV adds (catch-up "append") is passed on. |
-| `t/<user>/<pass>/<token>[.ext]?v0=…&v1=…` | a sealed catch-up template; its placeholders were handed to the TV in order as `v0`, `v1` …, so it fills them in as usual. |
+| `s/<user>/<pass>/<token>[.ext]` | a sealed provider address (HLS segment, M3U stream, guide); a query string the TV adds (catch-up "append") is passed on, re-encoded: at most 8 `name=value` pairs, names of letters, digits, `_` or `-`, values of letters, digits and `:_+.-` only (anything else: 400). |
+| `t/<user>/<pass>/<token>[.ext]?v0=…&v1=…` | a sealed catch-up template; its placeholders were handed to the TV in order as `v0`, `v1` …, so it fills them in as usual. Values may hold only letters, digits and `:_+.-` (URL-quoted into the template); anything else answers 400 and never reaches the provider. |
 
 Relaying: bytes are piped through 64 KiB at a time as they arrive (no buffering beyond one chunk; a TV that stops
 reading stops the provider read too), `Range` / `Content-Range` / `Accept-Ranges` pass through for films, the
@@ -309,7 +313,7 @@ Playing does not use one of the IPTV provider's streams (`/v1/streams` does not 
 | POST | `/v1/media/play` | `{"conn", "id", "client": "web"\|"tv"\|"desktop", "caps"?, "audio"?, "startSecs"?}` → `Play` (below). `id` is a film or episode (400 for a series / season). `startSecs` (optional): where the player will start (0 = from the start); without it, the resume point. A transcode starts there. |
 | GET | `/v1/media/stream/<session>/file` | The original file (direct play). `Range` is passed on (206 / 416 as the media server answers); piped in small chunks. |
 | GET | `/v1/media/stream/<session>/master.m3u8` | The transcode's HLS playlist. Every URI in it, and in the playlists it points at, is rewritten to `/v1/media/stream/<session>/u/...` on this server. |
-| GET | `/v1/media/stream/<session>/u/<path>` | A playlist or segment of the transcode, as rewritten above. Only the transcoder's paths on that same media server are relayed (Plex `/video/:/transcode/universal/...`, Jellyfin `/videos/...`); token parameters are dropped. Anything else: 404. |
+| GET | `/v1/media/stream/<session>/u/<path>` | A playlist or segment of the transcode, as rewritten above. Only the transcoder's paths on that same media server are relayed (Plex `/video/:/transcode/universal/...`, Jellyfin `/videos/...`); token parameters are dropped. The path is percent-decoded until it is stable; `.` / `..` segments (also as `%2e%2e`, `%252e%252e`), an encoded `/` or `\`, NUL or control characters are refused, and the canonical, re-encoded path is what goes upstream (the same rule applies to `/v1/media/image` `path` and to the facade's `/xt/<playlist>/<kind>/...` stream paths). Anything else: 404. |
 | GET | `/v1/media/stream/<session>/sub/<id>.vtt` | A text subtitle track as WebVTT (`text/vtt`; SubRip is converted). |
 | POST | `/v1/media/progress` | `{"session", "positionSecs", "state": "playing"\|"paused"\|"stopped"}` → `{"ok": true}`. Every ~10 s while playing **and while paused**, and on pause and stop. 404 when the session has ended or is another account's. Also accepted as a `navigator.sendBeacon` (below). |
 
@@ -412,10 +416,15 @@ the player with Retry (a new `POST /v1/media/play` where the viewer was) and Clo
 The older `POST /v1/media/playback` (a direct-play URL **with** the token) and the `{"conn", "id", "secs", "dur",
 "state"}` form of `/v1/media/progress` still work; new clients use `/v1/media/play`.
 
-**Local network.** The server reaches each linked server's exact `host:port` even when "local network sources" is
-off (`net.set_private_hosts`); loopback and link-local addresses stay refused. Only an owner or admin can link a
-server at a new local address; a member can link their own user on a server the household already linked (or
-any public address). While an owner or admin signs in, the new address is allowed only for that sign-in's own
+**Local network.** The server reaches a linked server's exact `host:port` on the LAN even when "local network
+sources" is off (`net.set_private_hosts`) only when an **owner or admin** linked it while it resolved to a local
+address, and then only at the address(es) it resolved to at link time (`lan_ok` / `lan_ips` in `media_connections`,
+migration 005): if the name later points at another LAN address the request is refused (DNS rebinding); link it
+again to record the new address. Connections linked before migration 005 by an owner or admin are pinned to what
+they resolve to when the server next starts. Loopback and link-local addresses stay refused. A member's
+connection is never a LAN allowance: a member can link their own user on a server the household already linked at
+the pinned address, or any public address, and a public name of theirs that later resolves to a LAN address is
+refused. While an owner or admin signs in, the new address is allowed only for that sign-in's own
 requests (start, each poll, the password sign-in: `net.private_hosts_scope`, per request thread), never in the
 server-wide list, until the link is saved; a Plex server found during the sign-in is added the same way. Jellyfin uses one `DeviceId` per link (Jellyfin ends older tokens of a device that signs in
 again); Plex gets the same per-link `X-Plex-Client-Identifier` and stores each server's own access token.
@@ -479,8 +488,8 @@ Server code: `web/server/orbit/seerr.py` (settings, client, cache, normalization
 | GET | `/v1/requests` | signed in | → `{"requests": [Request], "linked"}`: your own requests (the newest 50). Owners and admins may pass `all=1` for everyone's; then `requestedBy.accountId` names the Orbit account where one is linked. |
 | POST | `/v1/requests` | signed in, linked | `{"type": "movie"\|"tv", "tmdb", "seasons"?: [n]}` → 201 `{"created": true, "request": Request, "title": Title}`, or 200 `{"created": false, "title": Title}` when it is already available, being processed or requested (nothing new is sent to Seerr). For shows without `seasons`, every season that is neither available nor requested is asked for. 409 for an account without a linked Seerr user ("ask the owner to link your Seerr user"); 403 with Seerr's message when Seerr refuses (permissions, quota); 503 while Seerr cannot be reached. |
 | POST | `/v1/discover/settings` | owner, admin | `{"baseUrl", "apiKey"}` → `{"configured": true, "baseUrl", "keySet": true, "version"}`. The connection and key are tested (`/api/v1/status`, `/api/v1/auth/me`) before anything is saved (400 wrong key, 502 unreachable). Leave `apiKey` out to change only the address. With `"test": true` the same checks run (same errors) but nothing is saved and the LAN allowlist is unchanged → `{"ok": true, "baseUrl", "version"}` (the web app's "Test connection"). `{"remove": true}` → `{"configured": false}`. |
-| GET | `/v1/discover/users` | owner, admin | → `{"users": [{"id", "name", "email", "username", "plexUsername", "jellyfinUsername"}], "accounts": [{"id", "username", "displayName", "seerrUserId", "suggested"}]}`. `suggested`: the one Seerr user whose username, Plex / Jellyfin name, display name or e-mail name equals the account's username or display name (case-insensitive), else null. |
-| POST | `/v1/discover/map` | owner, admin | `{"accountId", "seerrUserId"}` (null unlinks) → `{"accountId", "seerrUserId"}`; the Seerr user must exist (400). `{"auto": true}` links every unlinked account that has exactly one suggestion → `{"linked": [{"accountId", "seerrUserId"}]}`. |
+| GET | `/v1/discover/users` | owner, admin | → `{"users": [{"id", "name", "email", "username", "plexUsername", "jellyfinUsername", "admin": bool}], "accounts": [{"id", "username", "displayName", "seerrUserId", "suggested"}]}`. `suggested`: the one Seerr user whose username, Plex / Jellyfin name, display name or e-mail name equals the account's username or display name (case-insensitive), else null. |
+| POST | `/v1/discover/map` | owner, admin | `{"accountId", "seerrUserId"}` (null unlinks) → `{"accountId", "seerrUserId"}`; the Seerr user must exist (400). Only the **owner** may link an account to a Seerr admin (`admin`: the user has Seerr's ADMIN permission bit, or is Seerr's first user; their requests are approved automatically): an admin gets 403 for that, but may link accounts to normal Seerr users. `{"auto": true}` links every unlinked account that has exactly one suggestion → `{"linked": [{"accountId", "seerrUserId"}], "skipped": [{"accountId", "seerrUserId"}]}` (`skipped`: suggestions that are Seerr admins, when an admin asked). |
 
 Objects:
 - `Title`: `{"type": "movie"|"tv", "tmdb", "title", "year", "overview", "poster", "backdrop", "rating",

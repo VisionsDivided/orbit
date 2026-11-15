@@ -31,7 +31,7 @@ test('the Seerr status line', () => {
 });
 
 const USERS = {
-  users: [{ id: 1, name: 'Admin', email: 'admin@example.com', username: 'admin', plexUsername: '', jellyfinUsername: '' },
+  users: [{ id: 1, name: 'Admin', email: 'admin@example.com', username: 'admin', plexUsername: '', jellyfinUsername: '', admin: true },
     { id: 2, name: 'Sam', email: 'sam@example.com', username: '', plexUsername: 'sammy', jellyfinUsername: '' }],
   accounts: [{ id: 'a1', username: 'alex', displayName: 'Alex', seerrUserId: 1, suggested: null },
     { id: 'a2', username: 'sammy', displayName: 'Sam', seerrUserId: null, suggested: 2 },
@@ -50,6 +50,8 @@ test('the mapping list: one select per account, the suggestion marked', () => {
   assert.deepEqual(rows[1].options.map((o) => o[0]), ['', '1', '2']);
   assert.match(rows[1].options[2][1], /suggested/);
   assert.doesNotMatch(rows[0].options[1][1], /suggested/);
+  assert.match(rows[0].options[1][1], /Seerr admin/, 'Seerr admins are marked (only the owner may link one)');
+  assert.doesNotMatch(rows[0].options[2][1], /Seerr admin/);
   assert.equal(suggestedCount(USERS), 1);
   assert.deepEqual(mappingRows(null), []);
 });

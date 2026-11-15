@@ -448,7 +448,8 @@ class Media(unittest.TestCase):
         self.assertEqual(res["query"], {"includeHttps": "1", "includeRelay": "0"})
         self.assertEqual(self.seen(self.px, "GET", "/identity")[0]["headers"]["x-plex-token"], PLEX_SERVER_TOKEN,
                          "the server's own access token, not the account token")
-        self.assertIn(("127.0.0.1", self.px.server_port), self.media.private_hosts())
+        self.assertIn(("127.0.0.1", self.px.server_port, frozenset({"127.0.0.1"})), self.media.private_hosts(),
+                      "an owner's LAN link is pinned to the address it resolved to")
 
     def test_plex_browse_play_progress_watched(self):
         cid = self.link_plex()["id"]
@@ -606,6 +607,68 @@ class Media(unittest.TestCase):
         self.ok("POST", "/v1/media/connect/start", self.sam, {"kind": "jellyfin", "baseUrl": "http://192.0.2.60:8096"})
         self.assertEqual(seen, [("start", False, False)])
 
+    def _fake_password_kind(self, base_url):
+        from orbit.connectors.base import Linked
+
+        class Fake:
+            label = "Fake"
+
+            def __init__(self, base, tok, uid, dev, http):
+                self.base = base
+
+            @classmethod
+            def sign_in_password(cls, http, base, user, pw, device):
+                return Linked(base_url, "Example", "srv-" + user, "u-" + user, user, "tok-" + user)
+
+            def health(self):
+                hp = (urllib.parse.urlsplit(self.base).hostname, urllib.parse.urlsplit(self.base).port)
+                try:
+                    NET.resolve(*hp)          # the same check every connector request makes
+                except NET.Blocked as e:
+                    raise ConnectorError(502, str(e))
+                return True
+
+        self.media.kinds = {**self.media.kinds, "jellyfin": Fake}
+
+    def test_member_link_is_never_a_lan_allowance(self):
+        """H1: a member links a public name; it later re-resolves to a LAN address (DNS rebinding): refused. An
+        owner-linked LAN server keeps working, but only at the address recorded when it was linked."""
+        dns = {"media.example.com": "198.51.100.7", "jf.example.lan": "192.0.2.40"}
+
+        def fake_dns(host, port, *a, **k):
+            if host not in dns:
+                raise socket.gaierror("no such host")
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (dns[host], port))]
+
+        with mock.patch.object(NET, "allow_private", return_value=False),                 mock.patch.object(NET.socket, "getaddrinfo", fake_dns),                 mock.patch.object(NET, "_private_hosts", lambda: self.media.private_hosts()):
+            self._fake_password_kind("http://media.example.com:8096")
+            self.ok("POST", "/v1/media/connect/password", self.sam,
+                    {"kind": "jellyfin", "baseUrl": "http://media.example.com:8096", "username": "sam", "password": "x"})
+            row = self.acc.db.one("SELECT lan_ok, lan_ips FROM media_connections WHERE account_id=?",
+                                  (self.sam["account_id"],))
+            self.assertEqual(tuple(row), (0, ""))
+            self.assertEqual(self.media.private_hosts(), set())
+            dns["media.example.com"] = "192.0.2.77"                    # the member's name now points at the LAN
+            with self.assertRaises(NET.Blocked):
+                NET.resolve("media.example.com", 8096)
+            self.assertFalse(self.ok("GET", "/v1/media/connections", self.sam, check=1)["connections"][0]["ok"])
+
+            # an owner links a LAN server: allowed, pinned to 192.0.2.40
+            self._fake_password_kind("http://jf.example.lan:8096")
+            self.media._allow(self.alex, set())                       # (managers only)
+            self.ok("POST", "/v1/media/connect/password", self.alex,
+                    {"kind": "jellyfin", "baseUrl": "http://jf.example.lan:8096", "username": "alex", "password": "x"})
+            self.assertEqual(self.media.private_hosts(), {("jf.example.lan", 8096, frozenset({"192.0.2.40"}))})
+            self.assertTrue(NET.resolve("jf.example.lan", 8096))
+            self.assertTrue(self.ok("GET", "/v1/media/connections", self.alex, check=1)["connections"][0]["ok"])
+            dns["jf.example.lan"] = "192.0.2.41"                       # the same name moved: not the pinned address
+            with self.assertRaises(NET.Blocked):
+                NET.resolve("jf.example.lan", 8096)
+            # the member's public name still cannot reach the LAN, even at the owner's pinned address
+            dns["media.example.com"] = "192.0.2.40"
+            with self.assertRaises(NET.Blocked):
+                NET.resolve("media.example.com", 8096)
+
     def test_pending_sign_ins_expire_and_are_capped(self):
         now = [1000.0]
         self.media.clock = lambda: now[0]
@@ -644,7 +707,10 @@ class Helpers(unittest.TestCase):
 
     def test_safe_path(self):
         self.assertEqual(safe_path("/Items/a/Images/Primary?tag=1", ("/Items/",)), "/Items/a/Images/Primary?tag=1")
-        for bad in ("/Items/a b", "/Items/a\r\nX: y", "/Items/a#x", "/Items/a?X-Plex-Token=1", None):
+        self.assertEqual(safe_path("/Items/a%20b/Images/Primary", ("/Items/",)), "/Items/a%20b/Images/Primary")
+        for bad in ("/Items/a b", "/Items/a\r\nX: y", "/Items/a#x", "/Items/a?X-Plex-Token=1", None,
+                    "/Items/%2e%2e/System/Info", "/Items/%252e%252e/System/Info", "/Items/..%2fSystem/Info",
+                    "/Items/a%5c..%5cSystem", "/Items/a%2fb"):
             with self.assertRaises(ConnectorError):
                 safe_path(bad, ("/Items/",))
 
@@ -674,6 +740,25 @@ class Migration(unittest.TestCase):
         self.assertFalse({c for c in cols if "token" in c}, "no token column: tokens live sealed in media.enc")
         new.run("DELETE FROM accounts WHERE id='a1'")
         self.assertEqual(new.one("SELECT COUNT(*) FROM media_connections")[0], 0, "removed with the account")
+
+    def test_upgrade_to_version_5_keeps_owner_lan_links_only(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        m = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, m, True)
+        for n, p in ODB.migrations()[:4]:
+            shutil.copy(p, m)
+        old = ODB.Database(os.path.join(d, "orbit.db"), m)
+        self.assertEqual(old.version(), 4)
+        old.run("INSERT INTO accounts VALUES ('a1','alex','alex','Alex','owner','h',0,1)")
+        old.run("INSERT INTO accounts VALUES ('a2','sam','sam','Sam','member','h',0,1)")
+        for cid, acc in (("c1", "a1"), ("c2", "a2")):
+            old.run("INSERT INTO media_connections(id, account_id, kind, base_url, device_id, created) "
+                    "VALUES (?,?,'jellyfin','http://jf.example.lan:8096','orbit-x',1)", (cid, acc))
+        old.close()
+        new = ODB.Database(os.path.join(d, "orbit.db"))
+        self.addCleanup(new.close)
+        self.assertEqual(dict(new.q("SELECT id, lan_ok FROM media_connections")), {"c1": 1, "c2": 0})
 
 
 class Server(unittest.TestCase):

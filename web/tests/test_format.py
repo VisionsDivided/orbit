@@ -98,6 +98,50 @@ class SealedSegments(unittest.TestCase):
             self.assertIsNone(a.unseal(tok[:-2] + ("AA" if not tok.endswith("AA") else "BB")))
             self.assertIsNone(a.unseal("nonsense"))
             a.state.db.close()
+            a.orbit.close()
+
+    def test_seal_and_facade_keys_come_from_the_key_outside_the_data_folder(self):
+        """L2: sign.key (in the data folder) no longer opens sealed addresses or gives facade logins; the keys are
+        derived from the encryption key (TVBRO_KEY_FILE), one per purpose."""
+        import base64
+        from unittest import mock
+        from cryptography.fernet import Fernet
+        from cryptography.hazmat.primitives.ciphers.aead import AESSIV
+        from hashlib import sha512
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as sec:
+            data = os.path.join(d, "data")
+            os.makedirs(data)
+            kf = os.path.join(sec, "orbit.key")
+            with open(kf, "wb") as f:
+                f.write(Fernet.generate_key())
+            from tvbro_server import app as A
+            from tvbro_server.secretstore import SecretStore
+            with mock.patch.dict(os.environ, {"TVBRO_DATA": data, "TVBRO_KEY_FILE": kf, "TVBRO_KEY": ""}), \
+                    mock.patch.object(A, "DATA_DIR", data):
+                a = A.App()
+                try:
+                    st = SecretStore(data)
+                    self.assertEqual(a.facade_key, st.derive(b"orbit/facade-device-secret/v1"))
+                    self.assertEqual(a.facade.keys.key, a.facade_key)
+                    self.assertNotEqual(a.facade_key, a.sign_key)
+                    self.assertNotEqual(a.seal_key[:32], a.facade_key, "one key per purpose")
+                    seg = "http://tv.example:8080/live/alice/s3cret/101.ts"
+                    old_tok = base64.urlsafe_b64encode(AESSIV(sha512(b"tvbro-seg" + a.sign_key).digest())
+                                                       .encrypt(seg.encode(), None)).decode().rstrip("=")
+                    self.assertNotEqual(a.seal(seg), old_tok, "sign.key alone no longer makes sealed addresses")
+                    self.assertEqual(a.unseal(old_tok), seg, "during the upgrade grace an old address still works")
+                    a.legacy_until = 0
+                    self.assertIsNone(a.unseal(old_tok), "after it, a token forged with sign.key is refused")
+                    self.assertEqual(a.unseal(a.seal(seg)), seg)
+                    # the grace starts once, at the first start with derived keys
+                    with open(os.path.join(data, "keys-derived.json"), encoding="utf-8") as f:
+                        self.assertIn("since", f.read())
+                    with open(kf, "wb") as f:                  # another encryption key: other derived keys
+                        f.write(Fernet.generate_key())
+                    self.assertNotEqual(SecretStore(data).derive(b"orbit/facade-device-secret/v1"), a.facade_key)
+                finally:
+                    a.state.db.close()
+                    a.orbit.close()
             a.orbit.close()                                    # Orbit: orbit.db is open too (Windows cannot delete open files)
 
 

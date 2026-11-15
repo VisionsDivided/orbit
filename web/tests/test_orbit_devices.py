@@ -102,6 +102,107 @@ class Devices(unittest.TestCase):
         self.assertEqual(self.call(self.alex, "POST", "/v1/devices/rename", {"id": ids["Alex TV"], "name": ""})[0], 400)
 
 
+    def test_desktop_app_sessions_are_listed_renamed_and_unlinked(self):
+        """L7: a member's desktop-app sign-in is a watch device too: owner and admins can see, rename and sign it out."""
+        sam_desk = self.acc.gate(self.auth.session(self.acc.login("sam", "another pass 3", "192.0.2.30", "Sam laptop",
+                                                                   kind="desktop")))
+        tv = self.link(self.alex, "Alex TV")
+        kinds = {d["device"]: d["kind"] for d in self.acc.devices(self.alex)}
+        self.assertEqual(kinds, {"Sam laptop": "desktop", "Alex TV": "tv"}, "browsers are still not listed")
+        self.assertEqual({d["device"] for d in self.acc.devices(self.bea)}, set(kinds))
+        self.assertEqual([d["device"] for d in self.acc.devices(self.sam)], ["Sam laptop"])
+        did = next(d["id"] for d in self.acc.devices(self.alex) if d["kind"] == "desktop")
+        self.assertEqual(self.call(self.bea, "POST", "/v1/devices/rename", {"id": did, "name": "Study"})[1]["name"], "Study")
+        self.assertEqual(self.call(self.bea, "POST", "/v1/devices/unlink", {"id": did}), (200, {"ok": True}))
+        self.assertNotIn(sam_desk["h"], self.auth.sessions, "the desktop app is signed out")
+        self.assertIn(tv["h"], self.auth.sessions)
+
+
+@mock.patch("tvbro_server.auth.ITERATIONS", 1000)
+class KidsLock(unittest.TestCase):
+    """Leaving a kids profile for a non-kids one needs the household's parental PIN on the server (TVs, desktop apps,
+    members' browsers); an owner's or admin's browser sign-in can always pick. No PIN set: allowed, with a warning."""
+
+    def setUp(self):
+        from tvbro_server.parental import Parental
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.auth = AU.Auth(self.d, b"k" * 32)
+        self.acc = Accounts(self.d, self.auth)
+        self.addCleanup(self.acc.close)
+        self.t = [1000.0]
+        self.parental = Parental(os.path.join(self.d, "parental.json"), b"p" * 32, clock=lambda: self.t[0])
+        self.acc.parental = self.parental
+        with open(os.path.join(self.d, "orbit-setup-token"), encoding="utf-8") as f:
+            self.alex = self.acc.gate(self.auth.session(self.acc.setup(f.read(), "alex", "correct horse 1", "Alex")))
+        self.acc.create_account(self.alex, "sam", "another pass 3", "Sam")
+        self.sam = self.acc.gate(self.auth.session(self.acc.login("sam", "another pass 3", "192.0.2.3")))
+        self.pr = PA.Pairings(self.acc)
+        self.api = Api(self.acc, self.pr)
+        self.main = {w: self.acc.me(s)["profile"]["id"] for w, s in (("alex", self.alex), ("sam", self.sam))}
+        self.kids = {w: self.acc.add_profile(s["account_id"], "Kids", True)["id"]
+                     for w, s in (("alex", self.alex), ("sam", self.sam))}
+
+    def tv(self, who):
+        p = self.pr.start("TV", "192.0.2.50")
+        self.pr.approve(who, p["code"], None, "192.0.2.9")
+        return self.acc.gate(self.auth.session(self.pr.poll(p["pairId"])["session"]))
+
+    def select(self, sess, pid, pin=None):
+        r = self.api.handle(Call("POST", "/v1/profiles/select", sess, {"id": pid, **({"pin": pin} if pin else {})}))
+        return r.code, r.obj
+
+    def fresh(self, sess):
+        return self.acc.gate({"h": sess["h"], "role": sess["role"], "renew": False})
+
+    def test_a_tv_needs_the_pin_to_leave_kids(self):
+        with mock.patch("tvbro_server.parental.ITERATIONS", 1000):
+            self.parental.set_pin("4321")
+        tv = self.tv(self.alex)
+        self.assertEqual(self.select(tv, self.kids["alex"])[0], 200, "into kids: never a PIN")
+        tv = self.fresh(tv)
+        code, j = self.select(tv, self.main["alex"])
+        self.assertEqual((code, j.get("pinRequired")), (403, True))
+        self.assertEqual(self.acc.me(self.fresh(tv))["profile"]["id"], self.kids["alex"], "still the kids profile")
+        code, j = self.select(tv, self.main["alex"], "0000")
+        self.assertEqual((code, j["error"], j.get("pinRequired")), (403, "wrong PIN", True))
+        code, j = self.select(tv, self.main["alex"], "4321")
+        self.assertEqual((code, j["profile"]["id"]), (200, self.main["alex"]))
+        self.assertNotIn("warning", j)
+
+    def test_wrong_pins_are_throttled(self):
+        with mock.patch("tvbro_server.parental.ITERATIONS", 1000):
+            self.parental.set_pin("4321")
+        tv = self.tv(self.sam)
+        self.select(tv, self.kids["sam"])
+        tv = self.fresh(tv)
+        for i in range(5):
+            self.assertEqual(self.select(tv, self.main["sam"], "000%d" % i)[0], 403)
+        code, j = self.select(tv, self.main["sam"], "4321")
+        self.assertEqual(code, 429, "the parental PIN throttle applies")
+
+    def test_owner_and_admin_browsers_can_always_pick_members_cannot(self):
+        with mock.patch("tvbro_server.parental.ITERATIONS", 1000):
+            self.parental.set_pin("4321")
+        self.select(self.alex, self.kids["alex"])
+        self.assertEqual(self.select(self.fresh(self.alex), self.main["alex"])[0], 200, "the owner's browser")
+        self.select(self.sam, self.kids["sam"])
+        self.assertEqual(self.select(self.fresh(self.sam), self.main["sam"])[0], 403, "a member's browser")
+        desk = self.acc.gate(self.auth.session(self.acc.login("alex", "correct horse 1", "192.0.2.7", "Desk", kind="desktop")))
+        self.select(desk, self.kids["alex"])
+        self.assertEqual(self.select(self.fresh(desk), self.main["alex"])[0], 403, "the owner's desktop app is a device")
+        self.assertEqual(self.select(self.fresh(desk), self.kids["alex"])[0], 200, "kids to kids: no PIN")
+
+    def test_without_a_pin_it_is_allowed_but_says_so(self):
+        tv = self.tv(self.alex)
+        self.select(tv, self.kids["alex"])
+        code, j = self.select(self.fresh(tv), self.main["alex"])
+        self.assertEqual(code, 200)
+        self.assertIn("No parental PIN is set", j["warning"])
+        code, j = self.select(self.fresh(tv), self.kids["alex"])
+        self.assertNotIn("warning", j)
+
+
 class StreamNames(unittest.TestCase):
     def test_device_name_then_profile_then_label(self):
         r = StreamRegistry(3)

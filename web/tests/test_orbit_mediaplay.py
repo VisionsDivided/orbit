@@ -271,8 +271,13 @@ class Play(unittest.TestCase):
         sid = self.play(self.alex, cid, "10", "web")["session"]
         for bad in ("/u/library/sections/1/all", "/u/library/parts/501/1/file.mp4",
                     "/u/video/:/transcode/universal/../../library/sections", "/u/video/:/transcode/universal//x",
-                    "/u/video/:/transcode/universal/session/fake/base/00000.ts%00", "/master.m3u8x", "/nothing"):
+                    "/u/video/:/transcode/universal/session/fake/base/00000.ts%00", "/master.m3u8x", "/nothing",
+                    "/u/video/:/transcode/universal/%2e%2e/%2e%2e/library/sections",
+                    "/u/video/:/transcode/universal/%252e%252e/%252e%252e/library/sections",
+                    "/u/video/:/transcode/universal/..%2f..%2flibrary", "/u/video/:/transcode/universal/a%5c..%5cx"):
             self.assertEqual(self.get(f"/v1/media/stream/{sid}{bad}")[0], 404, bad)
+        self.assertFalse([r for r in self.px.seen if "/library/sections" in r["path"] or ".." in r["path"] or "%2e" in r["path"].lower()],
+                         "nothing outside the transcoder (also percent-encoded) reached the server")
         self.assertEqual(self.get("/v1/media/stream/" + "A" * 32 + "/master.m3u8")[0], 404)
         self.assertEqual(self.get("/v1/media/stream/short/master.m3u8")[0], 404)
         self.get(f"/v1/media/stream/{sid}/u/video/:/transcode/universal/session/fake/base/00000.ts?X-Plex-Token=x&api_key=y&ok=1")
@@ -628,6 +633,12 @@ class Helpers(unittest.TestCase):
         for bad in ("/library/x", "/video/:/transcode/universal/../x", "/video/:/transcode/universal/a//b",
                     "/video/:/transcode/universal/a@b", "/video/:/transcode/universal/a b", ""):
             self.assertFalse(MP.safe_rel(bad, P), bad)
+        J = ("/videos/",)
+        for bad in ("/videos/%2e%2e/System/Info", "/videos/%252e%252e/System/Info", "/videos/..%2fSystem",
+                    "/videos/a%2fb", "/videos/a%5cb", "/videos/%2E%2E/x", "/videos/a/%2e/b", "/videos/a%00"):
+            self.assertIsNone(MP.safe_rel(bad, J), bad)
+        self.assertEqual(MP.safe_rel("/videos/m1/hls1/main/0.ts", J), "/videos/m1/hls1/main/0.ts")
+        self.assertEqual(MP.safe_rel("/videos/m1/a%20b%2Ets", J), "/videos/m1/a%20b.ts", "sent upstream re-encoded")
         self.assertEqual(MP.clean_query("a=1&X-Plex-Token=t&API_KEY=k&b=2"), "a=1&b=2")
 
 
@@ -687,7 +698,11 @@ class RealServer(TM.Server):
         self.assertEqual(self.req("GET", w["url"])[0], 404)
         self.log.flush()
         with open(os.path.join(self.tmp, "server.log"), "rb") as f:
-            self.assertNotIn(TM.JF_PW_TOKEN.encode(), f.read())
+            log = f.read()
+        self.assertNotIn(TM.JF_PW_TOKEN.encode(), log)
+        self.assertIn(b"/v1/media/stream/-/", log, "stream requests are logged without their session id")
+        for s in (a["session"], w["session"], sid):
+            self.assertNotIn(s.encode(), log, "a play-session id is a capability: never in the log")
 
 
 if __name__ == "__main__":

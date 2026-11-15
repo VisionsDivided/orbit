@@ -16,14 +16,16 @@
   renewed while used.
 - Roles: ``admin`` (everything) and ``viewer`` (watch, lists, layout; no provider, settings,
   storage, restore or deletes).
-- Wrong passwords are throttled per client address and overall: after 5 wrong ones each try
-  waits 30 s, doubling up to 15 min (429 + Retry-After).
+- Wrong passwords are throttled per client address (an IPv6 client per /64) and, for the shared
+  password, overall: after 5 wrong ones each try waits 30 s, doubling up to 15 min (429 +
+  Retry-After). Orbit's account sign-in has no overall bucket (see orbit/accounts.py).
 - CSRF: every write needs the session's token (HMAC of the session) in ``X-CSRF-Token``.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import secrets
@@ -76,17 +78,45 @@ class Wait(Exception):
         self.retry_after = max(1, int(retry_after))
 
 
+def client_key(addr) -> str:
+    """The throttle key of a client address: an IPv4 address as it is, an IPv6 address as its /64 (one home or
+    host usually gets a whole /64, so per-address counting would be no limit at all). Other keys unchanged."""
+    s = str(addr or "")
+    try:
+        ip = ipaddress.ip_address(s.split("%", 1)[0].strip("[]"))
+    except ValueError:
+        return s
+    if ip.version == 6:
+        if ip.ipv4_mapped:
+            return str(ip.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return str(ip)
+
+
 class Throttle:
-    """Wrong-password counter per key (client address) and overall."""
+    """Wrong-password counter per key (client address, IPv6 per /64) and, unless ``global_free`` is None, overall.
+    The overall bucket suits a single shared password; account sign-ins use none (any stranger could otherwise lock
+    every account out)."""
     FREE = 5
     BASE = 30
     MAX_WAIT = 900
     GLOBAL_FREE = 30
 
-    def __init__(self, clock: Callable[[], float] = time.time):
+    def __init__(self, clock: Callable[[], float] = time.time, global_free: Optional[int] = GLOBAL_FREE):
         self.clock = clock
+        self.global_free = global_free
         self._lock = threading.Lock()
         self._d: dict[str, list] = {}         # key -> [fails, wait_until]
+
+    def _keys(self, key: str) -> tuple:
+        return (client_key(key),) + (("*",) if self.global_free is not None else ())
+
+    def blocked(self, key: str) -> float:
+        """Seconds ``key`` (alone, not the overall bucket) must still wait; 0 when it may try."""
+        now = self.clock()
+        with self._lock:
+            e = self._d.get(client_key(key))
+            return max(0.0, e[1] - now) if e else 0.0
 
     def _wait(self, fails: int, free: int) -> float:
         if fails < free:
@@ -96,7 +126,7 @@ class Throttle:
     def check(self, key: str):
         now = self.clock()
         with self._lock:
-            for k in (key, "*"):
+            for k in self._keys(key):
                 e = self._d.get(k)
                 if e and now < e[1]:
                     raise Wait(e[1] - now + 0.999)
@@ -104,7 +134,8 @@ class Throttle:
     def fail(self, key: str):
         now = self.clock()
         with self._lock:
-            for k, free in ((key, self.FREE), ("*", self.GLOBAL_FREE)):
+            for k in self._keys(key):
+                free = self.FREE if k != "*" else self.global_free
                 e = self._d.setdefault(k, [0, 0.0])
                 e[0] += 1
                 w = self._wait(e[0], free)
@@ -117,7 +148,7 @@ class Throttle:
 
     def ok(self, key: str):
         with self._lock:
-            self._d.pop(key, None)
+            self._d.pop(client_key(key), None)
             g = self._d.get("*")
             if g:
                 g[0] = max(0, g[0] - self.FREE)

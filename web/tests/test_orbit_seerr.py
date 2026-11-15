@@ -84,7 +84,9 @@ class MockSeerr:
         self._flight = threading.Lock()
         self.users = [{"id": 1, "displayName": "Admin", "email": "admin@example.com", "username": "admin"},
                       {"id": 2, "displayName": "Sam", "email": "sam@example.com", "plexUsername": "sammy"},
-                      {"id": 3, "displayName": "Jo", "email": "jo@example.com", "jellyfinUsername": "jo"}]
+                      {"id": 3, "displayName": "Jo", "email": "jo@example.com", "jellyfinUsername": "jo"},
+                      {"id": 4, "displayName": "Ada", "email": "ada@example.com", "username": "ada",
+                       "permissions": 2 | 32}]                 # a second Seerr admin (ADMIN bit)
         self.titles = {
             ("movie", 550): movie(550, "Requestable Film", "1999-10-15"),
             ("movie", 603): movie(603, "Available Film", "1999-03-31", status=5),
@@ -440,13 +442,13 @@ class Discover(unittest.TestCase):
         NET.set_private_hosts(self.disc.private_hosts)
         self.addCleanup(NET.set_private_hosts, lambda: set())
         calls = []
-        real = NET._host_listed
+        real = NET._listed
 
         def spy(host, port):
             ok = real(host, port)
-            calls.append(ok)
+            calls.append(ok is not False)
             return ok
-        with mock.patch.object(NET, "_host_listed", spy):
+        with mock.patch.object(NET, "_listed", spy):
             self.configure()
         self.assertEqual(len(calls), 2, "status and auth/me")
         self.assertTrue(all(calls), "every probe fetch saw the scoped allowance")
@@ -766,15 +768,40 @@ class Discover(unittest.TestCase):
                                    {"accountId": "nope", "seerrUserId": 2})[0], 404)
         code, j = self.call(self.owner, "GET", "/v1/discover/users")
         self.assertEqual(code, 200, j)
-        self.assertEqual([u["id"] for u in j["users"]], [1, 2, 3])
+        self.assertEqual([u["id"] for u in j["users"]], [1, 2, 3, 4])
+        self.assertEqual([u["id"] for u in j["users"] if u["admin"]], [1, 4])
         sugg = {a["username"]: a["suggested"] for a in j["accounts"]}
         self.assertEqual(sugg, {"alex": None, "sammy": 2}, "sammy = Sam's Plex username")
         code, j = self.call(self.owner, "POST", "/v1/discover/map", {"auto": True})
         self.assertEqual(j["linked"], [{"accountId": self.sam_acc["id"], "seerrUserId": 2}])
+        self.assertEqual(j["skipped"], [])
         self.assertEqual(self.cfg.seerr_user(self.sam_acc["id"]), 2)
         self.assertTrue(self.call(self.sam, "GET", "/v1/discover/status")[1]["linked"])
         self.call(self.owner, "POST", "/v1/discover/map", {"accountId": self.sam_acc["id"], "seerrUserId": None})
         self.assertIsNone(self.cfg.seerr_user(self.sam_acc["id"]))
+
+    def test_only_the_owner_links_an_account_to_a_seerr_admin(self):
+        """L9: a Seerr admin's requests are approved automatically, so only the Orbit owner may map an account to
+        one. Admins can still map accounts to normal Seerr users."""
+        self.configure()
+        bea_acc = self.acc.create_account(self.owner, "bea", "another pass 3", "Bea", "admin")
+        bea = self.acc.gate(self.auth.session(self.acc.login("bea", "another pass 3", "192.0.2.13")))
+        ada_acc = self.acc.create_account(self.owner, "ada", "another pass 4", "Ada")
+        for uid in (4, 1):
+            code, j = self.call(bea, "POST", "/v1/discover/map", {"accountId": self.sam_acc["id"], "seerrUserId": uid})
+            self.assertEqual(code, 403, j)
+            self.assertIn("only the owner", j["error"])
+        self.assertIsNone(self.cfg.seerr_user(self.sam_acc["id"]))
+        self.assertEqual(self.call(bea, "POST", "/v1/discover/map",
+                                   {"accountId": self.sam_acc["id"], "seerrUserId": 3})[0], 200, "a normal user: fine")
+        code, j = self.call(bea, "POST", "/v1/discover/map", {"auto": True})  # "ada" matches the Seerr admin Ada
+        self.assertEqual((code, j["linked"], j["skipped"]), (200, [], [{"accountId": ada_acc["id"], "seerrUserId": 4}]))
+        self.assertIsNone(self.cfg.seerr_user(ada_acc["id"]))
+        self.assertEqual(self.call(self.owner, "POST", "/v1/discover/map",
+                                   {"accountId": bea_acc["id"], "seerrUserId": 4})[0], 200, "the owner may")
+        self.assertEqual(self.cfg.seerr_user(bea_acc["id"]), 4)
+        self.assertEqual(self.call(self.owner, "POST", "/v1/discover/map", {"auto": True})[1]["linked"],
+                         [{"accountId": ada_acc["id"], "seerrUserId": 4}])
 
     # ---- Seerr down ----
     def test_seerr_down_serves_stale_rows_and_refuses_requests(self):

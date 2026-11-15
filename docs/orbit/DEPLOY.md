@@ -99,7 +99,8 @@ server relays everything from the provider: catalogue, guide and **every byte of
   virtual NIC on a busy or 100 Mbit/s host link, or a server on Wi-Fi, is where this shows first.
 - **CPU and memory.** A relay is a copy loop in its own thread, 64 KiB at a time: a few percent of one core per
   stream on a small VM, no transcoding. Catalogue answers are read whole before they are passed on (a large VOD list
-  can be tens of MB in memory for a moment, per TV syncing at that moment).
+  can be tens of MB in memory for a moment). Each TV fetches one catalogue call at a time, at most 2 are fetched at
+  once server-wide (others wait), and a TV's scrubbed answer is reused for 60 s (at most 256 MB cached in all).
 - **Connections.** The provider sees the server's address for every stream, not the TV's. The provider's connection
   limit is unchanged (one connection per stream either way). The server handles up to 256 connections at once.
 - **Names.** TVs use the same address for the facade as for the API, so whatever they link with must be in
@@ -108,10 +109,17 @@ server relays everything from the provider: catalogue, guide and **every byte of
   `ORBIT_HIDE_PROVIDER_LOGIN: "0"` in the compose file (which then overrides the setting; `"1"` pins it on). TVs
   switch at their next playlist sync (within 30 minutes, or when the app starts). Unlinking a TV, signing it out from
   another device or disabling its account ends its facade login at once, including a stream it is playing.
+- **Keys.** The TVs' facade logins and the sealed stream addresses use keys derived from `orbit.key` (outside the
+  data folder), not from `sign.key` in it, so a copy of `/data` alone gives no facade login. The first start of a
+  server with this change writes `keys-derived.json` and, for one hour after that only, still accepts the old
+  logins and sealed addresses, for TVs that have not synced yet; each TV switches at its next playlist sync (when
+  the app starts and every 30 minutes), after which its old login no longer works. A TV that was off for longer
+  than that hour gets the new login as soon as it starts. Rotating `orbit.key` changes the facade logins too: TVs
+  pick up the new ones at their next playlist sync (restart the TV app to make it immediate).
 - **A provider on the LAN** (e.g. a tvheadend box) needs "Playlists and streams on your local network" allowed, as
   for browsers: the relay follows the same address rules (`net.py`).
 - The container's nginx proxies `/xt/` without buffering (`infra/docker/nginx.conf`); a TLS proxy in front needs
-  `proxy_buffering off` and long timeouts too (see above). Logs show facade addresses as `/xt/<id>/<kind>/-/-/…`.
+  `proxy_buffering off` and long timeouts too (see above). Logs show facade addresses as `/xt/<id>/<kind>/-/-/…` and Plex / Jellyfin play addresses as `/v1/media/stream/-/…` (the play-session id is the capability, so it is left out).
 
 ## Rules
 

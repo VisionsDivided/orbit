@@ -18,7 +18,7 @@ import secrets
 import time
 from typing import Callable, Optional
 
-from tvbro_server.auth import (MAX_LEN, Throttle, Wait, check_new_password, hash_password,  # noqa: F401
+from tvbro_server.auth import (MAX_LEN, Throttle, Wait, check_new_password, client_key, hash_password,  # noqa: F401
                                verify_password)
 from tvbro_server.secfile import write_secret
 
@@ -39,9 +39,14 @@ DEVICE_KINDS = ("tv", "desktop")
 
 
 class ApiError(Exception):
-    def __init__(self, code: int, msg: str, retry_after: int = 0):
+    def __init__(self, code: int, msg: str, retry_after: int = 0, extra: Optional[dict] = None):
         super().__init__(msg)
         self.code, self.msg, self.retry_after = code, msg, retry_after
+        self.extra = extra or {}                 # more fields for the error answer (e.g. "pinRequired")
+
+
+NO_PIN_WARNING = ("No parental PIN is set, so anyone can leave a kids profile. Set one under Settings ▸ Parental "
+                  "controls.")
 
 
 def _new_id() -> str:
@@ -81,9 +86,12 @@ class Accounts:
         self.clock = clock
         self.db = Database(os.path.join(data_dir, "orbit.db"))
         self.token_path = os.path.join(data_dir, "orbit-setup-token")
-        self.throttle = Throttle(clock)          # wrong passwords per client address
-        self.user_throttle = Throttle(clock)     # and per username (a success elsewhere never resets it)
+        # Wrong sign-in passwords. No overall bucket: a stranger must not be able to lock every account out.
+        self.throttle = Throttle(clock, global_free=None)       # per client address (IPv6 per /64)
+        self.pair_throttle = Throttle(clock, global_free=None)  # per (client, username)
+        self.user_throttle = Throttle(clock, global_free=None)  # per username: slows wrong guesses only (below)
         self._gate_cache: dict = {}
+        self.parental = None                      # set by the app: tvbro_server.parental.Parental (kids lock PIN)
         # set by the app (orbit/profilestate.py): the owner's first profile at setup, a deleted profile
         self.on_setup: Callable[[str], None] = lambda pid: None
         self.on_profile_deleted: Callable[[str], None] = lambda pid: None
@@ -141,10 +149,10 @@ class Accounts:
     def login(self, username, password, client: str, device: str = "", kind: str = "web") -> str:
         """kind: "desktop" for the Orbit desktop app (watches and syncs like a linked TV), else a browser."""
         key = username.strip().lower() if isinstance(username, str) else ""
-        try:
+        pair = "cu:" + client_key(client) + "|" + key
+        try:                                  # this client's own failures hold up only this client
             self.throttle.check(client)
-            if key:
-                self.user_throttle.check("u:" + key)
+            self.pair_throttle.check(pair)
         except Wait as e:
             raise ApiError(429, "too many wrong passwords", e.retry_after)
         row = self.db.one("SELECT id, username, display_name, role, pw_hash, disabled, created FROM accounts "
@@ -153,11 +161,18 @@ class Accounts:
         ok = verify_password(pw, row[4] if row else self._dummy) and row is not None and not row[5]
         if not ok:
             LOG.warning("wrong Orbit sign-in from %s", client)
+            # the per-username block is applied only now, after the password was checked: guessing one username
+            # from many addresses is slowed down (429), but the right password from a clean client still works
+            wait = self.user_throttle.blocked("u:" + key) if key else 0
             self.throttle.fail(client)
+            self.pair_throttle.fail(pair)
             if key:
                 self.user_throttle.fail("u:" + key)
+            if wait:
+                raise ApiError(429, "too many wrong passwords", max(1, int(wait + 0.999)))
             raise ApiError(403, "wrong username or password")
         self.throttle.ok(client)
+        self.pair_throttle.ok(pair)
         self.user_throttle.ok("u:" + key)
         self._prune()
         return self._issue(self._account(row), device, kind="desktop" if kind == "desktop" else "web")
@@ -278,12 +293,43 @@ class Accounts:
                                                    (pid, account_id)) is None:
             raise ApiError(404, "no such profile")
 
-    def select_profile(self, sess: dict, pid) -> dict:
+    def _kids(self, pid) -> bool:
+        if not isinstance(pid, str):
+            return False
+        r = self.db.one("SELECT kids FROM profiles WHERE id=?", (pid,))
+        return bool(r and r[0])
+
+    def select_profile(self, sess: dict, pid, pin=None) -> dict:
+        """Switch this session to profile ``pid``. Kids lock: leaving a kids profile for a non-kids one needs the
+        household's parental PIN (throttled by parental.py), except on an owner's or admin's browser sign-in. With no
+        PIN set it is allowed, and the answer says so (``warning``)."""
         self._own_profile(sess["account_id"], pid)
+        warning = None
+        leaving_kids = self._kids(sess.get("profile_id")) and not self._kids(pid)
+        manager_browser = sess.get("session_kind") == "web" and sess.get("account_role") in ("owner", "admin")
+        if leaving_kids and not manager_browser:
+            pa = self.parental
+            if pa is None or not pa.has_pin():
+                warning = NO_PIN_WARNING
+            else:
+                if not isinstance(pin, str) or not pin.strip():
+                    raise ApiError(403, "the parental PIN is needed to leave a kids profile", extra={"pinRequired": True})
+                try:
+                    ok = pa.check(pin.strip())
+                except Exception as e:           # parental.Locked: too many wrong PINs
+                    if hasattr(e, "retry_after"):
+                        raise ApiError(429, "too many wrong PINs", int(e.retry_after))
+                    raise
+                if not ok:
+                    LOG.warning("wrong parental PIN leaving a kids profile")
+                    raise ApiError(403, "wrong PIN", extra={"pinRequired": True})
         self.db.run("UPDATE account_sessions SET profile_id=? WHERE sess_hash=? AND account_id=?",
                     (pid, sess["h"], sess["account_id"]))
         self._gate_cache.clear()
-        return {**sess, "profile_id": pid}
+        out = {**sess, "profile_id": pid}
+        if warning:
+            out["warning"] = warning
+        return out
 
     def delete_profile(self, account_id: str, pid):
         with self.db.lock:
@@ -315,12 +361,13 @@ class Accounts:
         return {"ok": True, "name": n}
 
     _DEV_COLS = ("SELECT s.id, s.name, s.device, s.created, s.last_seen, s.sess_hash, s.account_id, a.display_name, "
-                 "a.role, p.name FROM account_sessions s JOIN accounts a ON a.id = s.account_id "
+                 "a.role, p.name, s.kind FROM account_sessions s JOIN accounts a ON a.id = s.account_id "
                  "LEFT JOIN profiles p ON p.id = s.profile_id ")
+    _DEV_KINDS = "s.kind IN ('tv', 'desktop')"     # linked TVs and desktop-app sign-ins (watch and sync devices)
 
     def _device(self, r, sess: dict) -> dict:
-        return {"id": r[0], "name": r[1], "device": r[2], "created": r[3], "lastSeen": r[4], "current": r[5] == sess["h"],
-                "account": {"id": r[6], "displayName": r[7]}, "profile": r[9] or "",
+        return {"id": r[0], "name": r[1], "device": r[2], "kind": r[10], "created": r[3], "lastSeen": r[4],
+                "current": r[5] == sess["h"], "account": {"id": r[6], "displayName": r[7]}, "profile": r[9] or "",
                 "canUnlink": self._may_unlink(sess, r[6], r[8])}
 
     @staticmethod
@@ -330,29 +377,29 @@ class Accounts:
         return account_id == sess["account_id"] or me == "owner" or (me == "admin" and account_role == "member")
 
     def devices(self, sess: dict) -> list[dict]:
-        """Linked TVs: owner / admin see the household's, members their own account's."""
+        """Linked TVs and desktop apps: owner / admin see the household's, members their own account's."""
         if sess.get("account_role") in ("owner", "admin"):
-            rows = self.db.q(self._DEV_COLS + "WHERE s.kind='tv' ORDER BY s.last_seen DESC")
+            rows = self.db.q(self._DEV_COLS + f"WHERE {self._DEV_KINDS} ORDER BY s.last_seen DESC")
         else:
-            rows = self.db.q(self._DEV_COLS + "WHERE s.kind='tv' AND s.account_id=? ORDER BY s.last_seen DESC",
+            rows = self.db.q(self._DEV_COLS + f"WHERE {self._DEV_KINDS} AND s.account_id=? ORDER BY s.last_seen DESC",
                              (sess["account_id"],))
         return [self._device(r, sess) for r in rows]
 
     def _device_row(self, sess: dict, dev_id):
-        r = self.db.one(self._DEV_COLS + "WHERE s.id=? AND s.kind='tv'", (dev_id if isinstance(dev_id, str) else "",))
+        r = self.db.one(self._DEV_COLS + f"WHERE s.id=? AND {self._DEV_KINDS}", (dev_id if isinstance(dev_id, str) else "",))
         if r is None or (r[6] != sess["account_id"] and sess.get("account_role") not in ("owner", "admin")):
             raise ApiError(404, "no such device")         # another account's ids look like nothing
         return r
 
     def rename_device(self, sess: dict, dev_id, name) -> dict:
-        """Owner / admin: any linked TV; members: their own account's."""
+        """Owner / admin: any linked TV or desktop app; members: their own account's."""
         n = device_name(name)
         r = self._device_row(sess, dev_id)
         self.db.run("UPDATE account_sessions SET name=? WHERE id=?", (n, r[0]))
         return self._device(self._device_row(sess, r[0]), sess)
 
     def unlink_device(self, sess: dict, dev_id) -> None:
-        """Sign a linked TV out (it wipes the account's data on its next request)."""
+        """Sign a linked TV or desktop app out (it wipes the account's data on its next request)."""
         r = self._device_row(sess, dev_id)
         if not self._may_unlink(sess, r[6], r[8]):
             raise ApiError(403, "only the owner can unlink the owner's or an admin's TVs")

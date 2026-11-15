@@ -86,6 +86,8 @@ GUIDE_BACK = 7 * 86400       # and back far enough for catch-up
 UA = NET.UA
 MAX_PLAYLIST_BYTES = 200 * 1024 * 1024     # an M3U playlist
 MAX_API_BYTES = 300 * 1024 * 1024          # one Xtream API answer (VOD lists)
+LEGACY_KEY_GRACE = 3600                   # L2: after an upgrade, the old data-folder keys still open facade logins and
+                                         # sealed addresses this long (linked TVs fetch new ones within 30 minutes)
 MAX_BODY = 1024 * 1024                     # a JSON request body (restore has its own cap)
 LIVE_TTL = 6 * 3600                        # signed live / catch-up URLs (films: 24 h)
 RETRY_BACKOFF = (60, 300, 900)   # a failed sync is retried after 1, 5, then every 15 min
@@ -1013,6 +1015,12 @@ class App:
         self.layout = Layout(os.path.join(DATA_DIR, "layout.json"))
         self.images = ImageCache(os.path.join(DATA_DIR, "imgcache"))
         self.sign_key = self._load_sign_key()
+        # L2: keys that must not come from the data folder alone (facade logins, sealed addresses) are derived from
+        # the encryption key, which lives outside it (credential / TVBRO_KEY_FILE: orbit.key in Docker)
+        master = SecretStore(DATA_DIR)
+        self.facade_key = master.derive(b"orbit/facade-device-secret/v1")
+        self.seal_key = master.derive(b"orbit/seal/v1", 64)
+        self.legacy_until = self._legacy_until()
         self.auth = AUTH.Auth(DATA_DIR, self.sign_key)
         self.orbit = OrbitAccounts(DATA_DIR, self.auth)        # Orbit: accounts gate every session
         # Orbit: My list, favourites, resume, show progress per profile (household state.db in tvBro mode)
@@ -1024,7 +1032,8 @@ class App:
         msec = SecretStore(DATA_DIR, "media.enc")
         self.media = MediaServers(self.orbit.db, TokenVault(msec.enc_path, msec.seal_bytes, msec.open_bytes))
         # Orbit: linked TVs reach the provider through /xt/ with logins of their own (orbit/facade.py)
-        self.facade = OFACADE.Facade(OFACADE.DeviceKeys(self.orbit, self.sign_key), self._facade_provider,
+        self.facade = OFACADE.Facade(OFACADE.DeviceKeys(self.orbit, self.facade_key, legacy_key=self.sign_key,
+                                                        legacy_until=self.legacy_until), self._facade_provider,
                                      self.seal, self.unseal, NET.open_url, NET.is_blocked)
         self.v1 = V1.Api(self.orbit, playlists=self._device_playlists, stores=self.profiles.for_session,
                          streams=self._streams_status, media=self.media, device_view=self._device_view)
@@ -1052,7 +1061,8 @@ class App:
         # Orbit: the LAN servers the household configured (Plex / Jellyfin links, Seerr), exact host and port only
         NET.set_private_hosts(lambda: self.media.private_hosts() | self.discover.private_hosts())
         self.parental = Parental(os.path.join(DATA_DIR, "parental.json"), self.sign_key)
-        self._siv = None
+        self.orbit.parental = self.parental          # Orbit kids lock: leaving a kids profile needs this PIN
+        self._siv = self._siv_legacy = None
         self.no_timeshift_hls: dict[str, float] = {}     # provider host -> when its timeshift .m3u8 failed
         self._segmap: dict[str, str] = {}
         self._seg_lock = threading.Lock()
@@ -1130,6 +1140,22 @@ class App:
             return None
         return {"name": ch.name, "logo": ch.logo, "url": P.choose_format(ch.url, "ts")[0]}
 
+    @staticmethod
+    def _legacy_until() -> float:
+        """Until when the old data-folder keys are still accepted: LEGACY_KEY_GRACE after the first start with
+        derived keys (remembered in keys-derived.json), never again after that."""
+        path = os.path.join(DATA_DIR, "keys-derived.json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                since = float(json.load(f)["since"])
+        except (OSError, ValueError, KeyError, TypeError):
+            since = time.time()
+            try:
+                write_secret(path, json.dumps({"since": int(since)}).encode())
+            except OSError:
+                pass
+        return since + LEGACY_KEY_GRACE
+
     def _load_sign_key(self) -> bytes:
         path = os.path.join(DATA_DIR, "sign.key")
         if os.path.exists(path):
@@ -1146,13 +1172,17 @@ class App:
     # Upstream segment URLs can carry the provider login (/live/<user>/<pass>/..), so the
     # browser only ever gets them sealed: encrypted + authenticated, and deterministic so a
     # reloaded playlist names the same segment the same way.
+    def _sivs(self):
+        if self._siv is None:
+            self._siv = AESSIV(self.seal_key)
+            self._siv_legacy = AESSIV(sha512(b"tvbro-seg" + self.sign_key).digest())
+        return self._siv, self._siv_legacy
+
     def seal(self, url: str) -> str:
         if AESSIV is not None:
-            if self._siv is None:
-                self._siv = AESSIV(sha512(b"tvbro-seg" + self.sign_key).digest())
-            raw = self._siv.encrypt(url.encode(), None)
+            raw = self._sivs()[0].encrypt(url.encode(), None)
             return base64.urlsafe_b64encode(raw).decode().rstrip("=")
-        tok = hmac.new(self.sign_key, url.encode(), sha256).hexdigest()[:40]
+        tok = hmac.new(self.seal_key, url.encode(), sha256).hexdigest()[:40]
         with self._seg_lock:
             self._segmap[tok] = url
             while len(self._segmap) > 50000:
@@ -1162,17 +1192,38 @@ class App:
     def unseal(self, tok: str) -> str | None:
         if AESSIV is not None:
             try:
-                if self._siv is None:
-                    self._siv = AESSIV(sha512(b"tvbro-seg" + self.sign_key).digest())
                 raw = base64.urlsafe_b64decode(tok + "=" * (-len(tok) % 4))
-                return self._siv.decrypt(raw, None).decode()
             except Exception:                       # noqa: BLE001
                 return None
+            new, old = self._sivs()
+            for siv in (new, old) if time.time() < self.legacy_until else (new,):
+                try:                                # the old (data-folder) key: only for a while after an upgrade
+                    return siv.decrypt(raw, None).decode()
+                except Exception:                   # noqa: BLE001
+                    continue
+            return None
         with self._seg_lock:
             return self._segmap.get(tok)
 
 
 APP: App | None = None
+
+
+def static_path(root: str, path: str) -> str | None:
+    """The file under ``root`` that a request path names, or None when it would leave ``root`` (``..``, an absolute
+    path, a symbolic link out of it, or a sibling folder whose name merely starts with root's, like
+    ``frontend-old``): both sides are resolved with realpath and compared with os.path.commonpath."""
+    base = os.path.realpath(root)
+    rel = (path or "").lstrip("/\\") or "index.html"
+    if "\x00" in rel:
+        return None
+    full = os.path.realpath(os.path.join(base, rel))
+    try:
+        if os.path.commonpath([base, full]) != base:
+            return None
+    except ValueError:                        # another drive (Windows)
+        return None
+    return full
 _INFO_CACHE: dict[str, tuple[float, dict]] = {}
 
 
@@ -1977,9 +2028,8 @@ class Handler(BaseHTTPRequestHandler):
         self._err(404, "not found")
 
     def _serve_static(self, root, path):
-        rel = path.lstrip("/") or "index.html"
-        full = os.path.normpath(os.path.join(root, rel))
-        if not full.startswith(os.path.abspath(root)):
+        full = static_path(root, path)
+        if full is None:
             return self._err(403, "path")
         if os.path.isdir(full):
             full = os.path.join(full, "index.html")

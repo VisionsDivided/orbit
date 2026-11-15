@@ -894,6 +894,8 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
             }
         }
     }
+    // Orbit kids lock: the server allowed leaving a kids profile without a parental PIN (none is set) and says so
+    init { viewModelScope.launch { androidx.compose.runtime.snapshotFlow { profiles.lastWarning }.collect { w -> if (w != null) { toast(w); profiles.lastWarning = null } } } }
     init { viewModelScope.launch { while (true) { kotlinx.coroutines.delay(30 * 60_000L); scheduleSeries() } } }
 
     fun recordMenu(c: Channel) {

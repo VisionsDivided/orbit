@@ -64,7 +64,7 @@ class Api:
             ("GET", "/v1/profiles"): lambda c: Reply({"profiles": A.profiles(c.sess["account_id"])}),
             ("POST", "/v1/profiles"): lambda c: Reply(A.add_profile(c.sess["account_id"], c.body.get("name"),
                                                                    c.body.get("kids"))),
-            ("POST", "/v1/profiles/select"): lambda c: Reply(A.me(A.select_profile(c.sess, c.body.get("id")))),
+            ("POST", "/v1/profiles/select"): self._select_profile,
             ("POST", "/v1/profiles/delete"): self._delete_profile,
             ("GET", "/v1/sessions"): lambda c: Reply({"sessions": A.sessions(c.sess)}),
             ("POST", "/v1/sessions/revoke"): self._revoke,
@@ -113,7 +113,14 @@ class Api:
             return fn(call)
         except ApiError as e:
             hdr = {"Retry-After": str(e.retry_after)} if e.retry_after else {}
-            return Reply({"error": e.msg}, e.code, headers=hdr)
+            return Reply({**e.extra, "error": e.msg}, e.code, headers=hdr)
+
+    def _select_profile(self, c: Call) -> Reply:
+        sess = self.acc.select_profile(c.sess, c.body.get("id"), c.body.get("pin"))
+        out = self.acc.me(sess)
+        if sess.get("warning"):
+            out["warning"] = sess["warning"]
+        return Reply(out)
 
     # ---- handlers with more than one step ----
     def _signed_in(self, sid: str) -> Reply:
