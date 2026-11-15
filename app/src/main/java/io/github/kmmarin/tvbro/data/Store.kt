@@ -213,6 +213,10 @@ class Store(private val ctx: Context) {
     var captionBg: Int
         get() = sp.getInt("captionBg", 1)
         set(v) = sp.edit { putInt("captionBg", v) }
+    /** The player's aspect is "Fit, crop black bars" (the other aspect choices last until the app closes). */
+    var cropBars: Boolean
+        get() = sp.getBoolean("cropBars", false)
+        set(v) = sp.edit { putBoolean("cropBars", v) }
 
     fun audioDelay(key: String): Int? = if (sp.contains("ad_$key")) sp.getInt("ad_$key", 0) else null
     fun setAudioDelay(key: String, ms: Int) = sp.edit { putInt("ad_$key", ms) }

@@ -179,7 +179,9 @@ class AppModel(private val app: Application) : AndroidViewModel(app) {
     private var groupInit = false
     var numberMode by mutableIntStateOf(store.numberMode); private set
     fun changeNumberMode(v: Int) { numberMode = v; store.numberMode = v }
-    var aspectMode by mutableIntStateOf(0)
+    /** The player's aspect choice (PlayerBar's ASPECTS); only "Fit, crop black bars" is remembered across runs. */
+    var aspectMode by mutableIntStateOf(if (store.cropBars) io.github.kmmarin.tvbro.ui.ASPECT_CROP else 0); private set
+    fun changeAspect(v: Int) { aspectMode = v; store.cropBars = v == io.github.kmmarin.tvbro.ui.ASPECT_CROP }
     val delayProc = io.github.kmmarin.tvbro.ui.AudioDelayProcessor()
     var audioDelayMs by mutableIntStateOf(0)
 

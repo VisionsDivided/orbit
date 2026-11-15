@@ -45,7 +45,20 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val ASPECTS = listOf("Normal" to AspectRatioFrameLayout.RESIZE_MODE_FIT, "Fill" to AspectRatioFrameLayout.RESIZE_MODE_FILL, "Zoom" to AspectRatioFrameLayout.RESIZE_MODE_ZOOM, "16:9" to AspectRatioFrameLayout.RESIZE_MODE_FILL, "4:3" to AspectRatioFrameLayout.RESIZE_MODE_FILL)
+/** Aspect choices in menu order: [AppModel.aspectMode] id, label, resize mode ("Fit, crop black bars" = [ASPECT_CROP], CropBarsView). */
+private data class Aspect(val id: Int, val label: String, val resize: Int)
+private val ASPECTS = listOf(
+    Aspect(0, "Normal", AspectRatioFrameLayout.RESIZE_MODE_FIT), Aspect(ASPECT_CROP, "Fit, crop black bars", AspectRatioFrameLayout.RESIZE_MODE_FIT),
+    Aspect(1, "Fill", AspectRatioFrameLayout.RESIZE_MODE_FILL), Aspect(2, "Zoom", AspectRatioFrameLayout.RESIZE_MODE_ZOOM),
+    Aspect(3, "16:9", AspectRatioFrameLayout.RESIZE_MODE_FILL), Aspect(4, "4:3", AspectRatioFrameLayout.RESIZE_MODE_FILL),
+)
+private fun aspectOf(id: Int) = ASPECTS.firstOrNull { it.id == id } ?: ASPECTS[0]
+
+/** The aspect choice "Fit, crop black bars" ([AppModel.aspectMode]; ids 0-4 are the older choices, 3 and 4 fixed ratios). */
+const val ASPECT_CROP = 5
+
+/** A fixed picture ratio for [aspectMode] (16:9, 4:3), or null. */
+fun aspectRatioOf(aspectMode: Int): Float? = when (aspectMode) { 3 -> 16f / 9f; 4 -> 4f / 3f; else -> null }
 
 /** Applies the saved caption size and background to a player view. */
 fun applyCaptions(pv: PlayerView, m: AppModel) {
@@ -54,7 +67,7 @@ fun applyCaptions(pv: PlayerView, m: AppModel) {
     pv.subtitleView?.setFractionalTextSize(size)
     pv.subtitleView?.setStyle(CaptionStyleCompat(android.graphics.Color.WHITE, bg, android.graphics.Color.TRANSPARENT,
         if (m.store.captionBg == 0) CaptionStyleCompat.EDGE_TYPE_OUTLINE else CaptionStyleCompat.EDGE_TYPE_NONE, android.graphics.Color.BLACK, null))
-    pv.resizeMode = ASPECTS[m.aspectMode.coerceIn(0, ASPECTS.size - 1)].second
+    pv.resizeMode = aspectOf(m.aspectMode).resize
 }
 
 private fun lang(code: String?): String? = code?.takeIf { it.isNotBlank() && it != "und" }?.let { Locale(it).displayLanguage.ifBlank { it } }
@@ -169,8 +182,8 @@ fun QuickBar(m: AppModel, exo: ExoPlayer, pv: PlayerView?, live: Boolean, extra:
             pick("Video quality", trackRows(exo, C.TRACK_TYPE_VIDEO, null) { m.menu = null })
         },
         "delay" to QuickAction("Audio delay", glyph = "±", value = "%+d ms".format(m.audioDelayMs)) { delayMenu() },
-        "aspect" to QuickAction("Aspect", glyph = "▭", value = ASPECTS[m.aspectMode.coerceIn(0, ASPECTS.size - 1)].first) {
-            pick("Aspect / zoom", ASPECTS.mapIndexed { i, p -> ((if (i == m.aspectMode) "* " else "  ") + p.first) to { m.aspectMode = i; pv?.resizeMode = p.second } })
+        "aspect" to QuickAction("Aspect", glyph = "▭", value = aspectOf(m.aspectMode).label) {
+            pick("Aspect / zoom", ASPECTS.map { a -> ((if (a.id == m.aspectMode) "* " else "  ") + a.label) to { m.changeAspect(a.id); pv?.resizeMode = a.resize } })
         },
         "settings" to QuickAction("Settings", icon = Icons.Filled.Settings) { onClose(); if (live) m.settingsBack = Screen.PLAYER; m.screen = Screen.SETTINGS },
     )
