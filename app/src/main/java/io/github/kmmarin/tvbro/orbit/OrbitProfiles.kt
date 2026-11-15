@@ -22,6 +22,28 @@ import kotlinx.serialization.json.contentOrNull
 
 // OrbitProfile (a profile of the linked account) is in shared/: orbit/OrbitApi.kt
 
+/**
+ * How switching profile ended ([OrbitModel.switchProfile]). Kids lock: leaving a kids profile for another one needs
+ * the household's parental PIN, checked by the server ([NeedPin]; [NeedPin.wrong] after a wrong one). [Done.warning]:
+ * the server allowed it but says why it should not have (no parental PIN set).
+ */
+sealed class ProfileSwitch {
+    data class Done(val warning: String? = null) : ProfileSwitch()
+    data class NeedPin(val wrong: Boolean) : ProfileSwitch()
+    data class Failed(val message: String) : ProfileSwitch()
+
+    companion object {
+        fun of(e: Exception, described: String): ProfileSwitch = when {
+            e is OrbitError && e.code == 403 && e.pinRequired -> NeedPin(wrong = e.message?.contains("wrong", ignoreCase = true) == true)
+            e is OrbitError && e.code == 429 -> Failed("Too many wrong PINs. Try again in a minute.")
+            else -> Failed(described)
+        }
+
+        /** The title of the PIN prompt. */
+        fun pinTitle(wrong: Boolean) = if (wrong) "Wrong PIN. Parental PIN to leave the kids profile" else "Parental PIN to leave the kids profile"
+    }
+}
+
 /** "Who's watching?" look: the orbit ring or one classic row (Settings ▸ Home server). */
 enum class PickerStyle(val label: String) { ORBIT("Orbit"), CLASSIC("Classic") }
 
@@ -87,18 +109,34 @@ class OrbitProfiles(app: Application, private val scope: CoroutineScope, private
 
     fun close() { showing = false; atStart = false }
 
-    /** Continue as [p]: switches the TV to it when it is another profile, then closes the picker. */
-    fun choose(p: OrbitProfile) {
+    /**
+     * Continue as [p]: switches the TV to it when it is another profile, then closes the picker. Leaving a kids
+     * profile may need the parental PIN: [askPin] (title, then) asks for it and this tries again with it.
+     */
+    fun choose(p: OrbitProfile, askPin: ((String, (String) -> Unit) -> Unit)? = null, pin: String? = null) {
         if (busy) return
         if (p.id == currentId) { close(); return }
         busy = true; message = "Switching to ${p.name}…"
         scope.launch {
-            val err = try { orbit.switchProfile(p.id) } finally { busy = false }
-            if (err != null) { message = err; return@launch }
-            currentId = p.id; message = ""
-            close()
+            val r = try { orbit.switchProfile(p.id, pin) } finally { busy = false }
+            when (r) {
+                is ProfileSwitch.Failed -> message = r.message
+                is ProfileSwitch.NeedPin -> {
+                    message = if (r.wrong) "Wrong PIN" else "Leaving a kids profile needs the parental PIN"
+                    askPin?.invoke(ProfileSwitch.pinTitle(r.wrong)) { v -> choose(p, askPin, v.trim()) }
+                }
+                is ProfileSwitch.Done -> {
+                    currentId = p.id
+                    message = ""
+                    lastWarning = r.warning
+                    close()
+                }
+            }
         }
     }
+
+    /** The server's note after the last switch (no parental PIN set), for a toast; null when none. */
+    var lastWarning by mutableStateOf<String?>(null)
 
     /** New profile (at most 8 per account, the server checks). */
     fun add(name: String, kids: Boolean = false) {

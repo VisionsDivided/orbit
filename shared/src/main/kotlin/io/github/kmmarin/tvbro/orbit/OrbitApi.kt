@@ -34,8 +34,11 @@ sealed class PairPoll {
     data class Gone(val message: String) : PairPoll()
 }
 
-/** An answer the server gave on purpose (its "error" text is safe to show). */
-class OrbitError(val code: Int, message: String) : IOException(message)
+/** An answer the server gave on purpose (its "error" text is safe to show); [body]: the whole error answer. */
+class OrbitError(val code: Int, message: String, val body: JsonObject = JsonObject(emptyMap())) : IOException(message) {
+    /** Kids lock: leaving a kids profile needs the household's parental PIN (POST /v1/profiles/select with "pin"). */
+    val pinRequired: Boolean get() = (body["pinRequired"] as? JsonPrimitive)?.booleanOrNull == true
+}
 
 /** One of the account's profiles ("Who's watching?"). */
 data class OrbitProfile(val id: String, val name: String, val kids: Boolean)
@@ -132,7 +135,7 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT, private val userAgent
             val obj = runCatching { Json.parseToJsonElement(text).jsonObject }.getOrNull() ?: JsonObject(emptyMap())
             if (!r.isSuccessful) {
                 val msg = (obj["error"] as? JsonPrimitive)?.contentOrNull ?: "HTTP ${r.code}"
-                throw OrbitError(r.code, msg)
+                throw OrbitError(r.code, msg, obj)
             }
             return obj to r.headers("Set-Cookie")
         }

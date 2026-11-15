@@ -49,7 +49,7 @@ It is written so another implementation (for example Rust) could replace the ser
 | GET | `/v1/me` | signed in | → `Me` |
 | GET | `/v1/profiles` | signed in | → `{"profiles": [Profile]}` (own account only) |
 | POST | `/v1/profiles` | signed in | `{"name", "kids"?}` → `Profile` (at most 8 per account) |
-| POST | `/v1/profiles/select` | signed in | `{"id"}` → `Me` (the profile must be your own) |
+| POST | `/v1/profiles/select` | signed in | `{"id", "pin"?}` → `Me` (the profile must be your own). **Kids lock:** when the session is on a kids profile and the target is not, the household's parental PIN is needed in `pin` (403 `{"error", "pinRequired": true}` without it or when wrong; wrong PINs share the parental PIN's throttle: 429). An owner's or admin's browser sign-in can always pick; TVs, desktop apps and members' browsers cannot. With no parental PIN set the switch is allowed and `Me` carries `"warning"` saying so. |
 | POST | `/v1/profiles/delete` | signed in | `{"id"}` → `{"ok": true}` (not your last profile) |
 | GET | `/v1/sessions` | signed in | → `{"sessions": [Session]}` (own account only) |
 | POST | `/v1/sessions/revoke` | signed in | `{"id"}` → `{"ok": true}` (own sessions only) |

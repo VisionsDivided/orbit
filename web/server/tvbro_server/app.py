@@ -1061,6 +1061,7 @@ class App:
         # Orbit: the LAN servers the household configured (Plex / Jellyfin links, Seerr), exact host and port only
         NET.set_private_hosts(lambda: self.media.private_hosts() | self.discover.private_hosts())
         self.parental = Parental(os.path.join(DATA_DIR, "parental.json"), self.sign_key)
+        self.orbit.parental = self.parental          # Orbit kids lock: leaving a kids profile needs this PIN
         self._siv = self._siv_legacy = None
         self.no_timeshift_hls: dict[str, float] = {}     # provider host -> when its timeshift .m3u8 failed
         self._segmap: dict[str, str] = {}

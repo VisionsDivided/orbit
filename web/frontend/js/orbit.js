@@ -149,6 +149,11 @@ const GRADS = [['#ff9a76', '#c8507f'], ['#8de0b0', '#2a8f84'], ['#8892b0', '#394
 const gradOf = (p, cur) => { if (cur) return 'linear-gradient(135deg,#2fd3ff,#8a5cff)'; let n = 0; for (const ch of String(p.id || p.name)) n = (n * 31 + ch.charCodeAt(0)) >>> 0; const g = GRADS[n % GRADS.length]; return `linear-gradient(135deg,${g[0]},${g[1]})`; };
 const reducedMotion = () => { try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; } };
 
+/** The hint of the PIN dialog that leaving a kids profile opens (the server's 403 message says why). */
+export function kidsPinHint(msg) {
+  return /wrong/i.test(msg || '') ? 'Wrong PIN. Try again.' : 'Leaving a kids profile needs the parental PIN.';
+}
+
 /** Profile picker; OK picks one (the page reloads with that profile's lists). force: no Back. */
 export function showProfilePicker(m, opts = {}) {
   const info = m || me;
@@ -156,9 +161,22 @@ export function showProfilePicker(m, opts = {}) {
   document.querySelectorAll('.op-back').forEach((x) => x.remove());
   const style = opts.style || (prefs().pickerStyle === 'classic' ? 'classic' : 'orbit');
   const cur = info.profile ? info.profile.id : null;
-  const pick = async (p) => {
-    try { await apiReq('/v1/profiles/select', { method: 'POST', body: JSON.stringify({ id: p.id }) }); location.reload(); }
-    catch (e) { toast(e.message); }
+  // Kids lock: leaving a kids profile for another one asks for the parental PIN when the server says so
+  // (TVs, desktop apps and members' browsers; an owner's or admin's browser can always pick)
+  const pick = async (p, pin) => {
+    try {
+      const j = await apiReq('/v1/profiles/select', { method: 'POST', body: JSON.stringify(pin ? { id: p.id, pin } : { id: p.id }) });
+      if (j.warning) { toast(j.warning); setTimeout(() => location.reload(), 2500); return; }
+      location.reload();
+    } catch (e) {
+      if (e.pinRequired) {
+        const v = await formDialog('Parental PIN', [{ name: 'pin', label: 'PIN (4 to 8 digits)', type: 'password', max: '8', autocomplete: 'off' }],
+          kidsPinHint(e.message), 'OK', (x) => (/^\d{4,8}$/.test(x.pin.trim()) ? null : 'The PIN is 4 to 8 digits'));
+        if (v) return pick(p, v.pin.trim());
+        return;
+      }
+      toast(e.status === 429 ? 'Too many wrong PINs. Try again later.' : e.message);
+    }
   };
   const entries = info.profiles.map((p) => ({ p }));
   if (info.profiles.length < 8) entries.push({ add: true });

@@ -39,9 +39,14 @@ DEVICE_KINDS = ("tv", "desktop")
 
 
 class ApiError(Exception):
-    def __init__(self, code: int, msg: str, retry_after: int = 0):
+    def __init__(self, code: int, msg: str, retry_after: int = 0, extra: Optional[dict] = None):
         super().__init__(msg)
         self.code, self.msg, self.retry_after = code, msg, retry_after
+        self.extra = extra or {}                 # more fields for the error answer (e.g. "pinRequired")
+
+
+NO_PIN_WARNING = ("No parental PIN is set, so anyone can leave a kids profile. Set one under Settings ▸ Parental "
+                  "controls.")
 
 
 def _new_id() -> str:
@@ -86,6 +91,7 @@ class Accounts:
         self.pair_throttle = Throttle(clock, global_free=None)  # per (client, username)
         self.user_throttle = Throttle(clock, global_free=None)  # per username: slows wrong guesses only (below)
         self._gate_cache: dict = {}
+        self.parental = None                      # set by the app: tvbro_server.parental.Parental (kids lock PIN)
         # set by the app (orbit/profilestate.py): the owner's first profile at setup, a deleted profile
         self.on_setup: Callable[[str], None] = lambda pid: None
         self.on_profile_deleted: Callable[[str], None] = lambda pid: None
@@ -287,12 +293,43 @@ class Accounts:
                                                    (pid, account_id)) is None:
             raise ApiError(404, "no such profile")
 
-    def select_profile(self, sess: dict, pid) -> dict:
+    def _kids(self, pid) -> bool:
+        if not isinstance(pid, str):
+            return False
+        r = self.db.one("SELECT kids FROM profiles WHERE id=?", (pid,))
+        return bool(r and r[0])
+
+    def select_profile(self, sess: dict, pid, pin=None) -> dict:
+        """Switch this session to profile ``pid``. Kids lock: leaving a kids profile for a non-kids one needs the
+        household's parental PIN (throttled by parental.py), except on an owner's or admin's browser sign-in. With no
+        PIN set it is allowed, and the answer says so (``warning``)."""
         self._own_profile(sess["account_id"], pid)
+        warning = None
+        leaving_kids = self._kids(sess.get("profile_id")) and not self._kids(pid)
+        manager_browser = sess.get("session_kind") == "web" and sess.get("account_role") in ("owner", "admin")
+        if leaving_kids and not manager_browser:
+            pa = self.parental
+            if pa is None or not pa.has_pin():
+                warning = NO_PIN_WARNING
+            else:
+                if not isinstance(pin, str) or not pin.strip():
+                    raise ApiError(403, "the parental PIN is needed to leave a kids profile", extra={"pinRequired": True})
+                try:
+                    ok = pa.check(pin.strip())
+                except Exception as e:           # parental.Locked: too many wrong PINs
+                    if hasattr(e, "retry_after"):
+                        raise ApiError(429, "too many wrong PINs", int(e.retry_after))
+                    raise
+                if not ok:
+                    LOG.warning("wrong parental PIN leaving a kids profile")
+                    raise ApiError(403, "wrong PIN", extra={"pinRequired": True})
         self.db.run("UPDATE account_sessions SET profile_id=? WHERE sess_hash=? AND account_id=?",
                     (pid, sess["h"], sess["account_id"]))
         self._gate_cache.clear()
-        return {**sess, "profile_id": pid}
+        out = {**sess, "profile_id": pid}
+        if warning:
+            out["warning"] = warning
+        return out
 
     def delete_profile(self, account_id: str, pid):
         with self.db.lock:
