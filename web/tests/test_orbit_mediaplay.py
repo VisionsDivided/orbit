@@ -23,6 +23,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "server"))
 import test_orbit_media as TM  # noqa: E402
 from orbit import mediaplay as MP  # noqa: E402
+from orbit.connectors import plex as PX  # noqa: E402
 from orbit.connectors.base import direct_ok  # noqa: E402
 
 FILE = bytes(range(256)) * 400                       # stands in for a film
@@ -61,8 +62,13 @@ PX_EP = TM.px_meta("22", "episode", "Pilot", grandparentRatingKey="20", grandpar
                        {"id": 502, "key": "/library/parts/502/1/file.mkv", "container": "mkv", "Stream": []}]}])
 
 
-def plex_play_routes(base):
+def plex_play_routes(base, tx=None):
+    """``tx``: the fake Plex's transcoder, like a server that runs one transcode at a time: start.m3u8 for another
+    session while one runs answers 400 until that one is stopped (``tx["active"]``: session -> client identifier;
+    ``tx["decision"]``: the decision answer to give)."""
     S = TM.PLEX_SERVER_TOKEN
+    tx = {} if tx is None else tx
+    tx.setdefault("active", {})
 
     def server(fn):
         def w(req):
@@ -75,16 +81,41 @@ def plex_play_routes(base):
              f"{base}/video/:/transcode/universal/session/fake/base/00001.ts?X-Plex-Token=leaked\n"
              "#EXTINF:4,\nhttp://elsewhere.example.com/x.ts\n#EXT-X-ENDLIST\n")
     T = "/video/:/transcode/universal"
+
+    def decision(q):
+        tx.setdefault("decisions", []).append(q["query"].get("session"))
+        return TM.ok(tx.get("decision") or {"MediaContainer": {"generalDecisionCode": 1001,
+                                                                "generalDecisionText": "Direct play not available; Conversion OK."}})
+
+    def start(q):
+        sid = q["query"].get("session")
+        busy = [s for s in tx["active"] if s != sid]
+        if busy:
+            tx.setdefault("refused", []).append(sid)
+            return (400, "text/html", f"<html><body>Bad Request X-Plex-Token={S}</body></html>".encode())
+        tx["active"][sid] = q["headers"].get("x-plex-client-identifier")
+        return TM.ok(master.encode(), "application/vnd.apple.mpegurl")
+
+    def stop(q):
+        tx["active"].pop(q["query"].get("session"), None)
+        return TM.ok(b"", "text/plain")
+
+    def sessions(q):
+        return TM.ok({"MediaContainer": {"size": len(tx["active"]), "Metadata": [
+            {"type": "movie", "ratingKey": "10", "Player": {"machineIdentifier": cid, "product": "Orbit"},
+             "TranscodeSession": {"key": f"/transcode/sessions/{s}"}} for s, cid in tx["active"].items()]}})
     return {
+        ("GET", T + "/decision"): server(decision),
+        ("GET", "/status/sessions"): server(sessions),
         ("GET", "/library/metadata/10"): server(lambda q: TM.ok({"MediaContainer": {"Metadata": [PX_FILM]}})),
         ("GET", "/library/metadata/22"): server(lambda q: TM.ok({"MediaContainer": {"Metadata": [PX_EP]}})),
         ("GET", "/library/parts/501/1/file.mp4"): server(ranged),
         ("GET", "/library/parts/502/1/file.mkv"): server(lambda q: ranged(q, ctype="application/octet-stream")),
-        ("GET", T + "/start.m3u8"): server(lambda q: TM.ok(master.encode(), "application/vnd.apple.mpegurl")),
+        ("GET", T + "/start.m3u8"): server(start),
         ("GET", T + "/session/fake/base/index.m3u8"): server(lambda q: TM.ok(index.encode(), "application/vnd.apple.mpegurl")),
         ("GET", T + "/session/fake/base/00000.ts"): server(lambda q: TM.ok(SEG, "video/mp2t")),
         ("GET", T + "/session/fake/base/00001.ts"): server(lambda q: TM.ok(SEG, "video/mp2t")),
-        ("GET", T + "/stop"): server(lambda q: TM.ok(b"", "text/plain")),
+        ("GET", T + "/stop"): server(stop),
         ("PUT", "/library/parts/501"): server(lambda q: TM.ok(b"", "text/plain")),
         ("GET", "/library/streams/601"): server(lambda q: TM.ok(SRT.encode(), "application/x-subrip")),
         ("GET", "/library/sections/1/all"): server(lambda q: TM.ok({"MediaContainer": {}})),
@@ -155,7 +186,8 @@ class Play(unittest.TestCase):
 
     def setUp(self):
         self.setUp_media()
-        self.px.routes.update(plex_play_routes(self.px.url))
+        self.tx = {}
+        self.px.routes.update(plex_play_routes(self.px.url, self.tx))
         self.jf.routes.update(jf_play_routes(self.jstate))
         self.alive = {"ok": True}
         self.media.plays.alive = lambda h: self.alive["ok"] and bool(h)
@@ -338,12 +370,20 @@ class Play(unittest.TestCase):
         now = [1000.0]
         self.media.plays.clock = lambda: now[0]
         sid = self.play(self.alex, cid, "10", "tv")["session"]
-        now[0] += MP.IDLE + 1
+        now[0] += MP.IDLE_STOP + 1
         self.assertEqual(self.get(f"/v1/media/stream/{sid}/file")[0], 404)
-        sids = [self.play(self.alex, cid, "10", "tv")["session"] for _ in range(MP.MAX_PER_ACCOUNT + 2)]
-        self.assertEqual(self.media.plays.count(), MP.MAX_PER_ACCOUNT)
-        self.assertIsNone(self.media.plays.get(sids[0]))
-        self.assertIsNotNone(self.media.plays.get(sids[-1]))
+        plays = self.media.plays
+        conn = plays.get(self.play(self.alex, cid, "10", "tv")["session"]).connector
+        sids = []
+        for n in range(MP.MAX_PER_ACCOUNT + 2):           # different titles (the same one again is a handoff)
+            now[0] += 1
+            p = MP.Play(f"{n:032d}", self.alex["account_id"], "h", cid, "plex", f"i{n}", "file", "/x", (), {}, conn,
+                        seen=now[0])
+            plays.add(p)
+            sids.append(p.id)
+        self.assertEqual(plays.count(), MP.MAX_PER_ACCOUNT)
+        self.assertIsNone(plays.get(sids[0]))
+        self.assertIsNotNone(plays.get(sids[-1]))
 
     def test_stopped_before_playing_keeps_the_position(self):
         cid = self.link_plex()["id"]
@@ -352,6 +392,161 @@ class Play(unittest.TestCase):
         self.ok("POST", "/v1/media/progress", self.alex, {"session": sid, "positionSecs": 0, "state": "stopped"})
         self.assertEqual(len(self.seen(self.px, "GET", "/:/timeline")), n, "no timeline at 0 s over the saved position")
         self.assertIsNone(self.media.plays.get(sid))
+
+    # ---- abandoned sessions, handoff, refusals ----
+    def other_browser(self):
+        """Alex signed in on a second device."""
+        return self.acc.gate(self.auth.session(self.acc.login("alex", "correct horse 1", "192.0.2.11")))
+
+    def stops(self):
+        return [r["query"]["session"] for r in self.seen(self.px, "GET", "/video/:/transcode/universal/stop")]
+
+    def test_continue_on_another_device_stops_the_old_transcode_first(self):
+        cid = self.link_plex()["id"]
+        a = self.play(self.alex, cid, "10", "web")
+        self.assertEqual(self.get(a["url"])[0], 200)
+        old = self.seen(self.px, "GET", "/video/:/transcode/universal/start.m3u8")[-1]["query"]["session"]
+        self.ok("POST", "/v1/media/progress", self.alex, {"session": a["session"], "positionSecs": 1610, "state": "playing"})
+        # the Mac is closed without stopping; the desktop continues the same film
+        mac_stop = len(self.seen(self.px, "GET", "/:/timeline"))
+        b = self.play(self.other_browser(), cid, "10", "web")
+        self.assertEqual(self.stops(), [old], "the old transcode was stopped before the new one started")
+        tl = self.seen(self.px, "GET", "/:/timeline")[mac_stop:]
+        self.assertEqual([(t["query"]["state"], t["query"]["time"]) for t in tl], [("stopped", "1610000")],
+                         "the old playback is reported stopped at its last position")
+        self.assertEqual(tl[0]["headers"]["x-plex-session-identifier"], old)
+        code, _, body = self.get(b["url"])
+        self.assertEqual(code, 200, body)
+        self.assertFalse(self.tx.get("refused"), "Plex was never asked for a second transcode")
+        self.assertEqual(self.get(a["url"])[0], 404, "the old session has ended")
+        self.assertEqual(self.call("POST", "/v1/media/progress", self.alex,
+                                   {"session": a["session"], "positionSecs": 1620, "state": "stopped"})[0], 404)
+        self.assertEqual(self.stopped, [self.alex["account_id"]])
+
+    def test_the_fake_plex_runs_one_transcode_and_leftovers_are_cleaned_up(self):
+        cid = self.link_plex()["id"]
+        a = self.play(self.alex, cid, "10", "web")
+        self.assertEqual(self.get(a["url"])[0], 200)
+        left = self.seen(self.px, "GET", "/video/:/transcode/universal/start.m3u8")[-1]["query"]["session"]
+        self.media.plays._d.clear()              # Orbit restarted: the transcode is still running on Plex
+        b = self.play(self.alex, cid, "10", "web")
+        code, hdr, body = self.get(b["url"])
+        self.assertEqual((code, hdr["Content-Type"]), (200, "application/vnd.apple.mpegurl"), body)
+        self.assertEqual(len(self.tx["refused"]), 1, "refused once, while the leftover ran")
+        self.assertEqual(self.stops(), [left], "only the leftover of this connection was stopped")
+        log = "\n".join(self.log.lines)
+        self.assertIn("Plex playlist answered 400: <html><body>Bad Request X-Plex-Token=REDACTED", log)
+        self.assertIn("stopped 1 leftover transcode", log)
+        self.no_token(log)
+
+    def test_a_refused_start_shows_plain_english_and_logs_what_plex_said(self):
+        cid = self.link_plex()["id"]
+        self.tx["active"]["someone-else"] = "another-plex-app"        # not this connection: never stopped by Orbit
+        a = self.play(self.alex, cid, "10", "web")
+        code, _, body = self.get(a["url"])
+        self.assertEqual(code, 502)
+        err = json.loads(body)["error"]
+        self.assertIn("Plex refused to start transcoding this title (it answered 400)", err)
+        self.no_token(err)
+        self.assertEqual(self.stops(), [], "another app's transcode is left alone")
+        log = "\n".join(self.log.lines)
+        self.assertIn("item 10 (web, hls): Plex playlist answered 400", log)
+        self.assertNotIn(a["session"], log, "the play session id (a capability) is never logged")
+        self.no_token(log)
+        # a decision that refuses: POST /v1/media/play says why
+        self.tx["decision"] = {"MediaContainer": {"generalDecisionCode": 2000, "generalDecisionText": "Cannot play.",
+                                                  "transcodeDecisionCode": 4005,
+                                                  "transcodeDecisionText": "Maximum simultaneous transcodes reached"}}
+        code, rep = self.call("POST", "/v1/media/play", self.alex, {"conn": cid, "id": "10", "client": "web"})
+        self.assertEqual((code, rep.obj["error"]), (409, PX.TRANSCODE_LIMIT))
+        self.tx["decision"] = {"MediaContainer": {"generalDecisionCode": 2003, "generalDecisionText": "File is unplayable."}}
+        code, rep = self.call("POST", "/v1/media/play", self.alex, {"conn": cid, "id": "10", "client": "web"})
+        self.assertEqual((code, rep.obj["error"]), (409, "Plex will not play this title: File is unplayable."))
+        self.px.routes[("GET", "/video/:/transcode/universal/decision")] = lambda q: (404, "text/plain", b"")
+        self.tx["active"].clear()
+        b = self.play(self.alex, cid, "10", "web")
+        self.assertEqual(self.get(b["url"])[0], 200, "an old server without the decision call still plays")
+
+    def test_decision_then_start_with_the_resume_offset(self):
+        cid = self.link_plex()["id"]
+        a = self.play(self.alex, cid, "10", "web")
+        self.get(a["url"])
+        start = self.seen(self.px, "GET", "/video/:/transcode/universal/start.m3u8")[-1]["query"]
+        dec = self.seen(self.px, "GET", "/video/:/transcode/universal/decision")[-1]["query"]
+        self.assertEqual(dec, start, "the decision is asked with the same parameters")
+        self.assertEqual(start["offset"], "120", "the transcode starts at the resume point")
+        self.assertEqual(a["resumeSecs"], 120)
+        b = self.play(self.alex, cid, "10", "web", startSecs=0)
+        self.get(b["url"])
+        self.assertEqual(self.seen(self.px, "GET", "/video/:/transcode/universal/start.m3u8")[-1]["query"]["offset"], "0",
+                         "Play from start")
+        self.play(self.alex, cid, "10", "web", startSecs=331.7)
+        self.assertEqual(self.seen(self.px, "GET", "/video/:/transcode/universal/decision")[-1]["query"]["offset"], "331")
+        for bad in (-1, "x", True):
+            self.assertEqual(self.call("POST", "/v1/media/play", self.alex,
+                                       {"conn": cid, "id": "10", "client": "web", "startSecs": bad})[0], 400, bad)
+
+    def test_abandoned_sessions_are_stopped_at_their_last_position(self):
+        cid = self.link_plex()["id"]
+        now = [5000.0]
+        plays = self.media.plays
+        plays.clock = lambda: now[0]
+        a = self.play(self.alex, cid, "10", "web")
+        self.get(a["url"])
+        tx = self.seen(self.px, "GET", "/video/:/transcode/universal/start.m3u8")[-1]["query"]["session"]
+        self.ok("POST", "/v1/media/progress", self.alex, {"session": a["session"], "positionSecs": 2000, "state": "playing"})
+        for _ in range(12):                                 # paused, still reporting every 10 s: kept
+            now[0] += 10
+            self.ok("POST", "/v1/media/progress", self.alex, {"session": a["session"], "positionSecs": 2004, "state": "paused"})
+            plays.sweep()
+        self.assertIsNotNone(plays._d.get(a["session"]))
+        n = len(self.seen(self.px, "GET", "/:/timeline"))
+        now[0] += MP.IDLE_STOP - 1
+        self.assertEqual(plays.sweep(), 0)
+        now[0] += 2                                         # the laptop went to sleep
+        self.assertEqual(plays.sweep(), 1)
+        self.assertTrue(self.wait_for(lambda: self.stops() == [tx]), "the transcode is stopped")
+        tl = self.seen(self.px, "GET", "/:/timeline")[n:]
+        self.assertEqual([(t["query"]["state"], t["query"]["time"]) for t in tl], [("stopped", "2004000")])
+        self.assertTrue(self.wait_for(lambda: self.stopped == [self.alex["account_id"]]))
+        self.assertEqual(self.get(a["url"])[0], 404)
+        self.assertIn("abandoned", "\n".join(self.log.lines))
+
+        # never reported (the player never started): the transcode stops, the saved position is kept
+        b = self.play(self.alex, cid, "10", "web")
+        self.get(b["url"])
+        n = len(self.seen(self.px, "GET", "/:/timeline"))
+        now[0] += MP.IDLE_STOP + 1
+        plays.sweep()
+        self.assertTrue(self.wait_for(lambda: len(self.stops()) == 2))
+        self.assertEqual(len(self.seen(self.px, "GET", "/:/timeline")), n)
+
+        # a TV that reports "paused" once (older builds) keeps its session up to the outer cap
+        c = self.play(self.alex, cid, "22", "tv", caps={"directPlay": False})
+        self.ok("POST", "/v1/media/progress", self.alex, {"session": c["session"], "positionSecs": 50, "state": "paused"})
+        now[0] += 3600
+        self.assertEqual(plays.sweep(), 0)
+        now[0] += MP.IDLE
+        self.assertEqual(plays.sweep(), 1)
+        # a TV playing the file over one long request counts as active while it runs
+        d = self.play(self.alex, cid, "10", "tv")
+        p = plays._d[d["session"]]
+        p.pipes = 1
+        now[0] += MP.IDLE_STOP * 3
+        self.assertEqual(plays.sweep(), 0)
+        p.pipes = 0
+        self.assertEqual(plays.sweep(), 1)
+
+    def test_the_sweeper_runs_by_itself(self):
+        cid = self.link_plex()["id"]
+        plays = self.media.plays
+        plays.sweep_every = 0.05
+        now = [100.0]
+        plays.clock = lambda: now[0]
+        a = self.play(self.alex, cid, "10", "web")
+        self.get(a["url"])
+        now[0] += MP.IDLE_STOP + 1
+        self.assertTrue(self.wait_for(lambda: plays.count() == 0 and len(self.stops()) == 1))
 
     def test_another_account_cannot_play_my_connection(self):
         cid = self.link_plex()["id"]
@@ -466,6 +661,27 @@ class RealServer(TM.Server):
         self.assertEqual((code, hdr["Content-Type"]), (200, "application/vnd.apple.mpegurl"))
         self.assertNotIn(TM.JF_PW_TOKEN.encode(), data)
         self.assertEqual(self.req("POST", "/v1/media/progress", {"session": w["session"], "positionSecs": 3, "state": "playing"}, h)[0], 200)
+        # the web player's sendBeacon "stopped" on leaving the page: text/plain, the cookie, no CSRF header
+        code, _, raw = self.req("POST", "/v1/media/play", {"conn": cid, "id": "m1", "client": "web"}, h)
+        sid = json.loads(raw)["session"]
+        self.assertEqual(self.req("GET", w["url"])[0], 404, "playing the same title again ended the older session")
+        cookie = {"Cookie": h["Cookie"]}
+        beacon = {**cookie, "Content-Type": "text/plain;charset=UTF-8", "Origin": self.base}
+        stop = {"session": sid, "positionSecs": 42.5, "state": "stopped"}
+        for body, hdr, why in (
+                (stop, {**beacon, "Origin": "http://evil.example.com"}, "another site"),
+                (stop, {**cookie, "Content-Type": "text/plain"}, "nothing says it is this site's page"),
+                ({**stop, "state": "playing"}, beacon, "only stopped is accepted without the CSRF token"),
+                ({**stop, "extra": 1}, beacon, "only the stop fields"),
+                ({**stop, "session": "x"}, beacon, "a play session id")):
+            self.assertEqual(self.req("POST", "/v1/media/progress", body, hdr)[0], 403, why)
+        self.assertEqual(self.req("POST", "/v1/media/progress", stop, {"Content-Type": "text/plain", "Origin": self.base})[0],
+                         401, "the cookie is needed")
+        code, _, raw = self.req("POST", "/v1/media/progress", stop, {**cookie, "Content-Type": "text/plain",
+                                                                    "Sec-Fetch-Site": "same-origin"})
+        self.assertEqual(code, 200, raw)
+        self.assertEqual(self.req("GET", f"/v1/media/stream/{sid}/master.m3u8")[0], 404, "the beacon ended the session")
+        self.assertEqual(self.req("POST", "/v1/media/progress", stop, beacon)[0], 404, "once")
         self.assertEqual(self.req("POST", "/v1/auth/logout", {}, h)[0], 200)
         self.assertEqual(self.req("GET", a["url"])[0], 404, "signed out: its playbacks end")
         self.assertEqual(self.req("GET", w["url"])[0], 404)

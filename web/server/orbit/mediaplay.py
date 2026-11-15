@@ -14,10 +14,16 @@ the token in a request header, so no Plex / Jellyfin token reaches a device and 
 - ``.../sub/<id>.vtt``: a text subtitle stream as WebVTT (SRT is converted).
 
 The session id (192 random bits) is the capability: players that send no cookie (ExoPlayer, mpv) can use the
-addresses. A session ends when it idles (``IDLE``), on ``state: "stopped"``, when its connection is unlinked, and
-when the signed-in session that created it ends (checked on every request and while a relay runs).
+addresses. A session ends on ``state: "stopped"``; when it is abandoned (no relay request and no progress report for
+``IDLE_STOP``: a device that went to sleep or was switched off without stopping); when the same account starts the
+same title again (another device continues it: "handoff"); when its connection is unlinked; when the signed-in
+session that created it ends (checked on every request and while a relay runs); and after ``IDLE`` at the most.
+An abandoned, handed-off or evicted session is reported "stopped" at its last known position before its transcode
+is stopped, so the media server keeps the resume point and frees the transcoder.
 
-Nothing here logs a URL."""
+When the media server refuses a request, its HTTP status and a short redacted body are logged with which request
+it was (decision, playlist, segment, file, subtitles), and the client gets a plain-English reason
+(``Connector.explain``). Nothing here logs a URL or a play session id."""
 from __future__ import annotations
 
 import json
@@ -32,13 +38,16 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from .accounts import ApiError
-from .connectors.base import MIME, ConnectorError, safe_id
+from .connectors.base import MIME, ConnectorError, error_body, redact, safe_id
 from .facade import rewrite_hls
 
 LOG = logging.getLogger("orbit.mediaplay")
 
 PREFIX = "/v1/media/stream/"
-IDLE = 3 * 3600                       # a paused player keeps its session this long
+IDLE = 3 * 3600                       # the outer cap: no session lives longer than this without requests
+IDLE_STOP = 90                        # abandoned: no relay request and no progress for this long (players report
+                                      # every 10 s, also while paused)
+SWEEP = 15                            # how often abandoned sessions are looked for
 MAX_PER_ACCOUNT = 8                   # older sessions of the account are ended beyond this
 CHUNK = 64 * 1024
 CHECK_EVERY = 32                      # chunks between "is the signed-in session still there?" checks
@@ -69,7 +78,15 @@ class Play:
     duration: float = 0
     seen: float = 0
     reported: bool = False
+    client: str = ""
+    pos: float = 0                    # the last reported position
+    state: str = ""                   # the last reported state
+    pipes: int = 0                    # file relays running now (a paused player may hold one, blocked)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def label(self) -> str:
+        """For the log: never the session id (it is the capability)."""
+        return f"{self.source} {self.conn} item {self.item} ({self.client}, {self.kind})"
 
 
 def srt_to_vtt(text: str) -> str:
@@ -102,6 +119,8 @@ class Plays:
         self.on_stopped: Optional[Callable[[str], None]] = None  # account id: Continue watching may have changed
         self._d: dict[str, Play] = {}
         self._lock = threading.Lock()
+        self._sweeper: Optional[threading.Thread] = None
+        self.sweep_every = SWEEP
 
     # ---- the session table ----
     def add(self, p: Play) -> None:
@@ -109,13 +128,50 @@ class Plays:
         with self._lock:
             now = self.clock()
             for k, v in list(self._d.items()):
-                if now - v.seen > IDLE:
+                if self._abandoned(v, now):
                     old.append(self._d.pop(k))
             mine = sorted((v for v in self._d.values() if v.account == p.account), key=lambda v: v.seen)
             for v in mine[:max(0, len(mine) - MAX_PER_ACCOUNT + 1)]:
                 old.append(self._d.pop(v.id))
             self._d[p.id] = p
-        self._stop_all(old)
+            if self._sweeper is None or not self._sweeper.is_alive():
+                self._sweeper = threading.Thread(target=self._sweep_loop, name="orbit-media-sweep", daemon=True)
+                self._sweeper.start()
+        self._finish(old, why="ended")
+
+    def _abandoned(self, p: Play, now: float) -> bool:
+        """No relay request and no progress for IDLE_STOP (IDLE at the most). A file relay that is running counts
+        as activity (a paused TV holds its connection, blocked); so does a TV / desktop build that reports "paused"
+        once and then nothing (older builds), up to IDLE."""
+        quiet = now - p.seen
+        if quiet > IDLE:
+            return True
+        if quiet <= IDLE_STOP or p.pipes > 0:
+            return False
+        return not (p.state == "paused" and p.client in ("tv", "desktop"))
+
+    def sweep(self) -> int:
+        """End abandoned sessions (reported "stopped" at their last position, transcode stopped)."""
+        with self._lock:
+            now = self.clock()
+            gone = [self._d.pop(k) for k, v in list(self._d.items()) if self._abandoned(v, now)]
+        for p in gone:
+            LOG.info("media play %s: abandoned (no request or progress for %d s); stopped at %d s",
+                     p.label(), int(self.clock() - p.seen), int(p.pos))
+        self._finish(gone, why="abandoned")
+        return len(gone)
+
+    def _sweep_loop(self) -> None:
+        while True:
+            time.sleep(self.sweep_every)
+            try:
+                self.sweep()
+            except Exception:                     # noqa: BLE001
+                LOG.exception("media play: sweep")
+            with self._lock:
+                if not self._d:
+                    self._sweeper = None
+                    return
 
     def get(self, sid: str) -> Optional[Play]:
         if not isinstance(sid, str) or not SID_RE.match(sid):
@@ -124,13 +180,13 @@ class Plays:
             p = self._d.get(sid)
             if p is None:
                 return None
-            if self.clock() - p.seen > IDLE:
+            if self._abandoned(p, self.clock()):
                 self._d.pop(sid, None)
                 expired = p
             else:
                 p.seen = self.clock()
                 return p
-        self._stop_all([expired])
+        self._finish([expired], why="abandoned")
         return None
 
     def end(self, sid: str) -> Optional[Play]:
@@ -159,34 +215,104 @@ class Plays:
 
         def run():
             for p in plays:
-                try:
-                    p.connector.play_stop(p.ref)
-                except ConnectorError:
-                    pass
-                except Exception:                 # noqa: BLE001
-                    LOG.info("media play: stopping a transcode failed")
+                Plays._stop_one(p)
         threading.Thread(target=run, name="orbit-media-stop", daemon=True).start()
 
+    @staticmethod
+    def _stop_one(p: Play) -> None:
+        if p.kind != "hls":
+            return
+        try:
+            p.connector.play_stop(p.ref)
+        except ConnectorError as e:
+            LOG.info("media play %s: stopping the transcode failed (%s)", p.label(), e.status or e.msg)
+        except Exception:                         # noqa: BLE001
+            LOG.info("media play %s: stopping the transcode failed", p.label())
+
+    def _final(self, p: Play) -> bool:
+        """Report "stopped" at the last known position (when the player reported at all). True when it did."""
+        if not p.reported:
+            return False
+        try:
+            p.connector.play_report(p.ref, p.item, p.pos, p.duration, "stopped", False)
+            return True
+        except ConnectorError as e:
+            LOG.info("media play %s: the last \"stopped\" report failed (%s)", p.label(), e.status or e.msg)
+        except Exception:                         # noqa: BLE001
+            LOG.info("media play %s: the last \"stopped\" report failed", p.label())
+        return False
+
+    def _finish(self, plays: list, why: str, sync: bool = False) -> None:
+        """Sessions that end without the player saying "stopped": the media server is told "stopped" at the last
+        position, then the transcode is stopped. ``sync``: before returning (a handoff: the new playback starts
+        right after), else off the request thread."""
+        plays = [p for p in plays if p is not None]
+        if not plays:
+            return
+
+        def run():
+            told = set()
+            for p in plays:
+                if self._final(p):
+                    told.add(p.account)
+                self._stop_one(p)
+            for acc in told:
+                if self.on_stopped:
+                    try:
+                        self.on_stopped(acc)
+                    except Exception:             # noqa: BLE001
+                        LOG.exception("media play: after stop")
+        if sync:
+            run()
+        else:
+            threading.Thread(target=run, name="orbit-media-" + why, daemon=True).start()
+
+    def handoff(self, account: str, conn: str, item: str) -> int:
+        """The account plays this title again (on another device, or the same one with another audio track): its
+        older sessions of the same title end first, so the media server frees that transcode and keeps the
+        position before the new one starts."""
+        with self._lock:
+            gone = [self._d.pop(k) for k, v in list(self._d.items())
+                    if v.account == account and v.conn == conn and v.item == item]
+        for p in gone:
+            LOG.info("media play %s: handed off to a new playback; stopped at %d s", p.label(), int(p.pos))
+        self._finish(gone, why="handoff", sync=True)
+        return len(gone)
+
+    def live_refs(self, conn: str) -> set:
+        """The media-server session ids of this connection's playbacks."""
+        with self._lock:
+            return {str(v.ref.get("session")) for v in self._d.values() if v.conn == conn and v.ref.get("session")}
+
     # ---- the API side ----
-    def start(self, sess: dict, row, connector, item_id, client, caps, audio) -> dict:
+    def start(self, sess: dict, row, connector, item_id, client, caps, audio, start_secs=None) -> dict:
         if client not in CLIENTS:
             raise ApiError(400, "client: web, tv or desktop")
         if caps is not None and not isinstance(caps, dict):
             raise ApiError(400, "caps: an object")
         if audio is not None and (not isinstance(audio, (str, int)) or not SUBID_RE.match(str(audio))):
             raise ApiError(400, "audio: a track id from an earlier answer")
+        if start_secs is not None:
+            if isinstance(start_secs, bool) or not isinstance(start_secs, (int, float)) or not 0 <= start_secs <= 10 * 86400:
+                raise ApiError(400, "startSecs: a number of seconds")
         try:
             iid = safe_id(item_id)
-            info = connector.play_info(iid, client == "web", caps, str(audio) if audio is not None else None)
         except ConnectorError as e:
-            LOG.info("media play %s %s: %s", row[1], row[0], e.msg)
+            raise ApiError(e.code, e.msg)
+        self.handoff(sess["account_id"], row[0], iid)
+        try:
+            info = connector.play_info(iid, client == "web", caps, str(audio) if audio is not None else None,
+                                       start=start_secs)
+        except ConnectorError as e:
+            LOG.info("media play %s %s item %s (%s): %s", row[1], row[0], iid, client, e.msg)
             raise ApiError(e.code, e.msg)
         sid = secrets.token_urlsafe(24)
         subs = {s["id"]: (s["path"], s.get("fmt") or "vtt") for s in info.get("subtitles") or []
                 if SUBID_RE.match(str(s.get("id") or ""))}
         p = Play(sid, sess["account_id"], sess.get("h") or "", row[0], row[1], iid, info["kind"], info["path"],
                  tuple(connector.RELAY_PREFIXES), subs, connector, info.get("ref") or {},
-                 float(info.get("durationSecs") or 0), self.clock())
+                 float(info.get("durationSecs") or 0), self.clock(), client=client,
+                 pos=float((info.get("ref") or {}).get("offset") or 0))
         self.add(p)
         nxt = None
         if info.get("seriesId"):
@@ -200,7 +326,8 @@ class Plays:
         base = PREFIX + sid
         container = info.get("container")
         hls = info["kind"] == "hls"
-        LOG.info("media play %s %s: %s for %s", row[1], row[0], info["kind"], client)
+        LOG.info("media play %s: started%s", p.label(),
+                 f" at {p.ref.get('offset')} s" if p.ref.get("offset") is not None else "")
         return {"session": sid, "url": base + ("/master.m3u8" if hls else "/file"), "kind": info["kind"],
                 "container": container, "mime": HLS_CTYPE if hls else MIME.get(container or "", "application/octet-stream"),
                 "durationSecs": info.get("durationSecs"), "resumeSecs": info.get("resumeSecs"),
@@ -225,13 +352,14 @@ class Plays:
         with p.lock:
             first = not p.reported
             p.reported = True
+            p.pos, p.state = secs, state
         try:
             # "stopped" before any other report (the player never started, or an HLS fallback replaced this
             # session): nothing is told to the media server, so the position it has is kept
             if not (state == "stopped" and first):
                 p.connector.play_report(p.ref, p.item, secs, p.duration, state, first)
         except ConnectorError as e:
-            LOG.info("media play progress %s %s: %s", p.source, p.conn, e.msg)
+            LOG.info("media play progress %s: %s", p.label(), e.msg)
             if state != "stopped":
                 raise ApiError(e.code, e.msg)
         if state == "stopped":
@@ -255,7 +383,7 @@ class Plays:
         if tail == "file" and p.kind == "file":
             return self._pipe_url(h, p, p.path, media=True)
         if tail == "master.m3u8" and p.kind == "hls":
-            return self._relay(h, p, p.path)
+            return self._relay(h, p, p.path, master=True)
         if tail.startswith("u/") and p.kind == "hls":
             rel = "/" + tail[2:]
             if not safe_rel(rel, p.prefixes):
@@ -275,27 +403,63 @@ class Plays:
         hdrs.pop("Accept", None)
         return c.http.opener(c.base + rel, timeout=30, headers=hdrs)
 
-    def _fail(self, h, p: Play, e: BaseException):
+    @staticmethod
+    def _what(rel: str, master: bool = False) -> str:
+        if master:
+            return "playlist"
+        path_only = rel.split("?", 1)[0].lower()
+        return "playlist" if path_only.endswith(".m3u8") else "segment"
+
+    def _upstream_error(self, p: Play, e: BaseException, what: str):
+        """(status, redacted body) of a failed upstream request, logged with which request it was."""
         if isinstance(e, urllib.error.HTTPError):
-            code = e.code
+            body = redact(error_body(e), (getattr(p.connector, "token", "") or "",))
             try:
                 e.close()
             except Exception:                     # noqa: BLE001
                 pass
+            LOG.warning("media play %s: %s %s answered %d: %s", p.label(), p.connector.label, what, e.code,
+                        body or "(empty body)")
+            return e.code, body
+        LOG.warning("media play %s: %s %s: no answer (%s)", p.label(), p.connector.label, what, type(e).__name__)
+        return 0, ""
+
+    def _fail(self, h, p: Play, e: BaseException, what: str = "request", status=None):
+        code, body = status if status is not None else self._upstream_error(p, e, what)
+        if code:
             if code in (401, 403):
                 return _err(h, 409, f"{p.connector.label}: the sign-in is no longer valid; link it again")
             if code == 404:
                 return _err(h, 404, f"{p.connector.label}: not found on the server")
-            return _err(h, 502, f"{p.connector.label}: the server answered {code}")
-        LOG.info("media play relay %s: %s", p.source, type(e).__name__)
+            try:
+                why = p.connector.explain(code, body, what)
+            except Exception:                     # noqa: BLE001
+                why = None
+            return _err(h, 502, why or f"{p.connector.label}: the server answered {code}")
         return _err(h, 502, f"{p.connector.label}: the server did not answer")
 
-    def _relay(self, h, p: Play, rel: str):
-        """A playlist (rewritten) or a segment (piped)."""
+    def _relay(self, h, p: Play, rel: str, master: bool = False):
+        """A playlist (rewritten) or a segment (piped). The master playlist starts the transcode: when the server
+        refuses it, transcodes this connection left behind (not one of its live sessions) are stopped and it is
+        asked once more."""
+        what = self._what(rel, master)
         try:
             up = self._open(h, p, rel)
         except Exception as e:                    # noqa: BLE001
-            return self._fail(h, p, e)
+            st = self._upstream_error(p, e, what)
+            if not (master and st[0] and st[0] not in (401, 403, 404)):
+                return self._fail(h, p, e, what, st)
+            try:
+                n = p.connector.play_cleanup(self.live_refs(p.conn))
+            except Exception:                     # noqa: BLE001
+                n = 0
+            if not n:
+                return self._fail(h, p, e, what, st)
+            LOG.info("media play %s: asking for the playlist again", p.label())
+            try:
+                up = self._open(h, p, rel)
+            except Exception as e2:               # noqa: BLE001
+                return self._fail(h, p, e2, what)
         try:
             ct = (up.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
             path_only = rel.split("?", 1)[0].lower()
@@ -331,11 +495,15 @@ class Plays:
                 cr = e.headers.get("Content-Range") if e.headers else None
                 e.close()
                 return _send(h, 416, b"", "text/plain", {"Content-Range": cr} if cr else None)
-            return self._fail(h, p, e)
+            return self._fail(h, p, e, "file")
+        with p.lock:
+            p.pipes += 1
         try:
             ct = (up.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
             return self._pipe(h, p, up, ct, media)
         finally:
+            with p.lock:
+                p.pipes -= 1
             up.close()
 
     def _pipe(self, h, p: Play, up, ct: str, media: bool):
@@ -375,7 +543,7 @@ class Plays:
         try:
             up = self._open(h, p, rel)
         except Exception as e:                    # noqa: BLE001
-            return self._fail(h, p, e)
+            return self._fail(h, p, e, "subtitles")
         try:
             data = up.read(MAX_SUB + 1)
         finally:

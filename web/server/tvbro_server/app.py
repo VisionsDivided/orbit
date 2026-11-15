@@ -1336,6 +1336,20 @@ class Handler(BaseHTTPRequestHandler):
         sfs = self.headers.get("Sec-Fetch-Site")
         return not sfs or sfs in ("same-origin", "none")
 
+    def _stop_beacon(self) -> bool:
+        """A sendBeacon "stopped" for a media play session (see do_POST): text/plain, same-origin shown by the
+        browser (Origin naming this host or Sec-Fetch-Site: same-origin, at least one of them sent), a body of
+        exactly {"session", "positionSecs", "state": "stopped"}."""
+        ct = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if ct != "text/plain" or not self._origin_ok():
+            return False
+        if not self.headers.get("Origin") and self.headers.get("Sec-Fetch-Site") != "same-origin":
+            return False
+        b = self._body()
+        return (b.get("state") == "stopped" and isinstance(b.get("session"), str)
+                and OMEDIAPLAY.SID_RE.match(b["session"]) is not None
+                and set(b) <= {"session", "positionSecs", "state"})
+
     def _json_request(self) -> bool:
         return (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower() == "application/json"
 
@@ -1536,6 +1550,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.close_connection = True         # its body is read only by r_restore
             else:
                 self._body()                         # read now (keep-alive stays in step)
+            # Orbit: the web player's last "stopped" when the page goes away (navigator.sendBeacon cannot set the
+            # CSRF header or a JSON type). Only that one harmless thing is accepted without the token: the body
+            # must name a play session (192 random bits, which a cross-site page cannot know) with state
+            # "stopped", the request must come from this site's own page (Origin or Sec-Fetch-Site saying so),
+            # and the session cookie (SameSite=Strict) must belong to the account that started the playback.
+            if u.path == "/v1/media/progress" and self._stop_beacon():
+                self.sess = self._session()
+                return self.route_v1("POST")
             # CSRF: JSON only (a cross-site form or beacon cannot send it without a preflight),
             # from this site's own pages, and with the session's token (or X-TvBro on sign-in)
             if not self._json_request() or not self._origin_ok():
