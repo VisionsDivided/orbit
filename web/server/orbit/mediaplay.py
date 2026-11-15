@@ -37,6 +37,8 @@ import urllib.parse
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from tvbro_server import quality as Q
+
 from .accounts import ApiError
 from .connectors.base import MIME, ConnectorError, canonical_path, error_body, redact, safe_id
 from .facade import rewrite_hls
@@ -285,13 +287,19 @@ class Plays:
             return {str(v.ref.get("session")) for v in self._d.values() if v.conn == conn and v.ref.get("session")}
 
     # ---- the API side ----
-    def start(self, sess: dict, row, connector, item_id, client, caps, audio, start_secs=None) -> dict:
+    def start(self, sess: dict, row, connector, item_id, client, caps, audio, start_secs=None,
+              quality=None, addr: str = "") -> dict:
+        """``quality``: "auto" (default), "orig", "8", "4" or "2" (tvbro_server/quality.py); ``addr``: the client's
+        address, which decides what "auto" means (a lower cap away from home)."""
         if client not in CLIENTS:
             raise ApiError(400, "client: web, tv or desktop")
         if caps is not None and not isinstance(caps, dict):
             raise ApiError(400, "caps: an object")
         if audio is not None and (not isinstance(audio, (str, int)) or not SUBID_RE.match(str(audio))):
             raise ApiError(400, "audio: a track id from an earlier answer")
+        if quality is not None and (not isinstance(quality, str) or quality not in ("auto", *Q.LEVELS)):
+            raise ApiError(400, "quality: auto, orig, 8, 4 or 2")
+        qual = Q.choose(quality, addr)
         if start_secs is not None:
             if isinstance(start_secs, bool) or not isinstance(start_secs, (int, float)) or not 0 <= start_secs <= 10 * 86400:
                 raise ApiError(400, "startSecs: a number of seconds")
@@ -302,7 +310,7 @@ class Plays:
         self.handoff(sess["account_id"], row[0], iid)
         try:
             info = connector.play_info(iid, client == "web", caps, str(audio) if audio is not None else None,
-                                       start=start_secs)
+                                       start=start_secs, cap=qual["cap"])
         except ConnectorError as e:
             LOG.info("media play %s %s item %s (%s): %s", row[1], row[0], iid, client, e.msg)
             raise ApiError(e.code, e.msg)
@@ -326,8 +334,9 @@ class Plays:
         base = PREFIX + sid
         container = info.get("container")
         hls = info["kind"] == "hls"
-        LOG.info("media play %s: started%s", p.label(),
-                 f" at {p.ref.get('offset')} s" if p.ref.get("offset") is not None else "")
+        LOG.info("media play %s: started%s (%s%s)", p.label(),
+                 f" at {p.ref.get('offset')} s" if p.ref.get("offset") is not None else "", qual["label"],
+                 ", away" if qual["away"] else "")
         return {"session": sid, "url": base + ("/master.m3u8" if hls else "/file"), "kind": info["kind"],
                 "container": container, "mime": HLS_CTYPE if hls else MIME.get(container or "", "application/octet-stream"),
                 "durationSecs": info.get("durationSecs"), "resumeSecs": info.get("resumeSecs"),
@@ -335,7 +344,7 @@ class Plays:
                 "audio": info.get("audio") or [],
                 "subtitles": [{"id": s["id"], "label": s.get("label") or "", "lang": s.get("lang"),
                                "url": f"{base}/sub/{s['id']}.vtt"} for s in info.get("subtitles") or [] if s["id"] in subs],
-                "next": nxt, "conn": row[0], "source": row[1], "id": iid}
+                "next": nxt, "conn": row[0], "source": row[1], "id": iid, "quality": Q.public(qual)}
 
     def progress(self, sess: dict, sid, pos, state) -> dict:
         p = self.get(sid) if isinstance(sid, str) else None

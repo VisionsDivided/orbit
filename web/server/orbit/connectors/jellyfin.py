@@ -250,7 +250,7 @@ class Jellyfin(Connector):
     # ---- playing through the home server ----
     RELAY_PREFIXES = ("/videos/",)        # compared in lower case (Jellyfin answers "/videos/...")
 
-    def play_info(self, item_id: str, hls: bool, caps, audio=None, start=None) -> dict:
+    def play_info(self, item_id: str, hls: bool, caps, audio=None, start=None, cap=None) -> dict:
         iid = safe_id(item_id)
         d = self._get(f"/Users/{self._user()}/Items/{iid}")
         if not isinstance(d, dict) or not d.get("Id"):
@@ -258,9 +258,15 @@ class Jellyfin(Connector):
         if d.get("Type") not in ("Movie", "Episode"):
             raise ConnectorError(400, "only films and episodes can be played")
         a_idx = int(audio) if isinstance(audio, (str, int)) and str(audio).isdigit() else None
-        body = {"UserId": self.user_id, "DeviceProfile": device_profile(not hls), "MaxStreamingBitrate": 120_000_000,
+        hls = hls or bool(cap)                # a cap (away from home) always means a transcode
+        body = {"UserId": self.user_id, "DeviceProfile": device_profile(not hls),
+                "MaxStreamingBitrate": cap[0] * 1000 if cap else 120_000_000,
                 "EnableDirectPlay": not hls, "EnableDirectStream": not hls, "EnableTranscoding": True,
                 "AutoOpenLiveStream": False}
+        if cap:
+            body["DeviceProfile"]["MaxStreamingBitrate"] = cap[0] * 1000
+            body["DeviceProfile"]["CodecProfiles"] = [{"Type": "Video", "Conditions": [
+                {"Condition": "LessThanEqual", "Property": "Height", "Value": str(cap[1]), "IsRequired": False}]}]
         if a_idx is not None:
             body["AudioStreamIndex"] = a_idx
         info = self.http.json("POST", self.base + f"/Items/{iid}/PlaybackInfo?" +
@@ -297,6 +303,8 @@ class Jellyfin(Connector):
                 q = {"MediaSourceId": msid, "PlaySessionId": psid, "DeviceId": self.device_id, "VideoCodec": "h264",
                      "AudioCodec": "aac", "TranscodingMaxAudioChannels": 2, "SegmentContainer": "ts", "MinSegments": 1,
                      "BreakOnNonKeyFrames": "True"}
+                if cap:
+                    q.update({"VideoBitrate": cap[0] * 1000, "MaxHeight": cap[1]})
                 if a_idx is not None:
                     q["AudioStreamIndex"] = a_idx
                 path = f"/Videos/{iid}/master.m3u8?" + urllib.parse.urlencode(q)

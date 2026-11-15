@@ -86,11 +86,13 @@ def _label(st: dict, n: int, kind: str) -> str:
     return f"{kind} {n}"
 
 
-def plan(probe: dict, client: dict, audio_choice: Optional[int] = None) -> dict:
+def plan(probe: dict, client: dict, audio_choice: Optional[int] = None, cap: Optional[tuple] = None) -> dict:
     """What to copy / convert, from ffprobe's JSON and the client's capabilities.
 
     client: {"ios": bool, "hevc": bool, "ac3": bool, "eac3": bool, "av1": bool}
     audio_choice: position in the returned ``audio`` list (None: the default track).
+    cap: (video kbps, height) for a transcode to H.264 under that (quality.py: away from home); any video codec
+    then plays, and audio that is not AAC stereo becomes AAC stereo.
     Returns {"ok": True, ...} or {"ok": False, "why": "..."}."""
     streams = probe.get("streams") or []
     vids = [s for s in streams if s.get("codec_type") == "video"
@@ -106,7 +108,9 @@ def plan(probe: dict, client: dict, audio_choice: Optional[int] = None) -> dict:
     v = vids[0]
     vc = (v.get("codec_name") or "").lower()
     tag = None
-    if vc == "h264":
+    if cap:
+        pass                                     # re-encoded to H.264 (ffmpeg_args)
+    elif vc == "h264":
         pass
     elif vc == "hevc":
         if not client.get("hevc"):
@@ -128,9 +132,12 @@ def plan(probe: dict, client: dict, audio_choice: Optional[int] = None) -> dict:
             pick = next((i for i, s in enumerate(auds) if (s.get("disposition") or {}).get("default")), 0)
         a = dict(audio[pick], pos=pick)
         c = a["codec"]
-        a["copy"] = c == "aac" or (c == "ac3" and bool(client.get("ac3"))) or (c == "eac3" and bool(client.get("eac3")))
+        if cap:
+            a["copy"] = c == "aac" and a["channels"] <= 2
+        else:
+            a["copy"] = c == "aac" or (c == "ac3" and bool(client.get("ac3"))) or (c == "eac3" and bool(client.get("eac3")))
         if not a["copy"]:
-            a["out_channels"] = 6 if a["channels"] > 2 else 2
+            a["out_channels"] = 2 if cap else 6 if a["channels"] > 2 else 2
             notes.append(f"audio {c.upper()} converted to AAC {'5.1' if a['out_channels'] == 6 else 'stereo'}")
     text, skipped = [], []
     for i, s in enumerate(subs):
@@ -142,7 +149,10 @@ def plan(probe: dict, client: dict, audio_choice: Optional[int] = None) -> dict:
             skipped.append(item)
     if skipped:
         notes.append(f"{len(skipped)} picture subtitle track{'s' if len(skipped) > 1 else ''} cannot be shown")
-    return {"ok": True, "video": {"index": v.get("index"), "codec": vc, "tag": tag}, "audio": audio, "a": a,
+    if cap:
+        notes.append(f"converted to {cap[1]}p at {cap[0] // 1000} Mbps")
+    return {"ok": True, "video": {"index": v.get("index"), "codec": vc, "tag": tag,
+                                  "cap": tuple(cap) if cap else None}, "audio": audio, "a": a,
             "subs": text, "skipped": skipped, "notes": notes, "duration": duration}
 
 
@@ -158,6 +168,14 @@ def input_protocols(url: str) -> list[str]:
     if (url.startswith("/") or os.path.isabs(url)) and not re.match(r"^[A-Za-z][A-Za-z0-9+.-]+:", url):
         return ["-protocol_whitelist", "file"]
     raise ValueError("only http(s) URLs or a local recording can be read")
+
+
+def video_encode(kbps: int, height: int) -> list[str]:
+    """H.264 under ``kbps`` and at most ``height`` lines (never scaled up), a keyframe at every segment boundary so
+    the segments stay HLS_TIME long. ``veryfast``: one 1080p film needs about one modern CPU core in real time."""
+    return ["-vf", f"scale=-2:'min({height},ih)',format=yuv420p", "-c:v", "libx264", "-preset", "veryfast",
+            "-profile:v", "high", "-b:v", f"{kbps}k", "-maxrate", f"{kbps}k", "-bufsize", f"{kbps * 2}k",
+            "-force_key_frames", f"expr:gte(t,n_forced*{HLS_TIME})"]
 
 
 def ffmpeg_args(url: str, p: dict, out_dir: str, ss: float = 0.0, ffmpeg: str = "ffmpeg") -> list[str]:
@@ -177,15 +195,19 @@ def ffmpeg_args(url: str, p: dict, out_dir: str, ss: float = 0.0, ffmpeg: str = 
     a = p.get("a")
     if a:
         args += ["-map", f"0:{a['index']}"]
-    args += ["-c:v", "copy"]
-    if p["video"].get("tag"):
+    cap = p["video"].get("cap")
+    if cap:
+        args += video_encode(int(cap[0]), int(cap[1]))
+    else:
+        args += ["-c:v", "copy"]
+    if p["video"].get("tag") and not cap:
         args += ["-tag:v", p["video"]["tag"]]
     if a:
         if a["copy"]:
             args += ["-c:a", "copy"]
         else:
             ch = a.get("out_channels", 2)
-            args += ["-c:a", "aac", "-ac", str(ch), "-b:a", "384k" if ch == 6 else "160k"]
+            args += ["-c:a", "aac", "-ac", str(ch), "-b:a", "384k" if ch == 6 else "128k" if cap else "160k"]
     args += ["-map_metadata", "-1", "-map_chapters", "-1", "-max_muxing_queue_size", "4096",
              "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", str(HLS_TIME),
              "-hls_playlist_type", "event", "-hls_list_size", "0",

@@ -122,6 +122,15 @@ const withSid = (u) => u + (u.includes('?') ? '&' : '?') + 'sid=' + SID;
 // Orbit (orbit.js): the same request helpers for the /v1 account API
 export { req as apiReq, authPost as apiAuthPost };
 
+/** Films and episodes: this browser's quality choice (Settings ▸ This browser), sent with every play. "auto": the
+ *  original at home, a lower cap away from home (the server decides; see tvbro_server/quality.py). */
+export const QUALITIES = [['auto', 'Auto (original at home, 720p away)'], ['orig', 'Original'], ['8', '1080p · 8 Mbps'],
+  ['4', '720p · 4 Mbps'], ['2', '480p · 2 Mbps']];
+export function playQuality() {
+  try { const v = localStorage.getItem('orbit.quality'); return QUALITIES.some((q) => q[0] === v) ? v : 'auto'; } catch { return 'auto'; }
+}
+export function setPlayQuality(v) { try { localStorage.setItem('orbit.quality', v); } catch { /* private window */ } }
+
 export const api = {
   health: () => req('/api/health'),
   /** {auth: 'setup'|'login'|'ok', role?, csrf?, signedIn, …}; remembers the CSRF token. */
@@ -191,6 +200,7 @@ export const api = {
     if (opts.remux) q += '&remux=1';
     if (opts.ss) q += '&ss=' + Math.floor(opts.ss);
     if (opts.a != null) q += '&a=' + opts.a;
+    q += '&quality=' + playQuality();
     const r = await req(q);
     if (r.url) r.url = withSid(r.url);
     if (r.file) r.file = withSid(r.file);
@@ -200,7 +210,7 @@ export const api = {
   withSid,
   // ---- Plex / Jellyfin through the home server (API-v1 "Media servers" > "Playback") ----
   /** {conn, id, audio?} -> {session, url, kind, durationSecs, resumeSecs, title, subtitle, audio, subtitles, next} */
-  mediaPlay: (p) => req('/v1/media/play', { method: 'POST', body: JSON.stringify({ ...p, client: 'web' }) }),
+  mediaPlay: (p) => req('/v1/media/play', { method: 'POST', body: JSON.stringify({ ...p, client: 'web', quality: playQuality() }) }),
   /** state: 'playing' | 'paused' | 'stopped'. keepalive: also when the page is going away. */
   mediaProgress: (session, positionSecs, state, keepalive) => req('/v1/media/progress', { method: 'POST', keepalive: !!keepalive,
     body: JSON.stringify({ session, positionSecs: Math.max(0, Math.round((positionSecs || 0) * 10) / 10), state }) }),

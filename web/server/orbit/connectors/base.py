@@ -411,13 +411,15 @@ class Connector:
     RELAY_PREFIXES: tuple = ()          # upstream paths an HLS playlist of this server may point at
 
     def play_info(self, item_id: str, hls: bool, caps: Optional[dict], audio: Optional[str] = None,
-                  start: Optional[float] = None) -> dict:
+                  start: Optional[float] = None, cap: Optional[tuple] = None) -> dict:
         """What to relay for one film / episode:
         {"kind": "hls"|"file", "path", "container", "durationSecs", "resumeSecs", "title", "subtitle",
          "audio": [{id, label, lang, default}], "subtitles": [{id, label, lang, path, fmt: "srt"|"vtt"}],
          "seriesId", "season", "episode", "ref": {...}}. ``hls``: the client asked for HLS (the web);
         else the original file when ``caps`` allow it. ``ref`` is kept for ``play_report`` / ``play_stop``.
-        ``start``: where the player will start (seconds; None: the resume point), so a transcode starts there."""
+        ``start``: where the player will start (seconds; None: the resume point), so a transcode starts there.
+        ``cap``: (video kbps, height) to stay under (tvbro_server/quality.py: away from home), which means a
+        transcode even for a client that could play the file; None: no limit."""
         raise ConnectorError(400, f"{self.label}: playing through the home server is not supported")
 
     def play_report(self, ref: dict, item_id: str, secs: float, dur: float, state: str, first: bool) -> None:

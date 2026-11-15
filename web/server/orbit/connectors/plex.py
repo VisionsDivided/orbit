@@ -16,6 +16,8 @@ import secrets
 import urllib.parse
 from typing import Optional
 
+from tvbro_server import quality as Q
+
 from .base import (DEVICE_NAME, LIST_KINDS, PAGE, PRODUCT, STATES, VERSION, Connector, ConnectorError, Http, Linked,
                    colors, direct_ok, item, normalize_base_url, safe_id, ticks)
 
@@ -357,7 +359,7 @@ class Plex(Connector):
     # ---- playing through the home server ----
     RELAY_PREFIXES = (TRANSCODE + "/",)
 
-    def play_info(self, item_id: str, hls: bool, caps, audio=None, start=None) -> dict:
+    def play_info(self, item_id: str, hls: bool, caps, audio=None, start=None, cap=None) -> dict:
         iid = safe_id(item_id)
         d = self._meta(iid)
         if d.get("type") not in ("movie", "episode"):
@@ -383,7 +385,7 @@ class Plex(Connector):
                              "lang": s.get("languageCode") or s.get("languageTag") or None,
                              "path": skey.split("?", 1)[0], "fmt": fmt})
         container = str(media.get("container") or part.get("container") or "").lower() or None
-        direct = not hls and direct_ok(caps, container, media.get("videoCodec"), media.get("audioCodec"))
+        direct = not hls and not cap and direct_ok(caps, container, media.get("videoCodec"), media.get("audioCodec"))
         ref = {"session": secrets.token_hex(12), "rated": False, "partId": str(part.get("id") or "")}
         dur = int(ticks(d.get("duration") or media.get("duration")) / 1000)
         resume = int(ticks(d.get("viewOffset")) / 1000)
@@ -400,7 +402,8 @@ class Plex(Connector):
                  "fastSeek": 1, "directPlay": 0, "directStream": 1, "directStreamAudio": 1, "copyts": 1,
                  "subtitles": "none", "subtitleSize": 100, "audioBoost": 100, "location": "lan",
                  "addDebugOverlay": 0, "autoAdjustQuality": 0, "mediaBufferSize": 102400,
-                 "maxVideoBitrate": 20000, "videoQuality": 100, "videoResolution": "1920x1080",
+                 "maxVideoBitrate": cap[0] if cap else 20000, "videoQuality": 100,
+                 "videoResolution": Q.resolution(cap[1]) if cap else "1920x1080",
                  "session": ref["session"], "X-Plex-Session-Identifier": ref["session"],
                  "X-Plex-Client-Profile-Name": "Generic", "X-Plex-Client-Profile-Extra": PROFILE_EXTRA}
             # where the player will start: the transcode starts there (Plex's own clients send "offset" in seconds)

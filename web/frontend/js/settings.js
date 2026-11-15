@@ -4,7 +4,7 @@
 // Direction 5: reached from the avatar; a sub-menu row of categories (Profiles · Playback · Live TV ·
 // Sources · Requests · Appearance · About) shows one group of cards at a time (#settings:<category>).
 
-import { api, cacheClear, loadState } from './api.js';
+import { api, cacheClear, loadState, QUALITIES, playQuality, setPlayQuality } from './api.js';
 import { h, toast, fmtTime, spatialMove } from './util.js';
 import { prefs, setPref } from './prefs.js';
 import { storageDialog } from './recstore.js';
@@ -231,6 +231,10 @@ export function settingsScreen(main, nav, ctx, arg) {
       row('Live preview', select(P.previewOn ? (P.previewMuted ? 'muted' : 'sound') : 'off', [['muted', 'On, muted'], ['sound', 'On, with sound'], ['off', 'Off']],
         (v) => { setPref('previewOn', v !== 'off'); setPref('previewMuted', v !== 'sound'); })),
       row('Channel numbers', select(P.numbering, [['provider', 'Provider numbers'], ['group', 'Per group (1, 2, 3…)']], (v) => setPref('numbering', v))),
+      row('Films and shows quality', select(playQuality(), QUALITIES, (v) => {
+        setPlayQuality(v); toast('Films and shows: ' + QUALITIES.find((q) => q[0] === v)[1] + '. Starts with the next one you play.');
+      })),
+      h('div', { class: 'hint' }, 'Away from home (Tailscale or the internet) the full-quality file is often more than the connection carries, so films and shows take a long time to start. Auto sends the original at home and 720p at 4 Mbps away; choose a level to use it everywhere on this browser.'),
       row('Default audio delay', select(P.audioDelayMs || 0, [0, 50, 100, 150, 200, 300, 400, 500].map((n) => [n, n ? `+${n} ms` : 'None']), (v) => setPref('audioDelayMs', +v))),
       row('Caption size', select(P.captionSize || 100, [[75, 'Small'], [100, 'Normal'], [130, 'Large'], [160, 'Extra large']], (v) => { setPref('captionSize', +v); applyCaptionPrefs(); })),
       row('Caption background', select(P.captionBg || 'shade', [['none', 'None'], ['shade', 'Shaded'], ['solid', 'Solid black']], (v) => { setPref('captionBg', v); applyCaptionPrefs(); })),

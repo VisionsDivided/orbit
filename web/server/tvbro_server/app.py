@@ -46,6 +46,7 @@ from .epgmap import EpgMap
 from . import catcache
 from . import searchidx as SI
 from . import remux as R
+from . import quality as Q
 from .recorder import Recorder, REC_DEFAULTS, REC_ALLOWED
 from .tsindex import read_index, recording_playlist
 from .layout import Layout
@@ -2686,9 +2687,9 @@ class Handler(BaseHTTPRequestHandler):
             ss = max(0.0, p["duration"] - 10)
         return ss
 
-    def _remux_answer(self, job, p: dict, ss: float, file_url: str):
+    def _remux_answer(self, job, p: dict, ss: float, file_url: str, extra: Optional[dict] = None):
         base = f"/remux/{job.rid}/"
-        return self._json({"url": base + "index.m3u8", "fmt": "hls", "file": file_url, "remux": {
+        return self._json({**(extra or {}), "url": base + "index.m3u8", "fmt": "hls", "file": file_url, "remux": {
             "ss": ss, "duration": p["duration"], "info": base + "info.json",
             "audio": [{"label": x["label"], "codec": x["codec"], "channels": x["channels"], "lang": x["lang"]} for x in p["audio"]],
             "audioPos": p["a"]["pos"] if p["a"] else None,
@@ -2703,12 +2704,17 @@ class Handler(BaseHTTPRequestHandler):
     def _vod_play(self, kind: str, vid: str, ext: str):
         """A movie / episode: the provider's file as it is when this browser plays its container,
         else an on-the-fly remux to HLS fMP4 (``remux=1`` forces it, e.g. after the browser
-        refused the file; ``ss`` = start time, ``a`` = audio track position)."""
+        refused the file; ``ss`` = start time, ``a`` = audio track position, ``quality`` = auto / orig / 8 / 4 / 2:
+        a capped level, which "auto" is away from home, means a transcode, see quality.py)."""
         file_url = self._signed("/vodstream", {"kind": kind, "id": vid, "ext": ext})
         client = self._client()
-        force = self.q.get("remux", ["0"])[0] == "1"
+        qual = Q.choose(self.q.get("quality", [""])[0][:8], self._client_ip())
+        if qual["cap"] and not APP.remux.available():
+            qual = {**qual, "level": "orig", "cap": None, "label": Q.LABELS["orig"]}
+        shown = {"quality": Q.public(qual)}
+        force = self.q.get("remux", ["0"])[0] == "1" or bool(qual["cap"])
         if R.vod_mode(ext, client, force) == "file" or not APP.remux.available():
-            return self._json({"url": file_url, "fmt": "file", "file": file_url})
+            return self._json({**shown, "url": file_url, "fmt": "file", "file": file_url})
         sid = self.q.get("sid", [""])[0][:64]
         if not sid:
             return self._err(400, "sid")
@@ -2726,16 +2732,16 @@ class Handler(BaseHTTPRequestHandler):
             a = int(self.q.get("a", [""])[0])
         except ValueError:
             a = None
-        p = R.plan(probe, client, a)
+        p = R.plan(probe, client, a, qual["cap"])
         if not p["ok"]:
             return self._json({"fmt": "external", "why": "This file cannot be played in the browser: " + p["why"] + ".",
                                "file": file_url})
         ss = self._start_secs(p)
         try:
-            job = APP.remux.start(sid, key, url, p, ss)
+            job = APP.remux.start(sid, key + (f":q{qual['level']}" if qual["cap"] else ""), url, p, ss)
         except Exception as e:                      # noqa: BLE001
             return self._json({"fmt": "external", "why": _safe_err(e).split(": ", 1)[-1], "file": file_url})
-        return self._remux_answer(job, p, ss, file_url)
+        return self._remux_answer(job, p, ss, file_url, shown)
 
     def r_remux(self, path: str):
         parts = path.split("/")
