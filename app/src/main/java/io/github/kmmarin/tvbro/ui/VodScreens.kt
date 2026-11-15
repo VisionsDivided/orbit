@@ -406,7 +406,9 @@ fun VodPlayerScreen(m: AppModel) {
             }
         },
     ) {
-        AndroidView(factory = { c -> PlayerView(c).apply { useController = false; player = exo; keepScreenOn = true; pv = this; applyCaptions(this, m) } }, modifier = (if (m.aspectMode >= 3) Modifier.align(Alignment.Center).aspectRatio(if (m.aspectMode == 3) 16f / 9f else 4f / 3f, matchHeightConstraintsFirst = true) else Modifier.fillMaxSize()))
+        AndroidView(factory = { c -> PlayerView(c).apply { useController = false; player = exo; keepScreenOn = true; pv = this; applyCaptions(this, m) } },
+            update = { CropBarsView.of(it).active = m.aspectMode == ASPECT_CROP },
+            modifier = aspectRatioOf(m.aspectMode)?.let { Modifier.align(Alignment.Center).aspectRatio(it, matchHeightConstraintsFirst = true) } ?: Modifier.fillMaxSize())
         if (bar) QuickBar(m, exo, pv, false) { bar = false }
         if (status.isNotEmpty()) Text(status, color = TextMain, fontSize = 18.sp, modifier = Modifier.align(Alignment.TopEnd).padding(24.dp).background(Color(0xAA000000)).padding(10.dp))
         if (overlay) {

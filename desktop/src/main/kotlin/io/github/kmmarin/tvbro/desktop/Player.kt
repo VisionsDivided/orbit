@@ -140,7 +140,10 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
     var info by mutableStateOf(false)
     var menu by mutableStateOf(false)
     var sel by mutableStateOf(0)
-    var aspect by mutableStateOf(0)
+    /** Index in [aspects]; "Fit, crop black bars" ([CROP]) is remembered in the settings, the others last for the run. */
+    var aspect by mutableStateOf(if (app.settings.cropBars) CROP else 0)
+    /** "Fit, crop black bars" of the playing mpv (MpvCropBars). */
+    private var crop: MpvCropBars? = null
     var sleepMin by mutableStateOf(0)
     private var sleepJob: Job? = null
     private var ticker: Job? = null
@@ -154,7 +157,7 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
     private var lastSave = 0L
     private var digits = ""
     private var digitJob: Job? = null
-    val aspects = listOf("Auto" to "-1", "16:9" to "16:9", "4:3" to "4:3", "2.35:1" to "2.35:1", "Fill" to "-1")
+    val aspects = listOf("Auto" to "-1", "Fit, crop black bars" to "-1", "16:9" to "16:9", "4:3" to "4:3", "2.35:1" to "2.35:1", "Fill" to "-1")
     /** The video surface's size in pixels (the overlay's aspect; mouse clicks on it). */
     private var vw = 0
     private var vh = 0
@@ -172,12 +175,13 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
             m.set("audio-delay", "%.3f".format(java.util.Locale.US, app.settings.audioDelayMs / 1000.0))
             applyCaptionStyle(m)
             mpv = m; loadedUrl = null; sw = m.sw
+            crop = MpvCropBars(m); applyAspect(m)
             app.playing?.let { load(it) }
             if (ticker?.isActive != true) ticker = scope.launch { while (true) { delay(500); tick() } }
         } catch (e: Throwable) { Diag.log("mpv start failed: ${e.message}"); app.toast("Video engine failed: ${e.message}") }
     }
 
-    fun detach() { saveResume(); ticker?.cancel(); sw = null; mpv?.destroy(); mpv = null; loadedUrl = null }
+    fun detach() { saveResume(); ticker?.cancel(); sw = null; crop = null; mpv?.destroy(); mpv = null; loadedUrl = null }
 
     private fun applyCaptionStyle(m: Mpv) {
         m.set("sub-font-size", listOf("40", "55", "72")[app.settings.captionSize.coerceIn(0, 2)])
@@ -334,6 +338,7 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
     }
 
     private fun onLoaded() {
+        crop?.newFile() // a new title: the full frame until its own bars are found
         val r = req ?: return
         val m = mpv ?: return
         // Plex / Jellyfin: the server's WebVTT subtitles next to the file's own tracks (S / quick action Subtitles)
@@ -413,6 +418,7 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
             if (upNextAt > 0 && t - upNextAt >= Watch.UP_NEXT_COUNTDOWN_S * 1000L) { upNextAt = 0; playNext(); return }
         }
         if ((barShown || menu) && t - lastInput > 5000) { barShown = false; menu = false }
+        crop?.tick(t, vw, vh)
         redraw(m)
     }
 
@@ -543,11 +549,17 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
             }
             "aspect" -> {
                 aspect = (aspect + d + aspects.size) % aspects.size
-                m.set("video-aspect-override", aspects[aspect].second)
-                m.set("panscan", if (aspects[aspect].first == "Fill") "1.0" else "0.0")
+                applyAspect(m)
+                if (app.settings.cropBars != (aspect == CROP)) app.update { it.copy(cropBars = aspect == CROP) }
             }
         }
         redraw(m)
+    }
+
+    private fun applyAspect(m: Mpv) {
+        m.set("video-aspect-override", aspects[aspect].second)
+        m.set("panscan", if (aspects[aspect].first == "Fill") "1.0" else "0.0")
+        crop?.enable(aspect == CROP)
     }
 
     /** The quick action Channels: the current group's channels in a pick list (its own window, above the video). */
@@ -794,5 +806,7 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
     private companion object {
         /** Quick actions whose value Up / Down step (the others only run on Enter). */
         val STEPPED = setOf("sleep", "quality", "delay", "aspect")
+        /** [aspects] index of "Fit, crop black bars". */
+        const val CROP = 1
     }
 }

@@ -118,6 +118,8 @@ data class Settings(
     val askWho: Boolean = true,
     /** Orbit: per-channel live stream format of the signed-in profile (shared ChannelFormats as JSON; "" = none). */
     val channelFormats: String = "",
+    /** The player's aspect is "Fit, crop black bars" (MpvCropBars); the other aspect choices last for the run. */
+    val cropBars: Boolean = false,
 )
 
 /**

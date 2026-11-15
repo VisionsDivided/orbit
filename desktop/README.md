@@ -93,6 +93,12 @@ Video output: Windows and Linux draw with mpv's `wid`; macOS renders frames in s
 `testdata/sw-pattern.mp4`, made with
 `ffmpeg -filter_complex "color=c=red:s=160x240:r=25:d=2[a];color=c=blue:s=160x240:r=25:d=2[b];[a][b]hstack,format=yuv420p[v]" -map "[v]" -c:v libx264 -preset veryslow -crf 16 -tune stillimage sw-pattern.mp4`.
 
+Aspect "Fit, crop black bars" (`MpvCropBars.kt`, remembered as `cropBars` in the settings): a labelled cropdetect
+filter finds the picture and `video-crop` (mpv 0.38+; a crop filter before that) removes the bars, only when that
+fills more of the window. Real-libmpv check: `TVBRO_TEST_LIBMPV=... ./gradlew :desktop:test --tests "*MpvCropBarsRealTest*"`
+plays `testdata/letterbox-239.mp4` (testsrc2 at 1280x536 with 92-row bars to 1280x720), made with
+`ffmpeg -f lavfi -i "testsrc2=size=1280x536:rate=10:duration=3" -vf "pad=1280:720:0:92:black" -c:v libx264 -preset veryslow -crf 40 -pix_fmt yuv420p -an -movflags +faststart letterbox-239.mp4`.
+
 Orbit design shots: `./gradlew :desktop:test --tests "*DesignShotsTest*"` renders the direction-5 screens off-screen at
 1280 × 760 into `desktop/build/orbit-shots/` (Home and Movies local and from a made-up catalogue, the title page,
 search, the guide, Settings, both "Who's watching?" styles, the stream prompt). The player overlay is ASS drawn by mpv

@@ -203,8 +203,8 @@ fun LiveVideo(m: AppModel) {
             ) {
                 AndroidView(
                     factory = { c -> PlayerView(c).apply { useController = false; player = exo; m.livePv = this; applyCaptions(this, m) } },
-                    update = { it.keepScreenOn = full },
-                    modifier = if (full && m.aspectMode >= 3) Modifier.align(Alignment.Center).aspectRatio(if (m.aspectMode == 3) 16f / 9f else 4f / 3f, matchHeightConstraintsFirst = true) else Modifier.fillMaxSize(),
+                    update = { it.keepScreenOn = full; CropBarsView.of(it).active = full && m.aspectMode == ASPECT_CROP },
+                    modifier = aspectRatioOf(m.aspectMode)?.takeIf { full }?.let { Modifier.align(Alignment.Center).aspectRatio(it, matchHeightConstraintsFirst = true) } ?: Modifier.fillMaxSize(),
                 )
             }
         }

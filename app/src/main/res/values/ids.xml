@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright 2026 The Orbit authors. SPDX-License-Identifier: Apache-2.0 -->
+<resources>
+    <!-- View tag key: the "Fit, crop black bars" helper of a PlayerView (ui/CropBarsView.kt) -->
+    <item name="orbit_cropbars" type="id" />
+</resources>
