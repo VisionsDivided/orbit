@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import calendar
 import json
+import logging
 import re
 import socket
 import time
@@ -40,15 +41,39 @@ JSON_LIMIT = 8 * 1024 * 1024
 IMAGE_LIMIT = 5 * 1024 * 1024
 IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")     # never SVG (script) or HTML
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+LOG = logging.getLogger("orbit.media.http")
+SNIPPET = 300                         # bytes of an upstream error body kept for the log (redacted)
+_SECRET_RE = re.compile(r"(?i)(x-plex-token|x-emby-token|x-mediabrowser-token|api_key|apikey|access_?token|authtoken|"
+                        r"token)(\"?\s*[=:]\s*\"?)[^&\s\"'<>,;]*")
+
+
+def redact(text, secrets_: tuple = ()) -> str:
+    """A short, single-line, token-free version of an upstream body for the log."""
+    s = text.decode("utf-8", "replace") if isinstance(text, (bytes, bytearray)) else str(text or "")
+    for t in secrets_:
+        if t and len(t) >= 6:
+            s = s.replace(t, "REDACTED")
+    s = _SECRET_RE.sub(lambda m: m.group(1) + m.group(2) + "REDACTED", s)
+    s = re.sub(r"[\x00-\x1f\x7f]+", " ", s).strip()
+    return s[:SNIPPET]
+
+
+def error_body(e) -> bytes:
+    """Up to a few KB of an HTTPError's body (never raises)."""
+    try:
+        return e.read(4096) or b""
+    except Exception:                         # noqa: BLE001
+        return b""
 
 
 class ConnectorError(Exception):
     """``code`` is the /v1 status to answer: 400 bad input, 404 not on the server, 409 the link needs a new
     sign-in (``relink``) or the server refuses the action, 502 the server could not be reached / answered oddly."""
 
-    def __init__(self, code: int, msg: str, relink: bool = False):
+    def __init__(self, code: int, msg: str, relink: bool = False, status: int = 0, body: str = ""):
         super().__init__(msg)
         self.code, self.msg, self.relink = code, msg, relink
+        self.status, self.body = status, body          # the server's HTTP status and redacted body (for the log)
 
 
 @dataclass
@@ -201,6 +226,7 @@ class Http:
     def __init__(self, label: str, timeout: float = 15, opener=None):
         self.label, self.timeout = label, timeout
         self.opener = opener or NET.open_url
+        self.secrets: tuple = ()             # the connector's token(s): removed from logged bodies
 
     def raw(self, method: str, url: str, headers: Optional[dict] = None, body=None, limit: int = JSON_LIMIT,
             timeout: Optional[float] = None) -> tuple:
@@ -216,12 +242,17 @@ class Http:
             with self.opener(url, timeout=timeout or self.timeout, headers=hdr, data=data, method=method) as r:
                 return r.status, r.headers.get("Content-Type") or "", NET.read_capped(r, limit)
         except urllib.error.HTTPError as e:
+            body = redact(error_body(e), self.secrets)
             e.close()
+            # which request (method and path, never the host or query) and what the server said
+            LOG.warning("%s: %s %s answered %d: %s", self.label, method, urllib.parse.urlsplit(url).path[:120],
+                        e.code, body or "(empty body)")
             if e.code in (401, 403):
-                raise ConnectorError(409, f"{self.label}: the sign-in is no longer valid; link it again", relink=True)
+                raise ConnectorError(409, f"{self.label}: the sign-in is no longer valid; link it again", relink=True,
+                                     status=e.code, body=body)
             if e.code == 404:
-                raise ConnectorError(404, f"{self.label}: not found on the server")
-            raise ConnectorError(502, f"{self.label}: the server answered {e.code}")
+                raise ConnectorError(404, f"{self.label}: not found on the server", status=e.code, body=body)
+            raise ConnectorError(502, f"{self.label}: the server answered {e.code}", status=e.code, body=body)
         except ValueError:                    # read_capped: too large
             raise ConnectorError(502, f"{self.label}: the answer is too large")
         except (urllib.error.URLError, socket.timeout, OSError) as e:
@@ -252,6 +283,8 @@ class Connector:
         self.user_id = user_id
         self.device_id = device_id
         self.http = http or Http(self.label)
+        if token:
+            self.http.secrets = tuple({*self.http.secrets, token})
 
     def __repr__(self):                       # never the token
         return f"<{type(self).__name__} {self.base}>"
@@ -320,12 +353,14 @@ class Connector:
     # Paths are relative to ``self.base`` and never carry the token (the relay sends ``auth_headers``).
     RELAY_PREFIXES: tuple = ()          # upstream paths an HLS playlist of this server may point at
 
-    def play_info(self, item_id: str, hls: bool, caps: Optional[dict], audio: Optional[str] = None) -> dict:
+    def play_info(self, item_id: str, hls: bool, caps: Optional[dict], audio: Optional[str] = None,
+                  start: Optional[float] = None) -> dict:
         """What to relay for one film / episode:
         {"kind": "hls"|"file", "path", "container", "durationSecs", "resumeSecs", "title", "subtitle",
          "audio": [{id, label, lang, default}], "subtitles": [{id, label, lang, path, fmt: "srt"|"vtt"}],
          "seriesId", "season", "episode", "ref": {...}}. ``hls``: the client asked for HLS (the web);
-        else the original file when ``caps`` allow it. ``ref`` is kept for ``play_report`` / ``play_stop``."""
+        else the original file when ``caps`` allow it. ``ref`` is kept for ``play_report`` / ``play_stop``.
+        ``start``: where the player will start (seconds; None: the resume point), so a transcode starts there."""
         raise ConnectorError(400, f"{self.label}: playing through the home server is not supported")
 
     def play_report(self, ref: dict, item_id: str, secs: float, dur: float, state: str, first: bool) -> None:
@@ -334,6 +369,17 @@ class Connector:
 
     def play_stop(self, ref: dict) -> None:
         """Best effort: end the server's transcode of a relayed playback."""
+
+    def explain(self, status: int, body: str, what: str) -> Optional[str]:
+        """A plain-English reason for a failed relay request (``what``: "playlist", "segment", "file",
+        "subtitles"), from the server's status and redacted body, or None for the generic message."""
+        return None
+
+    def play_cleanup(self, live: set) -> int:
+        """Best effort, after the server refused to start a transcode: stop this server's transcodes that were
+        started by this connection (its client identifier) and are not in ``live`` (the ``ref["session"]`` of the
+        playbacks Orbit still has, e.g. left over from before a restart). Returns how many were stopped."""
+        return 0
 
     def next_episode(self, series_id: Optional[str], season, episode) -> Optional[dict]:
         """The episode after (season, episode) of a series, into the next season, or None."""

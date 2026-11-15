@@ -250,7 +250,7 @@ class Jellyfin(Connector):
     # ---- playing through the home server ----
     RELAY_PREFIXES = ("/videos/",)        # compared in lower case (Jellyfin answers "/videos/...")
 
-    def play_info(self, item_id: str, hls: bool, caps, audio=None) -> dict:
+    def play_info(self, item_id: str, hls: bool, caps, audio=None, start=None) -> dict:
         iid = safe_id(item_id)
         d = self._get(f"/Users/{self._user()}/Items/{iid}")
         if not isinstance(d, dict) or not d.get("Id"):

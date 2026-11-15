@@ -9,6 +9,9 @@ stored, so the link works with that server only. Requests send the token as the 
 ask for JSON (``Accept: application/json``)."""
 from __future__ import annotations
 
+import json
+import logging
+import re
 import secrets
 import urllib.parse
 from typing import Optional
@@ -32,6 +35,57 @@ PROFILE_EXTRA = ("add-transcode-target(type=videoProfile&context=streaming&proto
                  "+add-limitation(scope=videoAudioCodec&scopeName=aac&type=upperBound&name=audio.channels&value=2)")
 SUB_FMT = {"srt": "srt", "subrip": "srt", "vtt": "vtt", "webvtt": "vtt"}
 SCROBBLE_AT = 0.9                     # "watched" from 90 % on
+LOG = logging.getLogger("orbit.media.plex")
+# plain-English reasons for the client when Plex refuses a playback
+TRANSCODE_LIMIT = ("Plex is already transcoding as much as it's allowed; stop another stream or raise the limit in "
+                   "Plex \u25b8 Settings \u25b8 Transcoder")
+STREAM_LIMIT = "Plex says this account has reached its number of allowed streams; stop another playback and try again"
+_DECISION_KEYS = ("generalDecisionCode", "generalDecisionText", "directPlayDecisionCode", "directPlayDecisionText",
+                  "transcodeDecisionCode", "transcodeDecisionText")
+_DECISION_XML = re.compile(r'(' + "|".join(_DECISION_KEYS) + r')="([^"]{0,300})"')
+
+
+def _int(v) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
+def decision_of(body) -> dict:
+    """The decision fields of a Plex answer (a JSON MediaContainer, or XML attributes), else {}."""
+    if isinstance(body, dict):
+        mc = _mc(body)
+        return {k: mc[k] for k in _DECISION_KEYS if k in mc}
+    text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else str(body or "")
+    try:
+        d = decision_of(json.loads(text))
+        if d:
+            return d
+    except (ValueError, AttributeError):
+        pass
+    return {k: v for k, v in _DECISION_XML.findall(text)}
+
+
+def decision_refusal(d: dict) -> Optional[str]:
+    """A plain-English reason when a decision says Plex will not play (general code 2000 and up), else None."""
+    gen = _int(d.get("generalDecisionCode"))
+    if gen < 2000:
+        return None
+    texts = [str(d.get(k) or "").strip() for k in ("generalDecisionText", "transcodeDecisionText", "directPlayDecisionText")]
+    return reason_text(" ".join(t for t in texts if t), gen)
+
+
+def reason_text(text: str, code: int = 0) -> str:
+    low = text.lower()
+    if "allowed streams" in low or "number of allowed" in low:
+        return STREAM_LIMIT
+    if re.search(r"transcod|conver", low) and re.search(r"limit|maximum|too many|busy|capacity", low):
+        return TRANSCODE_LIMIT
+    clean = re.sub(r"[^\w .,;:'()/-]+", " ", text).strip()[:160]
+    if clean:
+        return f"Plex will not play this title: {clean}"
+    return f"Plex will not play this title (decision {code})" if code else "Plex will not play this title"
 
 
 def client_headers(device_id: str, token: Optional[str] = None) -> dict:
@@ -303,7 +357,7 @@ class Plex(Connector):
     # ---- playing through the home server ----
     RELAY_PREFIXES = (TRANSCODE + "/",)
 
-    def play_info(self, item_id: str, hls: bool, caps, audio=None) -> dict:
+    def play_info(self, item_id: str, hls: bool, caps, audio=None, start=None) -> dict:
         iid = safe_id(item_id)
         d = self._meta(iid)
         if d.get("type") not in ("movie", "episode"):
@@ -331,6 +385,8 @@ class Plex(Connector):
         container = str(media.get("container") or part.get("container") or "").lower() or None
         direct = not hls and direct_ok(caps, container, media.get("videoCodec"), media.get("audioCodec"))
         ref = {"session": secrets.token_hex(12), "rated": False, "partId": str(part.get("id") or "")}
+        dur = int(ticks(d.get("duration") or media.get("duration")) / 1000)
+        resume = int(ticks(d.get("viewOffset")) / 1000)
         if direct:
             path, kind = key, "file"
         else:
@@ -347,11 +403,23 @@ class Plex(Connector):
                  "maxVideoBitrate": 20000, "videoQuality": 100, "videoResolution": "1920x1080",
                  "session": ref["session"], "X-Plex-Session-Identifier": ref["session"],
                  "X-Plex-Client-Profile-Name": "Generic", "X-Plex-Client-Profile-Extra": PROFILE_EXTRA}
+            # where the player will start: the transcode starts there (Plex's own clients send "offset" in seconds)
+            # instead of at 0 with a seek right after it; the playlist still covers the whole title
+            at = start if start is not None else (resume if resume and (not dur or resume < dur - 30) else 0)
+            try:
+                at = max(0, int(float(at)))
+            except (TypeError, ValueError):
+                at = 0
+            if dur and at >= dur:
+                at = 0
+            q["offset"] = at
+            ref["offset"] = at
+            self._decide(q)
             path, kind = TRANSCODE + "/start.m3u8?" + urllib.parse.urlencode(q), "hls"
         ep = d.get("type") == "episode"
         return {"kind": kind, "path": path, "container": container if kind == "file" else "ts",
-                "durationSecs": int(ticks(d.get("duration") or media.get("duration")) / 1000) or None,
-                "resumeSecs": int(ticks(d.get("viewOffset")) / 1000) or None,
+                "durationSecs": dur or None,
+                "resumeSecs": resume or None,
                 "title": str((d.get("grandparentTitle") if ep else None) or d.get("title") or "")[:300],
                 "subtitle": (f"S{d.get('parentIndex')} E{d.get('index')} · {d.get('title') or ''}".strip(" ·")
                              if ep else None),
@@ -359,6 +427,61 @@ class Plex(Connector):
                 "seriesId": (str(d.get("grandparentRatingKey") or "") or None) if ep else None,
                 "season": d.get("parentIndex") if ep else None, "episode": d.get("index") if ep else None,
                 "ref": ref}
+
+    def _decide(self, q: dict) -> None:
+        """The universal transcoder's decision with the start parameters, as Plex's own web client asks before
+        start.m3u8. A refusal is raised in plain English; a server that does not answer it is logged (status and
+        body, by Http) and the start is tried anyway."""
+        try:
+            ans = self.http.json("GET", self.base + TRANSCODE + "/decision?" + urllib.parse.urlencode(q),
+                                 self.auth_headers())
+        except ConnectorError as e:
+            if e.relink:
+                raise
+            LOG.warning("Plex decision failed (%s); starting the transcode anyway", e.status or e.msg)
+            return
+        d = decision_of(ans) if isinstance(ans, dict) else {}
+        why = decision_refusal(d)
+        LOG.info("Plex decision: general %s %r, transcode %s %r, offset %s s", d.get("generalDecisionCode"),
+                 str(d.get("generalDecisionText") or "")[:120], d.get("transcodeDecisionCode"),
+                 str(d.get("transcodeDecisionText") or "")[:120], q.get("offset"))
+        if why:
+            raise ConnectorError(409, why)
+
+    def explain(self, status: int, body: str, what: str) -> Optional[str]:
+        why = decision_refusal(decision_of(body))
+        if why:
+            return why
+        if what == "playlist" and status not in (401, 403, 404):
+            return (f"Plex refused to start transcoding this title (it answered {status}). Try again; if it keeps "
+                    "failing, Orbit's server log has Plex's exact answer")
+        if what == "segment" and status not in (401, 403, 404):
+            return f"Plex stopped sending this title (it answered {status}); try again"
+        return None
+
+    def play_cleanup(self, live: set) -> int:
+        """Transcodes Plex lists for this connection's client identifier that Orbit no longer knows about."""
+        try:
+            ans = self._get("/status/sessions")
+        except ConnectorError as e:
+            LOG.info("Plex sessions could not be listed (%s)", e.status or e.msg)
+            return 0
+        gone = 0
+        for m in _mc(ans).get("Metadata") or []:
+            if not isinstance(m, dict):
+                continue
+            player = m.get("Player") or {}
+            ts = m.get("TranscodeSession") or {}
+            sid = str(ts.get("key") or "").rsplit("/", 1)[-1]
+            if str(player.get("machineIdentifier") or "") != self.device_id or not sid or sid in live:
+                continue
+            try:
+                self.play_stop({"session": safe_id(sid)})
+                gone += 1
+            except ConnectorError:
+                pass
+        LOG.warning("Plex: stopped %d leftover transcode(s) of this Orbit connection", gone)
+        return gone
 
     def play_report(self, ref: dict, item_id: str, secs: float, dur: float, state: str, first: bool) -> None:
         if state not in STATES:
