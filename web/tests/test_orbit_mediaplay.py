@@ -698,7 +698,11 @@ class RealServer(TM.Server):
         self.assertEqual(self.req("GET", w["url"])[0], 404)
         self.log.flush()
         with open(os.path.join(self.tmp, "server.log"), "rb") as f:
-            self.assertNotIn(TM.JF_PW_TOKEN.encode(), f.read())
+            log = f.read()
+        self.assertNotIn(TM.JF_PW_TOKEN.encode(), log)
+        self.assertIn(b"/v1/media/stream/-/", log, "stream requests are logged without their session id")
+        for s in (a["session"], w["session"], sid):
+            self.assertNotIn(s.encode(), log, "a play-session id is a capability: never in the log")
 
 
 if __name__ == "__main__":

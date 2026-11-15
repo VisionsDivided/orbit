@@ -113,6 +113,9 @@ class Pure(unittest.TestCase):
         p = "/xt/p0/live/tv0123456789abcdef/" + "c" * 32 + "/101.ts"
         self.assertEqual(F.redact(p), "/xt/p0/live/-/-/101.ts")
         self.assertEqual(F.redact("/api/state"), "/api/state")
+        sid = "Ab_" + "c" * 29
+        self.assertEqual(F.redact("/v1/media/stream/%s/u/videos/m1/0.ts" % sid), "/v1/media/stream/-/u/videos/m1/0.ts")
+        self.assertEqual(F.redact('"GET /v1/media/stream/%s/master.m3u8" 200' % sid), '"GET /v1/media/stream/-/master.m3u8" 200')
 
 
 @mock.patch("tvbro_server.auth.ITERATIONS", 1000)

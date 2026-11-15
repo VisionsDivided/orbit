@@ -112,7 +112,7 @@ server relays everything from the provider: catalogue, guide and **every byte of
 - **A provider on the LAN** (e.g. a tvheadend box) needs "Playlists and streams on your local network" allowed, as
   for browsers: the relay follows the same address rules (`net.py`).
 - The container's nginx proxies `/xt/` without buffering (`infra/docker/nginx.conf`); a TLS proxy in front needs
-  `proxy_buffering off` and long timeouts too (see above). Logs show facade addresses as `/xt/<id>/<kind>/-/-/…`.
+  `proxy_buffering off` and long timeouts too (see above). Logs show facade addresses as `/xt/<id>/<kind>/-/-/…` and Plex / Jellyfin play addresses as `/v1/media/stream/-/…` (the play-session id is the capability, so it is left out).
 
 ## Rules
 

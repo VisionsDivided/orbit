@@ -86,9 +86,13 @@ def forced() -> bool:
 _LOGIN_IN_PATH = re.compile(r"(/xt/[^/\s?]+/[a-z]+/)[^/\s?]+/[^/\s?]+")
 
 
+_PLAY_IN_PATH = re.compile(r"(/v1/media/stream/)[^/\s?]+")
+
+
 def redact(text: str) -> str:
-    """A request path (or log line) with any facade device login in it replaced by '-/-'."""
-    return _LOGIN_IN_PATH.sub(r"\1-/-", text or "")
+    """A request path (or log line) with any facade device login in it replaced by '-/-', and any play-session id
+    (the capability of a /v1/media/stream/<session>/... address) by '-'."""
+    return _PLAY_IN_PATH.sub(r"\1-", _LOGIN_IN_PATH.sub(r"\1-/-", text or ""))
 
 
 def gunzip_capped(data: bytes, cap: int) -> bytes:
