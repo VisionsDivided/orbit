@@ -87,6 +87,20 @@ If the proxy's address is not listed, everything still works, but every client l
 throttle for all of them, and the proxy's address on the "Link a TV" screen. Only list proxies you run: a trusted
 address can claim to forward for anyone. Session cookies get `Secure` when a trusted proxy says the page was https.
 
+## Films and shows away from home
+
+At home a film or episode is sent as it is, often 8 to 20 Mbit/s. Over Tailscale or the internet that is usually
+more than the link carries, and the player waits a long time before the picture starts. So a device that is away
+gets a transcode instead: 720p at 4 Mbit/s by default (`ORBIT_AWAY_QUALITY`: `8` for 1080p at 8 Mbit/s, `4`, `2`
+for 480p at 2 Mbit/s, or `orig` for no limit). The web app's Settings ▸ This browser ▸ Films and shows quality
+overrides it per browser. Plex and Jellyfin do the transcode themselves; IPTV films and episodes are converted by
+this server's ffmpeg (about one CPU core per film at 720p).
+
+"Away" means a public address or a Tailscale address (100.64.0.0/10, fd7a:115c:a1e0::/48). If your VPN arrives
+through a router that does NAT (a Tailscale subnet router on the router), remote devices look like the router's LAN
+address: add it to `ORBIT_AWAY_NETS` (comma-separated addresses or CIDR ranges), for example
+`ORBIT_AWAY_NETS: "192.0.2.1"`. Devices at home must not share that address.
+
 ## Hidden provider logins: TV video flows through the server
 
 By default linked TVs never receive the IPTV provider's login (API-v1.md, "Hidden provider logins"). They get

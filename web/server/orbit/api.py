@@ -13,7 +13,7 @@ from typing import Callable, Optional
 from .accounts import DEVICE_KINDS, Accounts, ApiError
 from .pairing import Pairings
 from . import progress as PROG
-from .media import MediaServers, Raw
+from .media import CLIENT_KEY, MediaServers, Raw
 
 # paths that work without a session (setup / sign-in / TV pairing send X-TvBro: 1 instead of a CSRF token)
 PUBLIC_GET = {"/v1/status"}
@@ -91,7 +91,8 @@ class Api:
         }
         if media is not None:                             # Plex / Jellyfin (orbit/media.py)
             for key, fn in media.routes().items():
-                r[key] = lambda c, fn=fn: self._media(fn(c.sess, c.body, c.query))
+                # the client's address goes in under a name no query string can carry (play: away from home)
+                r[key] = lambda c, fn=fn: self._media(fn(c.sess, c.body, {**c.query, CLIENT_KEY: c.client}))
         self.media = media
         self.routes = r
         # routes with an id in the path ("/v1/catalog/collections/<id>"): (method, prefix) -> handler, which reads

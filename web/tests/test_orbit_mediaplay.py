@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -567,6 +568,42 @@ class Play(unittest.TestCase):
         self.assertEqual(self.call("POST", "/v1/media/play", self.alex, {"conn": cid, "id": "10", "client": "web"})[0], 502)
 
     # ---- Jellyfin ----
+    def play_from(self, addr, conn, iid, client, **kw):
+        """POST /v1/media/play from a client at ``addr`` (the other tests come from a home address)."""
+        rep = self.api.handle(TM.V1.Call("POST", "/v1/media/play", self.alex,
+                                         {"conn": conn, "id": iid, "client": client, **kw}, addr, {}))
+        return rep.code, rep.obj
+
+    def test_away_from_home_plex_gets_a_capped_transcode(self):
+        cid = self.link_plex()["id"]
+        with mock.patch.dict(os.environ, {"ORBIT_AWAY_NETS": "", "ORBIT_AWAY_QUALITY": ""}):
+            code, a = self.play_from("100.101.102.103", cid, "10", "tv")       # Tailscale
+            self.assertEqual(code, 200, a)
+            self.assertEqual((a["kind"], a["quality"]), ("hls", {"level": "4", "away": True, "label": "720p · 4 Mbps"}),
+                             "a TV that could play the file gets a transcode under the cap away from home")
+            q = self.seen(self.px, "GET", "/video/:/transcode/universal/decision")[-1]["query"]
+            self.assertEqual((q["maxVideoBitrate"], q["videoResolution"]), ("4000", "1280x720"))
+            code, a = self.play_from("100.101.102.103", cid, "10", "tv", quality="orig")
+            self.assertEqual((a["kind"], a["quality"]["level"]), ("file", "orig"), "Original away: the file")
+            code, a = self.play_from("192.168.1.20", cid, "10", "web", quality="2")
+            q = self.seen(self.px, "GET", "/video/:/transcode/universal/decision")[-1]["query"]
+            self.assertEqual((a["quality"], q["maxVideoBitrate"], q["videoResolution"]),
+                             ({"level": "2", "away": False, "label": "480p · 2 Mbps"}, "2000", "854x480"))
+            a = self.play(self.alex, cid, "10", "web")                       # home, auto: as before
+            q = self.seen(self.px, "GET", "/video/:/transcode/universal/decision")[-1]["query"]
+            self.assertEqual((a["quality"]["level"], q["maxVideoBitrate"]), ("orig", "20000"))
+            self.assertEqual(self.play_from("192.168.1.20", cid, "10", "web", quality="9000")[0], 400)
+
+    def test_away_from_home_jellyfin_gets_a_capped_transcode(self):
+        cid = self.link_jellyfin_qc()["id"]
+        with mock.patch.dict(os.environ, {"ORBIT_AWAY_NETS": "192.0.2.1", "ORBIT_AWAY_QUALITY": ""}):
+            code, a = self.play_from("192.0.2.1", cid, "m1", "tv")             # the VPN router, listed
+            self.assertEqual((code, a["kind"], a["quality"]["away"]), (200, "hls", True), a)
+            info = self.jstate["infos"][-1]
+            self.assertEqual((info["EnableDirectPlay"], info["MaxStreamingBitrate"], info["DeviceProfile"]["MaxStreamingBitrate"]),
+                             (False, 4_000_000, 4_000_000))
+            self.assertEqual(info["DeviceProfile"]["CodecProfiles"][0]["Conditions"][0]["Value"], "720")
+
     def test_jellyfin_web_hls_and_tv_file(self):
         cid = self.link_jellyfin_qc()["id"]
         a = self.play(self.alex, cid, "m1", "web")

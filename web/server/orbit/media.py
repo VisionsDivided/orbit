@@ -46,6 +46,10 @@ MANAGERS = ("owner", "admin")
 COLS = "id, kind, base_url, server_name, server_id, user_id, user_name, device_id, created, last_ok"
 
 
+# the client's address, added to a route's query by orbit/api.py under a name no query string can carry (a NUL)
+CLIENT_KEY = "\x00client"
+
+
 @dataclass
 class Raw:
     """A non-JSON answer (artwork)."""
@@ -409,11 +413,12 @@ class MediaServers:
         r, ans = self._use(sess, b.get("conn"), lambda c: c.playback(b.get("id")))
         return {**ans, "conn": r[0], "source": r[1]}
 
-    def play(self, sess: dict, b: dict) -> dict:
-        """Start playing a film / episode through this server (orbit/mediaplay.py)."""
+    def play(self, sess: dict, b: dict, addr: str = "") -> dict:
+        """Start playing a film / episode through this server (orbit/mediaplay.py). ``addr``: the client's address
+        (a lower quality cap away from home)."""
         r, c = self.connector(sess, b.get("conn"))
         out = self.plays.start(sess, r, c, b.get("id"), b.get("client"), b.get("caps"), b.get("audio"),
-                               b.get("startSecs"))
+                               b.get("startSecs"), b.get("quality"), addr)
         self._ok(r)
         return out
 
@@ -469,7 +474,7 @@ class MediaServers:
             ("GET", "/v1/media/children"): lambda s, b, q: self.children(s, q),
             ("GET", "/v1/media/image"): lambda s, b, q: self.image(s, q),
             ("POST", "/v1/media/playback"): lambda s, b, q: self.playback(s, b),
-            ("POST", "/v1/media/play"): lambda s, b, q: self.play(s, b),
+            ("POST", "/v1/media/play"): lambda s, b, q: self.play(s, b, q.get(CLIENT_KEY, "")),
             ("POST", "/v1/media/progress"): lambda s, b, q: self.progress(s, b),
             ("POST", "/v1/media/watched"): lambda s, b, q: self.watched(s, b),
         }
