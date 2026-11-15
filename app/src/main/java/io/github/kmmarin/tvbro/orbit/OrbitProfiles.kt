@@ -20,8 +20,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 
-/** A profile of the linked account (`Profile` in docs/orbit/API-v1.md). */
-data class OrbitProfile(val id: String, val name: String, val kids: Boolean)
+// OrbitProfile (a profile of the linked account) is in shared/: orbit/OrbitApi.kt
 
 /** "Who's watching?" look: the orbit ring or one classic row (Settings ▸ Home server). */
 enum class PickerStyle(val label: String) { ORBIT("Orbit"), CLASSIC("Classic") }
