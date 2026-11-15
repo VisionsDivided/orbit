@@ -1215,7 +1215,7 @@ def static_path(root: str, path: str) -> str | None:
     ``frontend-old``): both sides are resolved with realpath and compared with os.path.commonpath."""
     base = os.path.realpath(root)
     rel = (path or "").lstrip("/\\") or "index.html"
-    if "\x00" in rel:
+    if "\x00" in rel or "\\" in rel:          # backslash is a separator on Windows: refuse it everywhere
         return None
     full = os.path.realpath(os.path.join(base, rel))
     try:

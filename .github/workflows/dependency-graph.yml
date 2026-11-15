@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   submit:
+    # Forks have GitHub's dependency graph switched off, and the submission fails there; run it only upstream.
+    if: github.repository == 'kmmarin/tvBro'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
