@@ -1206,6 +1206,23 @@ class App:
 
 
 APP: App | None = None
+
+
+def static_path(root: str, path: str) -> str | None:
+    """The file under ``root`` that a request path names, or None when it would leave ``root`` (``..``, an absolute
+    path, a symbolic link out of it, or a sibling folder whose name merely starts with root's, like
+    ``frontend-old``): both sides are resolved with realpath and compared with os.path.commonpath."""
+    base = os.path.realpath(root)
+    rel = (path or "").lstrip("/\\") or "index.html"
+    if "\x00" in rel:
+        return None
+    full = os.path.realpath(os.path.join(base, rel))
+    try:
+        if os.path.commonpath([base, full]) != base:
+            return None
+    except ValueError:                        # another drive (Windows)
+        return None
+    return full
 _INFO_CACHE: dict[str, tuple[float, dict]] = {}
 
 
@@ -2010,9 +2027,8 @@ class Handler(BaseHTTPRequestHandler):
         self._err(404, "not found")
 
     def _serve_static(self, root, path):
-        rel = path.lstrip("/") or "index.html"
-        full = os.path.normpath(os.path.join(root, rel))
-        if not full.startswith(os.path.abspath(root)):
+        full = static_path(root, path)
+        if full is None:
             return self._err(403, "path")
         if os.path.isdir(full):
             full = os.path.join(full, "index.html")

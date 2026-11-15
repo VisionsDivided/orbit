@@ -255,6 +255,27 @@ class Units(unittest.TestCase):
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
+    def test_static_files_stay_in_their_folder(self):
+        """L10: realpath + commonpath, so a sibling folder that shares the name prefix is not reachable."""
+        from tvbro_server import app as A
+        d = tempfile.mkdtemp()
+        try:
+            root = os.path.join(d, "frontend")
+            os.makedirs(os.path.join(root, "js"))
+            os.makedirs(os.path.join(d, "frontend-old"))
+            for p in (os.path.join(root, "index.html"), os.path.join(root, "js", "a.js"),
+                      os.path.join(d, "frontend-old", "secret.txt")):
+                with open(p, "w") as f:
+                    f.write("x")
+            real = os.path.realpath(root)
+            self.assertEqual(A.static_path(root, "/js/a.js"), os.path.join(real, "js", "a.js"))
+            self.assertEqual(A.static_path(root, "/"), os.path.join(real, "index.html"))
+            for bad in ("/../frontend-old/secret.txt", "/js/../../frontend-old/secret.txt", "/../../etc/passwd",
+                        "/..\\frontend-old\\secret.txt", "/a\x00b"):
+                self.assertIsNone(A.static_path(root, bad), bad)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
     def test_password_hash_and_throttle(self):
         h = AU.hash_password("correct horse", iterations=1000)
         self.assertTrue(h.startswith("pbkdf2_sha256$1000$"))
