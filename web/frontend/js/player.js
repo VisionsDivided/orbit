@@ -45,7 +45,7 @@ let sleepAt = 0, sleepTimer = null;
 
 /**
  * opts: { url, title, subtitle?, mode: 'live'|'ts'|'vod', catchup?, channel?, prog?, duration?,
- *         resumeKey?, resumeMeta?, onClose?, zap?(dir), zapNumber?(n), episodeNav?(dir, auto),
+ *         resumeKey?, resumeMeta?, onClose?, zap?(dir), zapNumber?(n), episodeNav?(dir, auto), hasEpisode?(dir),
  *         // shows (the server keeps the progress per series):
  *         startAt? (seconds), progress?(secs, dur, ended), upNext?() -> {label, go()} | null,
  *         subsPref? (language / label / 'off'), onSubsChange?(v), audioPref?, onAudioChange?(lang),
