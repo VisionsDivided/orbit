@@ -149,8 +149,13 @@ class SwRendererTest {
                 // the first frame may come before the box size is known (640 x 360 within the cap: 160 x 90)
                 assertTrue(waitFor { s.render(0); r.frame.value?.h == 120 })
                 assertEquals(160, r.frame.value!!.w); assertEquals(120, r.frame.value!!.h)
-                val img = s.render(1_000_000_000L)
-                val bmp = Bitmap.makeFromImage(img)
+                // Compose may draw the new frame a render or two later on a slow machine (seen on the Intel macOS runner)
+                var bmp = Bitmap.makeFromImage(s.render(1_000_000_000L))
+                var t = 1_000_000_000L
+                val until = System.currentTimeMillis() + 5_000
+                while ((bmp.getColor(40, 120) and 0xFFFFFF) == 0 && System.currentTimeMillis() < until) {
+                    Thread.sleep(50); t += 16_000_000L; bmp = Bitmap.makeFromImage(s.render(t))
+                }
                 fun px(x: Int, y: Int) = bmp.getColor(x, y) and 0xFFFFFF
                 assertTrue("left ${Integer.toHexString(px(40, 120))}", near(0xFF0000, px(40, 120), 8))
                 assertTrue("left edge ${Integer.toHexString(px(150, 10))}", near(0xFF0000, px(150, 10), 8))
