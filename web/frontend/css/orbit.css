@@ -620,17 +620,8 @@ body[data-screen="settings"] .ck { display: none; }
   .gempty { font-size: 2.4rem; top: 3rem; left: 3rem; }
 }
 
-/* the player overlay (DESIGN-SPEC-5 §10). The stream-limit prompt is streamprompt.js (.modal.stream-ask inside
+/* the player's stream-limit prompt (DESIGN-SPEC-5 §10): the prompt is streamprompt.js (.modal.stream-ask inside
    .modal-back): direction 5 places it top-right on wide screens and as a bottom sheet on phones. */
-.player-top { background: linear-gradient(180deg, rgba(0,0,0,.8), transparent); }
-.pl-clock { font-size: max(22px, 4rem); font-weight: 300; font-variant-numeric: tabular-nums; top: 3.2rem; right: var(--side); }
-.pl-info, .pl-qs { background: linear-gradient(0deg, rgba(0,0,0,.94), rgba(0,0,0,.66) 40%, transparent); border: 0; border-radius: 0; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; padding: 8rem var(--side) 4rem; }
-.pl-info-ch { font-weight: 800; }
-.pl-info-title { font-size: max(22px, 5.6rem); font-weight: 800; letter-spacing: -.02em; line-height: 1.05; }
-.pl-info .progress { height: 8px; border-radius: 4px; background: rgba(255,255,255,.22); }
-.qs-btn { background: rgba(255,255,255,.14); border: 0; border-radius: 14px; }
-.qs-btn.kf { background: #fff; color: #05060c; box-shadow: 0 0 0 3px #fff; }
-.qs-btn.kf .qs-v { color: #333; }
 .modal-back:has(> .stream-ask) { align-items: flex-start; justify-content: flex-end; padding: 13.2rem var(--side) 0; background: rgba(0,0,0,.35); }
 .modal.stream-ask { width: min(90rem, calc(100vw - 2 * var(--side))); max-width: none; box-sizing: border-box; padding: 2.8rem 3rem; border-radius: 20px; }
 .stream-ask .modal-title { font-size: max(18px, 3rem); font-weight: 800; }
@@ -941,8 +932,9 @@ body[data-screen="settings"] .ck { display: none; }
 }
 
 /* ---------------------------------------------------------------- film / episode player (vodbar.js)
-   One element (.vb) holds every visible control: the top line (back, title, clock) and the bottom bar (progress,
-   title / episode / time, transport, buttons). It shows and hides as one: a single class on the layer (.chrome),
+   Films, episodes, live TV and catch-up all use it (live: #player-layer.live).
+   One element (.vb) holds every visible control: the top line (back, title or channel, clock) and the bottom bar
+   (progress, title / episode / time, transport, buttons). It shows and hides as one: a single class on the layer (.chrome),
    a single fade on .vb. Nothing inside it fades or moves on its own. */
 #player-layer.vod { outline: none; }
 #player-layer.vod:not(.chrome) { cursor: none; }
@@ -1034,6 +1026,24 @@ body[data-screen="settings"] .ck { display: none; }
 .vb-key kbd { min-width: 78px; font: 700 12.5px/1 var(--ff); padding: 6px 8px; border-radius: 6px; text-align: center; box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.4); color: #fff; }
 .vb-key span { color: rgba(255,255,255,.86); }
 
+/* live mode: the channel in the top line, the programme's progress (not seekable), "Next: …", favourite and record */
+.vb-chan { display: flex; align-items: center; gap: max(10px, 1.6rem); }
+.vb-logo { width: max(34px, 6rem); height: max(34px, 6rem); flex: none; object-fit: contain; border-radius: 8px; background: rgba(255,255,255,.08); }
+.vb-chname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 800; }
+.vb-badge { flex: none; padding: 3px 10px; border-radius: 999px; font-size: max(11px, 1.6rem); font-weight: 700; letter-spacing: .02em;
+  background: rgba(255,255,255,.14); color: #fff; }
+.vb-badge.catchup { background: rgba(47,211,255,.2); color: var(--accent); }
+.vb-title.dim { color: var(--muted); font-weight: 600; }
+.vb-next { font-size: max(13px, 2rem); color: rgba(255,255,255,.72); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vb-prog-live { cursor: default; }
+.vb-prog-live .vb-knob, .vb-prog-live .vb-buf { display: none; }
+.vb-prog-live.empty .vb-track { background: rgba(255,255,255,.1); }
+.vb-btn.vb-rec.on { color: #ff4d5e; }
+.vb-btn.vb-rec.on::after { background: #ff4d5e; }
+.vb-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 10px 10px; }
+.vb-chip { padding: 5px 12px; border-radius: 999px; font-size: 13.5px; font-weight: 600; background: rgba(255,255,255,.1); color: #fff; font-variant-numeric: tabular-nums; }
+#player-layer.vod .pl-digits { top: max(80px, 15rem); left: var(--side); z-index: 5; }
+
 #player-layer.vod .pl-status { top: max(70px, 13rem); right: var(--side); z-index: 5; }
 #player-layer.vod .pl-upnext { bottom: max(150px, 24rem); right: var(--side); z-index: 7; }
 #player-layer.vod .pl-notice { bottom: max(150px, 24rem); }
@@ -1064,6 +1074,13 @@ body[data-screen="settings"] .ck { display: none; }
   .vb-sheetback { display: block; position: absolute; inset: 0; z-index: 7; background: rgba(0,0,0,.45); }
   .vb-sheetback[hidden] { display: none; }
   #player-layer.vod .pl-upnext { left: 12px; right: 12px; bottom: 130px; }
+  /* live: the programme title is not in the top line, and the buttons get a row of their own */
+  #player-layer.live .vb-title { display: block; font-size: 16px; }
+  #player-layer.live .vb-row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  #player-layer.live .vb-right { justify-content: space-between; }
+  .vb-logo { width: 30px; height: 30px; }
+  .vb-badge { font-size: 11px; padding: 2px 8px; }
+  .vb-next { font-size: 13px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .vb { transition: none; }

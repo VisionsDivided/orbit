@@ -211,43 +211,13 @@ a { color: var(--accent); }
 /* the hidden attribute must win over the display rule above; without this the black player
    layer covered the whole app before anything played */
 [hidden], #player-layer[hidden] { display: none !important; }
-.player-bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 18px;
-  background: linear-gradient(transparent, rgba(0,0,0,.85)); display: flex; gap: 12px; align-items: center; }
-.player-top { position: absolute; top: 0; left: 0; right: 0; padding: 14px 18px;
-  background: linear-gradient(rgba(0,0,0,.85), transparent); display: flex; gap: 12px; align-items: center; }
-.player-bar .btn, .player-top .btn { background: rgba(255,255,255,.12); color: #fff; }
-.player-title { font-weight: 700; font-size: 16px; }
 .pl-stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
-.player-top, .pl-clock { opacity: 0; transition: opacity .25s; }
-#player-layer.chrome .player-top, #player-layer.chrome .pl-clock { opacity: 1; }
-.player-top { right: 120px; }
-.player-sub { color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pl-clock { position: absolute; top: 16px; right: 22px; font-size: 22px; font-weight: 600; color: #fff; text-shadow: 0 1px 4px #000; z-index: 2; }
-.pl-info { position: absolute; left: 0; right: 0; bottom: 0; padding: 22px 28px 26px; background: linear-gradient(transparent, rgba(8,10,14,.92) 30%); }
-.pl-info-head { display: flex; align-items: center; gap: 14px; }
-.pl-logo { width: 54px; height: 54px; object-fit: contain; border-radius: 8px; background: rgba(255,255,255,.06); }
-.pl-info-ch { font-size: 24px; font-weight: 700; }
-.pl-info-title { font-size: 18px; margin-top: 10px; } .pl-info-title.dim { color: var(--muted); }
-.pl-info-time { color: var(--muted); font-size: 14px; margin-top: 4px; white-space: pre; }
-.pl-info .progress { max-width: 900px; height: 6px; }
-.pl-info-next { color: var(--muted); font-size: 14px; }
-.pl-chips { margin: 10px 0 0; } .pl-chips .chip { font-size: 12px; padding: 3px 10px; background: rgba(255,255,255,.08); color: var(--fg); }
-.pl-qs { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 24px 22px; background: linear-gradient(transparent, rgba(8,10,14,.95) 25%); z-index: 3; }
-.qs-row { display: flex; gap: 8px; flex-wrap: wrap; }
-.qs-btn { background: rgba(255,255,255,.08); border: 2px solid transparent; border-radius: 10px; padding: 8px 14px; text-align: left; min-width: 96px; }
-.qs-btn.kf { border-color: var(--accent); background: rgba(62,166,255,.18); }
-.qs-l { font-size: 14px; font-weight: 600; } .qs-v { font-size: 12px; color: var(--muted); margin-top: 2px; }
-.qs-hint { font-size: 11px; color: var(--muted); margin-top: 8px; }
-.pl-seekrow { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
-.pl-seek { flex: 1; accent-color: var(--accent); }
 .pl-digits { position: absolute; top: 30px; left: 30px; font-size: 48px; color: var(--accent); background: rgba(0,0,0,.7); padding: 8px 18px; border-radius: 10px; }
 .pl-status { position: absolute; top: 70px; right: 22px; background: rgba(0,0,0,.75); padding: 10px 16px; border-radius: 8px; font-size: 15px; }
 /* reconnecting / another source: a small label, never a dialog, never in the way of the keys */
 .pl-notice { position: absolute; left: 22px; bottom: 22px; max-width: 60%; background: rgba(0,0,0,.72); color: #e8eaf0; padding: 7px 14px; border-radius: 999px; font-size: 14px; pointer-events: none; z-index: 3; }
 .pv-note { position: absolute; left: 8px; bottom: 8px; right: 8px; width: fit-content; max-width: calc(100% - 16px); background: rgba(0,0,0,.72); color: #e8eaf0; padding: 3px 10px; border-radius: 999px; font-size: 12px; pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #player-layer video::cue { background: var(--cue-bg, rgba(0,0,0,.6)); font-size: var(--cue-size, 100%); }
-.info-overlay { position: absolute; top: 60px; right: 18px; background: rgba(0,0,0,.7); border-radius: 8px;
-  padding: 10px 14px; font-size: 12px; color: var(--muted); line-height: 1.7; }
 
 .result-group h3 { font-size: 13px; color: var(--muted); text-transform: uppercase; margin: 22px 0 8px; }
 .result { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 8px; border: 2px solid transparent; }
@@ -307,7 +277,7 @@ html.solid {
 }
 html, body { background: #0a0c12; }
 body { background: var(--page-bg); background-attachment: fixed; }
-.glass, #nav, .gcol, .hd, .modal, .pl-qs, .pl-info, #toast, .ruler {
+.glass, #nav, .gcol, .hd, .modal, #toast, .ruler {
   background: var(--glass-bg); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
   border: 1px solid var(--glass-line); box-shadow: var(--glass-shadow);
 }
@@ -340,10 +310,6 @@ body { background: var(--page-bg); background-attachment: fixed; }
 .tile { background: var(--cell); border: 1px solid var(--glass-line); border-radius: var(--radius); }
 .tile:focus, .tile:focus-visible, .tile.kf { box-shadow: var(--glow); border-color: var(--accent); background: var(--glass-hi); }
 .result:hover { background: var(--cell-row); }
-.pl-info, .pl-qs { border-radius: 18px 18px 0 0; background: var(--glass-bg-strong); border-bottom: 0; }
-.qs-btn { background: var(--glass-hi); border: 1px solid var(--glass-line); }
-.qs-btn.kf { border-color: var(--accent); box-shadow: var(--glow); }
-.player-top .btn { background: var(--glass-bg); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
 .form input, .form select { background: var(--glass-bg); border: 1px solid var(--glass-line); }
 #toast { border-radius: 14px; }
 
@@ -444,7 +410,6 @@ img.noimg { background: linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,
   .ml-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
   .set-row { flex-direction: column; align-items: flex-start; gap: 4px; } .set-k { width: auto; flex: none; }
   .rem-pop { left: 8px; right: 8px; bottom: 80px; flex-wrap: wrap; }
-  .player-top { right: 70px; } .qs-btn { min-width: 0; padding: 6px 10px; } .pl-info { padding: 14px 16px 18px; } .pl-info-ch { font-size: 18px; }
 }
 
 /* "Cannot play here" (no Media Source Extensions / unsupported container): hand off to an app */
