@@ -307,7 +307,10 @@ class Server(unittest.TestCase):
         self.assertEqual((a["device"], a["name"], a["profile"]), ("Kitchen", "Kitchen", "Kids"))
         # the owner lists and renames linked TVs; Sam (a member) sees none of Alex's
         devs = self.req("GET", "/v1/devices", headers=auth(alex))[2]["devices"]
-        self.assertEqual([(d["name"], d["device"], d["profile"]) for d in devs], [("Kitchen", "Living room TV", "Kids")])
+        devs = sorted(devs, key=lambda d: d["kind"] != "tv")         # the TV first (same last-seen second possible)
+        self.assertEqual([(d["name"], d["device"], d["kind"], d["profile"]) for d in devs],
+                         [("Kitchen", "Living room TV", "tv", "Kids"), ("", "Orbit on Windows", "desktop", "Kids")],
+                         "the desktop app is listed too (L7)")
         self.assertEqual(self.req("GET", "/v1/devices", headers=auth(sam))[2], {"devices": []})
         self.assertEqual(self.req("POST", "/v1/devices/rename", {"id": devs[0]["id"], "name": "Den"}, auth(sam))[0], 404)
         self.assertEqual(self.req("POST", "/v1/devices/rename", {"id": devs[0]["id"], "name": "Den"}, auth(alex))[2]["name"], "Den")
