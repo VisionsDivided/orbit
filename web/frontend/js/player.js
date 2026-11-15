@@ -1,6 +1,7 @@
 // Copyright 2026 The tvBro authors. SPDX-License-Identifier: Apache-2.0
-// Full-screen player: live (channel up/down, info overlay, quick-settings bar), catch-up and
-// VOD (transport bar with seek, ±10 s with hold-to-accelerate, restart, previous/next episode).
+// Full-screen player: live (channel up/down, info overlay, quick-settings bar) and catch-up. Films and
+// episodes (IPTV VOD, Plex / Jellyfin) get the control bar in vodbar.js instead.
+// While the player is open the page behind it is inert and every key goes to the player.
 // Quick settings: video quality, audio track, audio delay (Web Audio DelayNode), subtitles /
 // captions, aspect, sleep timer. Clock top-right.
 
@@ -16,6 +17,7 @@ import { prefs, setPref } from './prefs.js';
 import { upNextDue, pickTrack, UPNEXT_COUNT } from './vodutil.js';
 import { contentBox } from './cropbars.js';
 import { hlsErrorText, errorText } from './mediautil.js';
+import { createVodBar } from './vodbar.js';
 
 let cur = null;   // active session (see openPlayer)
 
@@ -71,7 +73,12 @@ export function openPlayer(opts) {
   const status = h('div', { class: 'pl-status', hidden: true });
   const qs = h('div', { class: 'pl-qs', hidden: true });
   const notice = h('div', { class: 'pl-notice', hidden: true, role: 'status', 'aria-live': 'polite' });   // reconnects: small, never a dialog
-  layer.append(stage, top, clock, info, qs, digitsEl, status, notice);
+  if (isVod) layer.append(stage, status, notice);   // + the control bar (vodbar.js, once the session exists)
+  else layer.append(stage, top, clock, info, qs, digitsEl, status, notice);
+  // the page behind the player takes no focus, clicks or keys (a focused "Play from start" there must never
+  // get a Space); dialogs (stream limit, PIN, menus) live on <body>, outside it
+  const appEl = document.getElementById('app');
+  if (appEl) appEl.inert = true;
 
   const s = cur = { opts, video, eng: null, teardown, close, audio: null, mp: null };
   // media-server titles and local recordings use no IPTV stream slot
@@ -83,7 +90,7 @@ export function openPlayer(opts) {
   let what = whatOf(opts);
   s.eng = { stats: () => ({}), destroy() {}, hls: null };
   let qsOpen = false, infoTimer = null, hideTimer = null, tickTimer = null, nn = null, saveTimer = null;
-  let released = false, replacedEl = null, extEl = null;
+  let released = false, replacedEl = null, extEl = null, bar = null;
   const env = detectEnv();
   const idle = () => ({ stats: () => ({}), destroy() {}, hls: null });
   // A film whose container this browser cannot play is remuxed by the server into HLS that
@@ -153,7 +160,7 @@ export function openPlayer(opts) {
       else flash('Playback error');
     };
     if (rmx) { s.startKnown = learnStart(rmx); setupRemuxSubs(); if (rmx.notes && rmx.notes.length) flash(rmx.notes.join(' · '), 4000); }
-    video.play().catch(() => { video.muted = true; video.play().catch(() => {}); flash('Muted by the browser: tap to unmute'); });
+    video.play().catch(() => { video.muted = true; s.autoMuted = true; video.play().catch(() => {}); flash('Muted by the browser: tap to unmute'); });
   }
   // ---------- Plex / Jellyfin through the home server ----------
   /** Starts a play session (a new one for another audio track); the last one is stopped. */
@@ -231,6 +238,7 @@ export function openPlayer(opts) {
         h('button', { class: 'btn secondary focusable', onclick: () => close() }, 'Close')));
     layer.append(errEl);
     qsOpen = false; qs.hidden = true; info.hidden = true;
+    if (bar) { bar.closeMenu(); bar.busy(false); }
     errEl.querySelector('.btn').focus();
   }
   /** A new play session (POST /v1/media/play again) where the viewer was. */
@@ -445,7 +453,7 @@ export function openPlayer(opts) {
   // ---------- clock / overlays ----------
   const tickClock = () => { clock.textContent = fmtTime(nowSec()); };
   tickClock();
-  tickTimer = setInterval(() => { tickClock(); if (!info.hidden) renderInfo(); if (qsOpen) renderQs(); }, 1000);
+  tickTimer = setInterval(() => { tickClock(); if (!info.hidden) renderInfo(); if (qsOpen) renderQs(); if (bar) bar.render(); }, 1000);
 
   function showChrome() {
     layer.classList.add('chrome');
@@ -460,10 +468,12 @@ export function openPlayer(opts) {
     if (!qsOpen) return;
     qsHideTimer = setTimeout(() => { if (!qsOpen) return; if (document.querySelector('.modal-back')) armQsHide(); else closeQs(); }, 5000);
   }
-  layer.addEventListener('mousemove', showChrome);
-  layer.addEventListener('pointerdown', showChrome, true);
-  layer.addEventListener('touchstart', showChrome, { passive: true, capture: true });
-  showChrome();
+  if (!isVod) {                                    // (films: vodbar.js has its own single show / hide timer)
+    layer.addEventListener('mousemove', showChrome);
+    layer.addEventListener('pointerdown', showChrome, true);
+    layer.addEventListener('touchstart', showChrome, { passive: true, capture: true });
+    showChrome();
+  }
 
   async function loadNowNext() {
     if (!opts.channel || opts.catchup) return;
@@ -560,7 +570,7 @@ export function openPlayer(opts) {
 
   function pick(title, rows) {
     if (!rows.length) { flash('Nothing to choose'); return; }
-    menu(title, rows.map((r) => ({ label: r[0], action: () => { r[1](); if (qsOpen) renderQs(); layer.focus(); } })));
+    menu(title, rows.map((r) => ({ label: (r.on ? '• ' : '') + r.label, action: () => { r.act(); if (qsOpen) renderQs(); layer.focus(); } })));
   }
   function qualityLabel() {
     const hl = s.eng.hls;
@@ -571,11 +581,17 @@ export function openPlayer(opts) {
     }
     return video.videoHeight ? video.videoHeight + 'p' : 'Auto';
   }
-  function pickQuality() {
+  /** Picker rows [{label, on, act}]: the live bar's pop-up menus and the film bar's panel both use them. */
+  function qualityRows() {
     const hl = s.eng.hls;
-    if (!hl || !hl.levels || hl.levels.length < 2) { flash('Single quality stream'); return; }
-    const rows = [['Auto', () => { hl.currentLevel = -1; }]];
-    hl.levels.forEach((l, i) => rows.push([`${l.height ? l.height + 'p' : '?'} · ${(l.bitrate / 1e6).toFixed(1)} Mbps${l.frameRate ? ' · ' + l.frameRate + ' fps' : ''}`, () => { hl.currentLevel = i; }]));
+    if (!hl || !hl.levels || hl.levels.length < 2) return [];
+    return [{ label: 'Auto', on: hl.autoLevelEnabled, act: () => { hl.currentLevel = -1; } },
+      ...hl.levels.map((l, i) => ({ label: `${l.height ? l.height + 'p' : '?'} · ${(l.bitrate / 1e6).toFixed(1)} Mbps${l.frameRate ? ' · ' + l.frameRate + ' fps' : ''}`,
+        on: !hl.autoLevelEnabled && hl.currentLevel === i, act: () => { hl.currentLevel = i; } }))];
+  }
+  function pickQuality() {
+    const rows = qualityRows();
+    if (!rows.length) { flash('Single quality stream'); return; }
     pick('Video quality', rows);
   }
   function audioLabel() {
@@ -585,32 +601,35 @@ export function openPlayer(opts) {
     if (hl && hl.audioTracks && hl.audioTracks.length) { const t = hl.audioTracks[hl.audioTrack]; return t ? (t.name || t.lang || 'Track ' + (hl.audioTrack + 1)) : 'Default'; }
     const st = s.eng.stats(); return st.channels ? (st.channels >= 6 ? '5.1' : st.channels === 2 ? 'Stereo' : st.channels + ' ch') : 'Default';
   }
-  function pickAudio() {
+  function audioRows() {
     if (s.mp && s.mp.kind === 'hls' && s.mp.audio && s.mp.audio.length > 1) {   // the transcode carries one track: start it again with another
-      pick('Audio track', s.mp.audio.map((t) => [`${t.default ? '• ' : ''}${t.label || t.lang || 'Track ' + t.id}`, () => {
+      return s.mp.audio.map((t) => ({ label: t.label || t.lang || 'Track ' + t.id, on: !!t.default, act: () => {
         saveAudio(t.lang || t.label);
         if (t.default) return;
         const at = pos(); opts.startAt = at; resumed = false; pendingSeek = at;
         restart({ audio: t.id });
-      }]));
-      return;
+      } }));
     }
     if (rmx && rmx.audio && rmx.audio.length > 1) {
       const chs = (n) => (n >= 6 ? '5.1' : n === 2 ? 'stereo' : n + ' ch');
-      pick('Audio track', rmx.audio.map((t, i) => [`${i === rmx.audioPos ? '• ' : ''}${t.label} · ${t.codec.toUpperCase()} ${chs(t.channels)}`,
-        () => { saveAudio(t.lang || t.label); if (i !== rmx.audioPos) { pendingSeek = pos(); restart({ remux: 1, ss: pendingSeek, a: i }); } }]));
-      return;
+      return rmx.audio.map((t, i) => ({ label: `${t.label} · ${t.codec.toUpperCase()} ${chs(t.channels)}`, on: i === rmx.audioPos,
+        act: () => { saveAudio(t.lang || t.label); if (i !== rmx.audioPos) { pendingSeek = pos(); restart({ remux: 1, ss: pendingSeek, a: i }); } } }));
     }
     const hl = s.eng.hls;
     const at = video.audioTracks;
     if (!hl && !rmx && at && at.length > 1) {        // Safari playing the file / HLS itself
       const list = []; for (let j = 0; j < at.length; j++) list.push(at[j]);
-      pick('Audio track', list.map((t, i) => [`${t.enabled ? '• ' : ''}${t.label || t.language || 'Track ' + (i + 1)}`,
-        () => { list.forEach((x, j) => { x.enabled = j === i; }); saveAudio(t.language || t.label); }]));
-      return;
+      return list.map((t, i) => ({ label: t.label || t.language || 'Track ' + (i + 1), on: t.enabled,
+        act: () => { list.forEach((x, j) => { x.enabled = j === i; }); saveAudio(t.language || t.label); } }));
     }
-    if (!hl || !hl.audioTracks || hl.audioTracks.length < 2) { flash('Only one audio track'); return; }
-    pick('Audio track', hl.audioTracks.map((t, i) => [`${i === hl.audioTrack ? '• ' : ''}${t.name || t.lang || 'Track ' + (i + 1)}${t.attrs && t.attrs.CHANNELS ? ' · ' + t.attrs.CHANNELS + ' ch' : ''}`, () => { hl.audioTrack = i; saveAudio(t.lang || t.name); }]));
+    if (!hl || !hl.audioTracks || hl.audioTracks.length < 2) return [];
+    return hl.audioTracks.map((t, i) => ({ label: `${t.name || t.lang || 'Track ' + (i + 1)}${t.attrs && t.attrs.CHANNELS ? ' · ' + t.attrs.CHANNELS + ' ch' : ''}`,
+      on: i === hl.audioTrack, act: () => { hl.audioTrack = i; saveAudio(t.lang || t.name); } }));
+  }
+  function pickAudio() {
+    const rows = audioRows();
+    if (rows.length < 2) { flash('Only one audio track'); return; }
+    pick('Audio track', rows);
   }
   // --- audio delay: <video> -> MediaElementSource -> DelayNode -> speakers ---
   function curDelay() { return s.audio ? Math.round(s.audio.delay.delayTime.value * 1000) : 0; }
@@ -638,11 +657,12 @@ export function openPlayer(opts) {
       if (!quiet) flash(`Audio delay +${ms} ms`);
     } catch { if (!quiet) flash('Audio delay unavailable'); }
   }
-  function pickDelay() {
-    const d = curDelay();
-    pick(`Audio delay (now +${d} ms)`, [['+50 ms', () => setAudioDelay(d + 50)], ['−50 ms', () => setAudioDelay(d - 50)],
-      ['+250 ms', () => setAudioDelay(d + 250)], ['−250 ms', () => setAudioDelay(d - 250)], ['Reset to 0', () => setAudioDelay(0)]]);
+  function delayRows() {
+    return [{ label: '+50 ms', act: () => setAudioDelay(curDelay() + 50) }, { label: '−50 ms', act: () => setAudioDelay(curDelay() - 50) },
+      { label: '+250 ms', act: () => setAudioDelay(curDelay() + 250) }, { label: '−250 ms', act: () => setAudioDelay(curDelay() - 250) },
+      { label: 'Reset to 0', act: () => setAudioDelay(0) }];
   }
+  function pickDelay() { pick(`Audio delay (now +${curDelay()} ms)`, delayRows()); }
   // --- subtitles / closed captions (hls.js subtitle tracks + CEA-608/708 as TextTracks) ---
   // (a remux's subtitle tracks stay on the element: unused ones, e.g. after the next episode, are left out)
   function textTracks() { return [...(video.textTracks || [])].filter((t) => (t.kind === 'subtitles' || t.kind === 'captions') && !(t._src === null && [...subTracks.values()].includes(t))); }
@@ -660,10 +680,26 @@ export function openPlayer(opts) {
       if (opts.onSubsChange) { opts.subsPref = v; opts.onSubsChange(v); }   // kept for the rest of the series
     }
   }
-  function pickSubs() {
+  function subsRows() {
     const tr = textTracks();
-    if (!tr.length) { flash('No subtitles or captions in this stream'); return; }
-    pick('Subtitles / captions', [['Off', () => setSubs(null)], ...tr.map((t) => [`${t.mode === 'showing' ? '• ' : ''}${t.label || t.language || t.kind}${t.kind === 'captions' ? ' (CC)' : ''}`, () => setSubs(t)])]);
+    if (!tr.length) return [];
+    return [{ label: 'Off', on: !tr.some((t) => t.mode === 'showing'), act: () => setSubs(null) },
+      ...tr.map((t) => ({ label: `${t.label || t.language || t.kind}${t.kind === 'captions' ? ' (CC)' : ''}`, on: t.mode === 'showing', track: true, act: () => setSubs(t) }))];
+  }
+  function pickSubs() {
+    const rows = subsRows();
+    if (!rows.length) { flash('No subtitles or captions in this stream'); return; }
+    pick('Subtitles / captions', rows);
+  }
+  /** C: subtitles off, or back on (the show's / last language, else the first track). */
+  function toggleSubs() {
+    const tr = textTracks();
+    if (!tr.length) { flash('No subtitles in this title', 1500); return; }
+    if (tr.some((t) => t.mode === 'showing')) { setSubs(null); flash('Subtitles off', 1200); return; }
+    const want = opts.subsPref && opts.subsPref !== 'off' ? opts.subsPref : prefs().subs;
+    const i = want && want !== 'off' ? pickTrack(tr, want) : null;
+    const t = tr[i != null && i >= 0 ? i : 0];
+    setSubs(t); flash('Subtitles: ' + (t.label || t.language || 'on'), 1200);
   }
   /** A show's saved choice (else the last one anywhere): its language, else the first text track; or off. */
   function applyCaptionDefaults() {
@@ -728,13 +764,15 @@ export function openPlayer(opts) {
     if (a.ratio) Object.assign(video.style, { aspectRatio: a.ratio, width: 'auto', height: '100%', maxWidth: '100%' });
     else Object.assign(video.style, { aspectRatio: '', width: '100%', height: '100%', maxWidth: '' });
   }
-  function pickAspect() { pick('Aspect', ASPECTS.map((a, i) => [`${i === aspectIdx ? '• ' : ''}${a.name}`, () => { aspectIdx = i; applyAspect(); }])); }
-  function pickSleep() {
-    pick('Sleep timer', [0, 15, 30, 60, 90].map((m) => [m ? m + ' minutes' : 'Off', () => {
+  function aspectRows() { return ASPECTS.map((a, i) => ({ label: a.name, on: i === aspectIdx, act: () => { aspectIdx = i; applyAspect(); } })); }
+  function pickAspect() { pick('Aspect', aspectRows()); }
+  function sleepRows() {
+    return [0, 15, 30, 60, 90].map((m) => ({ label: m ? m + ' minutes' : 'Off', on: !m && !sleepAt, act: () => {
       clearTimeout(sleepTimer); sleepAt = m ? Date.now() + m * 60000 : 0;
       if (m) sleepTimer = setTimeout(() => { sleepAt = 0; if (cur) cur.close(); toast('Sleep timer: playback stopped'); }, m * 60000);
-    }]));
+    } }));
   }
+  function pickSleep() { pick('Sleep timer', sleepRows()); }
   // picture in picture: the standard API (Chrome / Edge / Safari on Mac) or Safari's own (iPhone / iPad)
   function pipOk() { return (document.pictureInPictureEnabled && !!video.requestPictureInPicture) || typeof video.webkitSetPresentationMode === 'function'; }
   function inPip() { return document.pictureInPictureElement === video || video.webkitPresentationMode === 'picture-in-picture'; }
@@ -782,13 +820,24 @@ export function openPlayer(opts) {
       else if (k === 'ArrowLeft' || k === 'ArrowRight') { e.preventDefault(); const b = [...extEl.querySelectorAll('.btn')]; const i = b.indexOf(document.activeElement); b[(i + (k === 'ArrowRight' ? 1 : -1) + b.length) % b.length].focus(); }
       return;                                    // Enter activates the focused link / button itself
     }
+    if (errEl) {                                 // "Could not play": Retry / Close (Enter activates the focused one)
+      if (k === 'Escape' || k === 'Backspace') { e.preventDefault(); close(); }
+      else if (k === 'ArrowLeft' || k === 'ArrowRight') { e.preventDefault(); const b = [...errEl.querySelectorAll('.btn')]; const i = b.indexOf(document.activeElement); b[(i + (k === 'ArrowRight' ? 1 : -1) + b.length) % b.length].focus(); }
+      else if (k === ' ') e.preventDefault();      // (Space is play / pause only, never a button)
+      return;
+    }
+    if (bar) {                                   // films and episodes: the control bar (vodbar.js)
+      if (bar.onKey(e)) { e.preventDefault(); e.stopPropagation(); }
+      return;
+    }
     showChrome();
     if (qsOpen) {
       const items = s._items || [];
       if (k === 'ArrowRight') { qsIdx = Math.min(items.length - 1, qsIdx + 1); renderQs(); }
       else if (k === 'ArrowLeft') { qsIdx = Math.max(0, qsIdx - 1); renderQs(); }
       else if ((k === '+' || k === '=' || k === '-') && items[qsIdx] && items[qsIdx].adjust) { items[qsIdx].adjust(k === '-' ? -1 : 1); renderQs(); }
-      else if (k === 'Enter' || k === ' ') { if (items[qsIdx]) items[qsIdx].act(); renderQs(); }
+      else if (k === 'Enter') { if (items[qsIdx]) items[qsIdx].act(); renderQs(); }
+      else if (k === ' ' || k === 'k' || k === 'MediaPlayPause') { if (!e.repeat) togglePlay(); renderQs(); }   // never the lit item ("Restart" is first)
       else if (k === 'ArrowUp' || k === 'Escape' || k === 'Backspace' || k === 'ArrowDown') { if (!e.repeat) closeQs(); }
       else return;
       e.preventDefault(); e.stopPropagation(); return;
@@ -819,8 +868,26 @@ export function openPlayer(opts) {
     if (handled) { e.preventDefault(); e.stopPropagation(); }
   }
   layer.addEventListener('keydown', onKey);
-  stage.addEventListener('click', () => { if (extEl) return; if (video.muted) { video.muted = false; return; } if (qsOpen) closeQs(); else openQs(); });
-  stage.addEventListener('dblclick', toggleFs);
+  // Every key while the player is open is the player's: a key whose target is outside the layer (the focus was
+  // lost to <body>, or left on something behind) is handled here and the focus comes back. Dialogs on top
+  // (stream limit, PIN, menus) keep their own keys.
+  const overlayOpen = () => !!document.querySelector('.modal-back, .op-back, .signin-back');
+  const onDocKey = (e) => {
+    if (cur !== s || layer.hidden || overlayOpen() || layer.contains(e.target)) return;
+    layer.focus({ preventScroll: true });
+    onKey(e);
+    if (e.key === ' ' || e.key === 'Enter') e.preventDefault();
+  };
+  // Space on a focused button would click it when the key comes up: the player never lets it
+  const onKeyUp = (e) => { if (cur === s && !overlayOpen() && (e.key === ' ' || e.key === 'Spacebar')) e.preventDefault(); };
+  const onFocusIn = (e) => { if (cur === s && !layer.hidden && !overlayOpen() && !layer.contains(e.target)) layer.focus({ preventScroll: true }); };
+  document.addEventListener('keydown', onDocKey, true);
+  document.addEventListener('keyup', onKeyUp, true);
+  document.addEventListener('focusin', onFocusIn);
+  if (!isVod) {
+    stage.addEventListener('click', () => { if (extEl) return; if (video.muted) { video.muted = false; return; } if (qsOpen) closeQs(); else openQs(); });
+    stage.addEventListener('dblclick', toggleFs);
+  }
 
   // ---------- shows: "Up next" (last 30 s when the length is known, or at the end) ----------
   let up = { el: null, timer: null, cancelled: false };
@@ -871,13 +938,29 @@ export function openPlayer(opts) {
     what = whatOf(opts);
     titleEl.textContent = opts.title || ''; subEl.textContent = opts.subtitle || '';
     restart();
-    flash(opts.subtitle || opts.title || '', 3000);
+    if (bar) { bar.render(); bar.show(); } else flash(opts.subtitle || opts.title || '', 3000);
     if (qsOpen) renderQs();
     return true;
   };
 
   loadNowNext();
-  if (!isVod) showInfo(); else openQs();
+  if (isVod) {
+    bar = createVodBar({
+      layer, video,
+      title: () => opts.title || '', subtitle: () => opts.subtitle || '',
+      pos, total, busy: () => pendingSeek != null,
+      buffered: () => { const b = video.buffered, out = []; for (let i = 0; b && i < b.length; i++) out.push([off + b.start(i), off + b.end(i)]); return out; },
+      togglePlay, seekTo,
+      canEp: (dir) => (opts.media ? dir > 0 && !!(s.mp && s.mp.next) : opts.hasEpisode ? !!opts.hasEpisode(dir) : !!opts.episodeNav),
+      episode: (dir) => { if (opts.media) { if (dir > 0 && s.mp && s.mp.next) playNextMedia(s.mp.next); } else if (opts.episodeNav) opts.episodeNav(dir); },
+      stop: () => close(),
+      unmuteFirst: () => { if (!s.autoMuted || !video.muted) return false; s.autoMuted = false; video.muted = false; return true; },
+      subsRows, toggleSubs, audioRows, qualityRows, aspectRows, delayRows, sleepRows,
+      delayMs: curDelay, sleepLeft: () => (sleepAt ? Math.max(1, Math.ceil((sleepAt - Date.now()) / 60000)) : 0),
+      extraRows: () => (opts.vod && fileUrl ? [{ label: 'Open in a player app', value: 'VLC · Infuse', act: openInApp }] : []),
+      pipOk, inPip, togglePip, toggleFs,
+    });
+  } else showInfo();
 
   function teardown() {
     if (s.save) s.save();
@@ -892,6 +975,11 @@ export function openPlayer(opts) {
     try { s.eng.destroy(); } catch {}
     try { if (s.audio) s.audio.ctx.close(); } catch {}
     layer.removeEventListener('keydown', onKey);
+    document.removeEventListener('keydown', onDocKey, true);
+    document.removeEventListener('keyup', onKeyUp, true);
+    document.removeEventListener('focusin', onFocusIn);
+    if (bar) { bar.destroy(); bar = null; }
+    if (appEl) appEl.inert = false;
     window.removeEventListener('tvbro-replaced', onReplaced);
     if (cur === s) cur = null;
   }
