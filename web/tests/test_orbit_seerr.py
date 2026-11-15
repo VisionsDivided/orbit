@@ -440,13 +440,13 @@ class Discover(unittest.TestCase):
         NET.set_private_hosts(self.disc.private_hosts)
         self.addCleanup(NET.set_private_hosts, lambda: set())
         calls = []
-        real = NET._host_listed
+        real = NET._listed
 
         def spy(host, port):
             ok = real(host, port)
-            calls.append(ok)
+            calls.append(ok is not False)
             return ok
-        with mock.patch.object(NET, "_host_listed", spy):
+        with mock.patch.object(NET, "_listed", spy):
             self.configure()
         self.assertEqual(len(calls), 2, "status and auth/me")
         self.assertTrue(all(calls), "every probe fetch saw the scoped allowance")

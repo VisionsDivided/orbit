@@ -412,10 +412,15 @@ the player with Retry (a new `POST /v1/media/play` where the viewer was) and Clo
 The older `POST /v1/media/playback` (a direct-play URL **with** the token) and the `{"conn", "id", "secs", "dur",
 "state"}` form of `/v1/media/progress` still work; new clients use `/v1/media/play`.
 
-**Local network.** The server reaches each linked server's exact `host:port` even when "local network sources" is
-off (`net.set_private_hosts`); loopback and link-local addresses stay refused. Only an owner or admin can link a
-server at a new local address; a member can link their own user on a server the household already linked (or
-any public address). While an owner or admin signs in, the new address is allowed only for that sign-in's own
+**Local network.** The server reaches a linked server's exact `host:port` on the LAN even when "local network
+sources" is off (`net.set_private_hosts`) only when an **owner or admin** linked it while it resolved to a local
+address, and then only at the address(es) it resolved to at link time (`lan_ok` / `lan_ips` in `media_connections`,
+migration 005): if the name later points at another LAN address the request is refused (DNS rebinding); link it
+again to record the new address. Connections linked before migration 005 by an owner or admin are pinned to what
+they resolve to when the server next starts. Loopback and link-local addresses stay refused. A member's
+connection is never a LAN allowance: a member can link their own user on a server the household already linked at
+the pinned address, or any public address, and a public name of theirs that later resolves to a LAN address is
+refused. While an owner or admin signs in, the new address is allowed only for that sign-in's own
 requests (start, each poll, the password sign-in: `net.private_hosts_scope`, per request thread), never in the
 server-wide list, until the link is saved; a Plex server found during the sign-in is added the same way. Jellyfin uses one `DeviceId` per link (Jellyfin ends older tokens of a device that signs in
 again); Plex gets the same per-link `X-Plex-Client-Identifier` and stores each server's own access token.

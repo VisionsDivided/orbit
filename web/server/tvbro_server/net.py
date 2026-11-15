@@ -55,9 +55,12 @@ def set_allow_private(fn: Callable[[], bool]):
 
 
 def set_private_hosts(fn: Callable[[], set]):
-    """Orbit: the configured LAN media servers, {(host, port)}, read at every fetch. Only these may resolve to
-    private (RFC 1918 / ULA / CGNAT) addresses when "local network sources" is off; loopback and link-local stay
-    refused for them too."""
+    """Orbit: the configured LAN media servers, read at every fetch. Only these may resolve to private (RFC 1918 /
+    ULA / CGNAT) addresses when "local network sources" is off; loopback and link-local stay refused for them too.
+
+    Each entry is ``(host, port)`` (any private address, e.g. the Seerr address an admin typed) or
+    ``(host, port, ips)``: pinned, so only the addresses in ``ips`` (recorded when an owner or admin linked it)
+    may be private. A pinned name that re-resolves to another LAN address (DNS rebinding) is refused."""
     global _private_hosts
     _private_hosts = fn
 
@@ -102,12 +105,40 @@ def allow_here(host: str, port: int) -> None:
     _scoped_hosts.set(_scoped_hosts.get() | {(str(host).lower().strip("[]"), int(port))})
 
 
-def _host_listed(host: str, port: int) -> bool:
+ANY = None                                 # _listed: any private address is allowed for this host
+
+
+def norm_ip(addr: str) -> str:
+    """An address in one spelling (compressed, no zone), for comparing pinned addresses; "" when not an address."""
+    try:
+        return ipaddress.ip_address(str(addr).split("%", 1)[0].strip("[]")).compressed
+    except ValueError:
+        return ""
+
+
+def _listed(host: str, port: int):
+    """False: not listed. ANY: listed without pinning (any private address). A frozenset: only these addresses."""
     try:
         key = (str(host).lower().strip("[]"), int(port))
-        return key in _scoped_hosts.get() or key in _private_hosts()
+        if key in _scoped_hosts.get():
+            return ANY
+        pinned: set = set()
+        found = False
+        for e in _private_hosts():
+            if (str(e[0]).lower().strip("[]"), int(e[1])) != key:
+                continue
+            if len(e) < 3:
+                return ANY
+            found = True
+            pinned |= {norm_ip(a) for a in e[2]}
+        return frozenset(pinned - {""}) if found else False
     except Exception:                       # noqa: BLE001
         return False
+
+
+def _host_listed(host: str, port: int) -> bool:
+    """Listed in some form (scoped, or in the global allowlist, pinned or not)."""
+    return _listed(host, port) is not False
 
 
 def allow_private() -> bool:
@@ -182,11 +213,37 @@ def resolve(host: str, port: int) -> list[tuple]:
         raise urllib.error.URLError(e)
     if not infos:
         raise Blocked("host does not resolve")
-    private_ok = allow_private() or _host_listed(host, port)
+    listed = False if allow_private() else _listed(host, port)
+    private_ok = allow_private() or listed is ANY
     for info in infos:
-        if not ip_allowed(info[4][0], private_ok):
-            raise Blocked("address not allowed (local network, loopback or link-local)")
+        addr = info[4][0]
+        if ip_allowed(addr, private_ok):
+            continue
+        if isinstance(listed, frozenset) and norm_ip(addr) in listed and ip_allowed(addr, True):
+            continue                         # a pinned LAN server at an address recorded when it was linked
+        raise Blocked("address not allowed (local network, loopback or link-local)")
     return infos
+
+
+def addresses(host: str, port: int) -> list[str]:
+    """What ``host`` resolves to now (normalised), without any allow / refuse check; [] when it does not resolve."""
+    try:
+        infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError, OSError):
+        return []
+    return sorted({norm_ip(i[4][0]) for i in infos} - {""})
+
+
+def lan_address(addr: str) -> bool:
+    """True for an address that is not public (private, CGNAT, ULA or loopback): one that only a pinned LAN
+    allowance may reach."""
+    try:
+        ip = ipaddress.ip_address(str(addr).split("%", 1)[0])
+    except ValueError:
+        return False
+    if ip.version == 6 and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback or ((ip.is_private or ip in _CGNAT) and not ip.is_link_local)
 
 
 def check_host(url: str) -> None:

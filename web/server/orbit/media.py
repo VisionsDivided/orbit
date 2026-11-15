@@ -9,7 +9,10 @@ the direct-play URL of ``POST /v1/media/playback``, which goes to the same perso
 by the server (``GET /v1/media/image``) so pages never see a token.
 
 LAN servers: net.py refuses private addresses unless "local network sources" is on. ``private_hosts`` gives
-net.set_private_hosts the exact host:port of every saved connection. While an owner or admin signs in, the
+net.set_private_hosts the exact host:port of the saved connections an owner or admin linked while they resolved
+to a LAN address (``lan_ok``, migration 005), pinned to the addresses recorded at link time (``lan_ips``): the name
+may not later move to another LAN address. A member's connection is never a LAN allowance (a public name of theirs
+that re-resolves to 192.0.2.x is refused: DNS rebinding). While an owner or admin signs in, the
 address being linked is allowed only for that sign-in's own requests (``net.private_hosts_scope``, per thread),
 never in the global list, until it is saved. Members cannot add new LAN addresses (that would let anyone signed
 in probe the network); they can link their own user on a server the household already uses."""
@@ -140,15 +143,32 @@ class MediaServers:
     # ---- the LAN allowlist (net.set_private_hosts) ----
     def _refresh_hosts(self):
         hs = set()
-        for (b,) in self.db.q("SELECT DISTINCT base_url FROM media_connections"):
+        for cid, b, ips in self.db.q("SELECT id, base_url, lan_ips FROM media_connections WHERE lan_ok=1"):
             hp = host_port(b)
-            if hp:
-                hs.add(hp)
+            if not hp:
+                continue
+            pinned = [a for a in ips.split(",") if a]
+            if not pinned:                    # linked before migration 005: pin what it resolves to now
+                pinned = [a for a in NET.addresses(*hp) if NET.lan_address(a)]
+                if pinned:
+                    self.db.run("UPDATE media_connections SET lan_ips=? WHERE id=?", (",".join(pinned), cid))
+            if pinned:
+                hs.add((hp[0], hp[1], frozenset(pinned)))
         self._hosts = hs
 
     def private_hosts(self) -> set:
-        """Saved connections' (host, port). Addresses being linked are not here: see ``_scope``."""
+        """{(host, port, pinned addresses)} of the saved connections an owner / admin linked on the LAN.
+        Addresses being linked are not here: see ``_scope``."""
         return self._hosts
+
+    def _lan(self, sess: dict, base_url: str) -> tuple[int, str]:
+        """(lan_ok, lan_ips) for a connection being saved: an owner / admin linking an address that resolves to the
+        LAN now gets that address pinned; anyone else (or a public address) gets nothing."""
+        hp = host_port(base_url)
+        if not hp or sess.get("account_role") not in MANAGERS:
+            return 0, ""
+        lan = [a for a in NET.addresses(*hp) if NET.lan_address(a)]
+        return (1, ",".join(lan)) if lan else (0, "")
 
     def _scope(self, hosts: set):
         """The LAN addresses an owner / admin is linking, allowed for the requests made inside this block by this
@@ -202,19 +222,21 @@ class MediaServers:
         out = []
         now = int(self.clock())
         for ln in linked:
+            lan_ok, lan_ips = self._lan(sess, ln.base_url)
             with self.db.lock:
                 old = self.db.one("SELECT id FROM media_connections WHERE account_id=? AND kind=? AND server_id=? AND user_id=?",
                                   (sess["account_id"], kind, ln.server_id, ln.user_id))
                 if old:
                     cid = old[0]
-                    self.db.run("UPDATE media_connections SET base_url=?, server_name=?, user_name=?, device_id=?, last_ok=? "
-                                "WHERE id=?", (ln.base_url, ln.server_name, ln.user_name, device_id, now, cid))
+                    self.db.run("UPDATE media_connections SET base_url=?, server_name=?, user_name=?, device_id=?, last_ok=?, "
+                                "lan_ok=?, lan_ips=? WHERE id=?",
+                                (ln.base_url, ln.server_name, ln.user_name, device_id, now, lan_ok, lan_ips, cid))
                 else:
                     cid = secrets.token_hex(8)
                     self.db.run("INSERT INTO media_connections(id, account_id, kind, base_url, server_name, server_id, user_id, "
-                                "user_name, device_id, created, last_ok) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                                "user_name, device_id, created, last_ok, lan_ok, lan_ips) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                 (cid, sess["account_id"], kind, ln.base_url, ln.server_name, ln.server_id, ln.user_id,
-                                 ln.user_name, device_id, now, now))
+                                 ln.user_name, device_id, now, now, lan_ok, lan_ips))
             self.vault.put(cid, ln.token)
             out.append(self._public(self._row(sess, cid)))
         self._refresh_hosts()
