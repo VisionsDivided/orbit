@@ -48,7 +48,7 @@ export function createEngine(video, opts) {
       if (opts.mode !== 'vod' && mpegts && mpegts.isSupported() && !eng.destroyed) {
         try { hls.destroy(); } catch {}
         eng.hls = null; startTs();
-      } else if (eng.onError) eng.onError();
+      } else if (eng.onError) eng.onError(d);
     });
     eng.kind = 'hls'; eng.hls = hls;
   } else {

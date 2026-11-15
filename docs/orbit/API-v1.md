@@ -306,12 +306,12 @@ Playing does not use one of the IPTV provider's streams (`/v1/streams` does not 
 
 | Method | Path | Body / query → Answer |
 |---|---|---|
-| POST | `/v1/media/play` | `{"conn", "id", "client": "web"\|"tv"\|"desktop", "caps"?, "audio"?}` → `Play` (below). `id` is a film or episode (400 for a series / season). |
+| POST | `/v1/media/play` | `{"conn", "id", "client": "web"\|"tv"\|"desktop", "caps"?, "audio"?, "startSecs"?}` → `Play` (below). `id` is a film or episode (400 for a series / season). `startSecs` (optional): where the player will start (0 = from the start); without it, the resume point. A transcode starts there. |
 | GET | `/v1/media/stream/<session>/file` | The original file (direct play). `Range` is passed on (206 / 416 as the media server answers); piped in small chunks. |
 | GET | `/v1/media/stream/<session>/master.m3u8` | The transcode's HLS playlist. Every URI in it, and in the playlists it points at, is rewritten to `/v1/media/stream/<session>/u/...` on this server. |
 | GET | `/v1/media/stream/<session>/u/<path>` | A playlist or segment of the transcode, as rewritten above. Only the transcoder's paths on that same media server are relayed (Plex `/video/:/transcode/universal/...`, Jellyfin `/videos/...`); token parameters are dropped. Anything else: 404. |
 | GET | `/v1/media/stream/<session>/sub/<id>.vtt` | A text subtitle track as WebVTT (`text/vtt`; SubRip is converted). |
-| POST | `/v1/media/progress` | `{"session", "positionSecs", "state": "playing"\|"paused"\|"stopped"}` → `{"ok": true}`. Every ~10 s while playing, and on pause and stop. 404 when the session has ended or is another account's. |
+| POST | `/v1/media/progress` | `{"session", "positionSecs", "state": "playing"\|"paused"\|"stopped"}` → `{"ok": true}`. Every ~10 s while playing **and while paused**, and on pause and stop. 404 when the session has ended or is another account's. Also accepted as a `navigator.sendBeacon` (below). |
 
 `Play`:
 ```
@@ -357,20 +357,57 @@ its transcode.
 
 **Sessions.** A play session belongs to the account and the signed-in session that started it. The session id
 (192 random bits) is the capability for the `/v1/media/stream/...` addresses, so players that send no cookie
-(ExoPlayer, mpv) can use them; there is no token in any of them. A session ends: after 3 hours without requests or
-progress, on `state: "stopped"`, when its connection is unlinked, and when the signed-in session that created it ends
-(sign-out, revoked, expired; checked on every request and while a relay runs). An account keeps at most 8: starting
-another ends the oldest. Ending a transcoding session stops the transcode on the media server (Plex
-`/video/:/transcode/universal/stop`, Jellyfin `DELETE /Videos/ActiveEncodings`).
+(ExoPlayer, mpv) can use them; there is no token in any of them. A session ends:
+- on `state: "stopped"`;
+- when it is **abandoned**: no relay request and no progress report for 90 s (a laptop closed or a device switched
+  off without stopping). A file relay that is still running counts as activity, and so does a `tv` / `desktop`
+  session whose last report was `"paused"` (builds before this change report a pause once), up to the cap below;
+- on a **handoff**: when the same account plays the same title again (another device continues it, or the same one
+  with another audio track), its older sessions of that title end first, before the new one is started;
+- when its connection is unlinked, and when the signed-in session that created it ends (sign-out, revoked,
+  expired; checked on every request and while a relay runs);
+- after 3 hours without requests at the most; and an account keeps at most 8: starting another ends the oldest.
+
+An abandoned, handed-off or evicted session that had reported progress is reported `"stopped"` to the media server
+at its last reported position (so the resume point is kept), then its transcode is stopped (Plex
+`/video/:/transcode/universal/stop`, Jellyfin `DELETE /Videos/ActiveEncodings`). If Plex refuses to start a
+transcode (the master playlist), the server stops the transcodes Plex lists in `/status/sessions` for this
+connection's client identifier that are not one of its live sessions (left over from before a restart) and asks
+once more. Orbit keeps one Plex client identifier per connection (a new one per play would add a device to Plex's
+device list every time).
+
+**The web player's last "stopped".** When the page goes away (`pagehide`, `beforeunload`) the web app sends
+`{"session", "positionSecs", "state": "stopped"}` with `navigator.sendBeacon`, which cannot set the CSRF header or a
+JSON type. The server accepts this one request without the CSRF token when all of these hold: `Content-Type:
+text/plain`; the browser shows it comes from this site's own page (`Origin` naming this host, or `Sec-Fetch-Site:
+same-origin`; at least one must be sent, and neither may name another site); the body has exactly those fields with
+`state: "stopped"` and a well-formed session id; and the session cookie (SameSite=Strict) belongs to the account
+that started that playback. That is safe because the only effect is ending one playback, and a cross-site page can
+neither know the 192-bit play session id nor send the cookie. A browser without `sendBeacon` uses a `keepalive`
+fetch with the normal JSON + CSRF form. A tab that is only hidden keeps playing and reports its position; the
+server's 90 s idle stop covers a device that sleeps.
 
 **Progress.** Plex: `/:/timeline` (with `X-Plex-Session-Identifier`), and `/:/scrobble` once when the position passes
 90 %. Jellyfin: `/Sessions/Playing` on the first report, `/Sessions/Playing/Progress` after it,
 `/Sessions/Playing/Stopped` on stop (with `PlaySessionId`, `MediaSourceId`, `PlayMethod`). Continue watching
 (catalogue) comes from the media server, and is fetched again after a playback stops.
 
+**Plex start.** Before `start.m3u8` the server asks `/video/:/transcode/universal/decision` with the same
+parameters (as Plex's own web client does). A decision with `generalDecisionCode` 2000 or more is a 409 with a
+plain-English reason (Plex's own decision text; "Plex is already transcoding as much as it's allowed; ..." or
+"... number of allowed streams ..." when the text says so). A server that cannot answer the decision is logged
+and the start is tried anyway. Both carry `offset` (whole seconds): `startSecs`, else the resume point when it is
+past 0 and more than 30 s before the end. The playlist still covers the whole title, so players still seek to
+`resumeSecs`.
+
 **Errors.** 409 `"... link it again"` when the media server no longer accepts the sign-in, 409 when the title has no
-playable file, 404 when it is not on the server, 502 when the server cannot be reached or answers oddly. The relay
-answers the same codes as JSON `{"error"}`, and 404 for an ended or unknown session.
+playable file or the media server's decision refuses it, 404 when it is not on the server, 502 when the server
+cannot be reached or answers oddly. The relay answers the same codes as JSON `{"error"}` with a plain-English
+reason where one is known (for example `"Plex refused to start transcoding this title (it answered 400). ..."`),
+and 404 for an ended or unknown session. Every refused upstream request is logged on the home server with which
+request it was (decision, playlist, segment, file, subtitles; method and path, never the host, query or play session
+id), the HTTP status and up to 300 bytes of the body with tokens removed. The web player shows the error text over
+the player with Retry (a new `POST /v1/media/play` where the viewer was) and Close.
 
 The older `POST /v1/media/playback` (a direct-play URL **with** the token) and the `{"conn", "id", "secs", "dur",
 "state"}` form of `/v1/media/progress` still work; new clients use `/v1/media/play`.

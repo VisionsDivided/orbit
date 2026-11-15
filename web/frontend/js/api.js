@@ -6,6 +6,7 @@
 
 import { detectEnv, wantFormat, clientCaps } from './playfmt.js';
 import { claimSlot, askWhichStream } from './streamprompt.js';
+import { sendStop } from './mediautil.js';
 
 /** 'hls' on clients without Media Source Extensions (iPhone / iPad), else 'ts'. */
 const FMT = wantFormat(detectEnv());
@@ -203,6 +204,8 @@ export const api = {
   /** state: 'playing' | 'paused' | 'stopped'. keepalive: also when the page is going away. */
   mediaProgress: (session, positionSecs, state, keepalive) => req('/v1/media/progress', { method: 'POST', keepalive: !!keepalive,
     body: JSON.stringify({ session, positionSecs: Math.max(0, Math.round((positionSecs || 0) * 10) / 10), state }) }),
+  /** "stopped" while the page goes away: a sendBeacon (or keepalive fetch) the browser still delivers (mediautil.js). */
+  mediaStopBeacon: (session, positionSecs) => sendStop(session, positionSecs, { navigator: window.navigator, fetch: (u, o) => window.fetch(u, o), csrf }),
   /** Seasons of a show, episodes of a season. */
   mediaChildren: (conn, id) => req(`/v1/media/children?conn=${encodeURIComponent(conn)}&id=${encodeURIComponent(id)}`),
   mediaItem: (conn, id) => req(`/v1/media/item?conn=${encodeURIComponent(conn)}&id=${encodeURIComponent(id)}`),

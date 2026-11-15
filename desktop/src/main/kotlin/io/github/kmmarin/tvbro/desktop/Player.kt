@@ -295,7 +295,7 @@ class PlayerCtl(private val app: AppState, private val scope: CoroutineScope) {
         if (alt != null) setNotice("Playing from another source: ${alt.name}", 6000) else if (was) setNotice("", 0)
     }
 
-    // ---- Plex / Jellyfin titles: progress to the media server (every 10 s, on pause, "stopped" at the end) ----
+    // ---- Plex / Jellyfin titles: progress to the media server (every 10 s, also paused; "stopped" at the end) ----
     private var mediaReq: DeskMedia? = null
     private var mediaClock: io.github.kmmarin.tvbro.orbit.MediaProgressClock? = null
     /** The original file did not play and HLS was asked for (once per title). */

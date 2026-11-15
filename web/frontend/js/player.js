@@ -15,6 +15,7 @@ import { h, fmtTime, fmtDur, nowSec, menu, toast } from './util.js';
 import { prefs, setPref } from './prefs.js';
 import { upNextDue, pickTrack, UPNEXT_COUNT } from './vodutil.js';
 import { contentBox } from './cropbars.js';
+import { hlsErrorText, errorText } from './mediautil.js';
 
 let cur = null;   // active session (see openPlayer)
 
@@ -116,6 +117,7 @@ export function openPlayer(opts) {
         return;
       }
       if (extra.reconnect && rec) { recover(); return; }
+      if (opts.media && cur === s) { showMediaError(e.message || 'The home server did not answer.'); return; }
       flash('Could not start: ' + e.message, 5000); return;
     }
     if (cur !== s || !r) return;
@@ -135,7 +137,9 @@ export function openPlayer(opts) {
     if (plan === 'external') { showExternal(url, externalReason({ url, mode }, env)); return; }
     s.eng = createEngine(video, { url, mode, plan });
     if (s.eng.hls && window.Hls) s.eng.hls.on(window.Hls.Events.AUDIO_TRACKS_UPDATED, () => applyAudioPref());
-    s.eng.onError = () => {
+    s.eng.onError = (d) => {
+      // Plex / Jellyfin: say what the server said, with Retry and Close (never a silent black screen)
+      if (opts.media) { mediaFailed(d); return; }
       if (opts.vod) {
         // the browser refused the provider's file (container / codec): let the server remux it
         if (!rmx && plan === 'native' && !extra.remux) { flash('Converting for this browser…', 4000); restart({ remux: 1, ss: pos() }); return; }
@@ -154,7 +158,10 @@ export function openPlayer(opts) {
   // ---------- Plex / Jellyfin through the home server ----------
   /** Starts a play session (a new one for another audio track); the last one is stopped. */
   async function startMedia(extra) {
-    const m = await api.mediaPlay({ conn: opts.media.conn, id: opts.media.id, ...(extra.audio != null ? { audio: extra.audio } : {}) });
+    // where playback will start (null: the resume point the server knows): a transcode starts there
+    const at = opts.startAt != null ? Math.max(0, Math.floor(opts.startAt)) : null;
+    const m = await api.mediaPlay({ conn: opts.media.conn, id: opts.media.id, ...(extra.audio != null ? { audio: extra.audio } : {}),
+      ...(at != null ? { startSecs: at } : {}) });
     if (cur !== s) { api.mediaProgress(m.session, 0, 'stopped').catch(() => {}); return null; }
     endMedia();
     s.mp = m; s.mpPlaying = false;
@@ -176,8 +183,64 @@ export function openPlayer(opts) {
     reportMedia('stopped', pendingSeek != null ? pendingSeek : off + (video.currentTime || 0), keepalive);
     s.mp = null;
   }
-  const onPageHide = () => endMedia(true);
+  // Leaving the page (closed, reloaded, navigated away, put in the back-forward cache): the last "stopped" goes
+  // as a beacon, which the browser delivers after the page is gone. A tab that is only hidden keeps playing
+  // (another tab, picture in picture, a locked phone with sound): it sends its position now, and the server
+  // stops the session itself if no request or report follows for 90 s (a laptop that went to sleep).
+  const onPageHide = () => {
+    if (!s.mp) return;
+    const sess = s.mp.session, at = pendingSeek != null ? pendingSeek : off + (video.currentTime || 0);
+    s.mp = null; s.mpHidden = at;
+    api.mediaStopBeacon(sess, at);
+  };
+  const onVisibility = () => {
+    if (document.visibilityState === 'hidden' && s.mp && pendingSeek == null && video.currentTime > 0) reportMedia(video.paused ? 'paused' : 'playing', null, true);
+  };
+  const onPageShow = (ev) => {                      // back from the back-forward cache: a new play session
+    if (ev.persisted && cur === s && opts.media && s.mpHidden != null && !s.mp) { const at = s.mpHidden; s.mpHidden = null; retryMedia(at); }
+  };
   window.addEventListener('pagehide', onPageHide);
+  window.addEventListener('beforeunload', onPageHide);
+  window.addEventListener('pageshow', onPageShow);
+  document.addEventListener('visibilitychange', onVisibility);
+  /** hls.js gave up (d: its fatal error data) or the browser's own player failed (no d): the server's words. */
+  async function mediaFailed(d) {
+    if (cur !== s || errEl) return;
+    let msg = d ? hlsErrorText(d) : '';
+    if (!d && s.mp) {                               // the browser's player says nothing: ask the server what it says
+      try {
+        const r = await fetch(s.mp.url, { credentials: 'same-origin' });
+        if (!r.ok) msg = errorText(await r.text()) || `The server could not send this title (HTTP ${r.status}).`;
+      } catch { msg = 'The home server did not answer.'; }
+    }
+    if (cur === s) showMediaError(msg || 'This browser could not play the title.');
+  }
+  let errEl = null;
+  function showMediaError(msg) {
+    if (cur !== s) return;
+    const at = video.currentTime > 0 ? pos() : (opts.startAt || 0);
+    try { s.eng.destroy(); } catch {}
+    s.eng = idle();
+    endMedia();                                     // the server ends the session and its transcode
+    if (errEl) errEl.remove();
+    errEl = h('div', { class: 'pl-replaced pl-ext glass', role: 'alert' },
+      h('div', { class: 'pr-title' }, 'Could not play'),
+      h('div', { class: 'pr-sub' }, msg),
+      h('div', { class: 'pl-ext-btns' },
+        h('button', { class: 'btn focusable', onclick: () => retryMedia(at) }, '\u21bb Retry'),
+        h('button', { class: 'btn secondary focusable', onclick: () => close() }, 'Close')));
+    layer.append(errEl);
+    qsOpen = false; qs.hidden = true; info.hidden = true;
+    errEl.querySelector('.btn').focus();
+  }
+  /** A new play session (POST /v1/media/play again) where the viewer was. */
+  function retryMedia(at) {
+    if (errEl) { errEl.remove(); errEl = null; }
+    if (at > 0) opts.startAt = at;
+    resumed = false; pendingSeek = null;
+    restart({});
+    layer.focus();
+  }
   function playNextMedia(n) {
     const o = { media: { conn: opts.media.conn, id: n.id }, title: opts.title, subtitle: n.subtitle || n.title, mode: 'vod', onClose: opts.onClose };
     if (!s.replace(o)) openPlayer(o);
@@ -798,6 +861,7 @@ export function openPlayer(opts) {
     if (cur !== s || !isVod || !n || n.mode !== 'vod' || !(n.vod || n.media) || n.local || opts.local || extEl || replacedEl) return false;
     save();
     endMedia();
+    if (errEl) { errEl.remove(); errEl = null; }
     clearUpNext(); up = { el: null, timer: null, cancelled: false };
     s.reported = false; s.audioTried = false;
     for (const k of Object.keys(opts)) delete opts[k];
@@ -819,6 +883,9 @@ export function openPlayer(opts) {
     if (s.save) s.save();
     endMedia();
     window.removeEventListener('pagehide', onPageHide);
+    window.removeEventListener('beforeunload', onPageHide);
+    window.removeEventListener('pageshow', onPageShow);
+    document.removeEventListener('visibilitychange', onVisibility);
     clearUpNext(); clearTimeout(qsHideTimer); clearTimeout(recTimer); clearTimeout(note.t); if (stall) stall.stop();
     clearInterval(crop.timer); window.removeEventListener('resize', cropApply);
     clearInterval(tickTimer); clearInterval(saveTimer); clearInterval(subTimer); clearTimeout(seekTo.timer); clearTimeout(infoTimer); clearTimeout(hideTimer); clearTimeout(digitTimer);

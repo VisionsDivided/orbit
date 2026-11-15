@@ -390,7 +390,8 @@ class MediaServers:
     def play(self, sess: dict, b: dict) -> dict:
         """Start playing a film / episode through this server (orbit/mediaplay.py)."""
         r, c = self.connector(sess, b.get("conn"))
-        out = self.plays.start(sess, r, c, b.get("id"), b.get("client"), b.get("caps"), b.get("audio"))
+        out = self.plays.start(sess, r, c, b.get("id"), b.get("client"), b.get("caps"), b.get("audio"),
+                               b.get("startSecs"))
         self._ok(r)
         return out
 
