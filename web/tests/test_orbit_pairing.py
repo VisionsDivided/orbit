@@ -121,7 +121,7 @@ class Unit(unittest.TestCase):
 
     def test_limits(self):
         self.assertLessEqual(PA.MAX_PER_CLIENT, 3)
-        self.assertLessEqual(PA.MAX_PENDING, 20)
+        self.assertLessEqual(PA.MAX_PENDING, 50)
         for _ in range(PA.MAX_PER_CLIENT):
             self.pr.start("TV", "192.0.2.5")
         with self.assertRaises(ApiError) as e:
@@ -132,10 +132,11 @@ class Unit(unittest.TestCase):
         self.pr.start("TV", "192.0.2.6")                          # another address still may
 
     def test_global_cap(self):
+        self.assertGreaterEqual(PA.MAX_PENDING, 50)
         n = 0
-        while n < PA.MAX_PENDING:
+        while n < PA.MAX_PENDING:                                 # one address per /24, so only the overall cap counts
             for _ in range(min(PA.MAX_PER_CLIENT, PA.MAX_PENDING - n)):
-                self.pr.start("TV", "192.0.2.%d" % (10 + n // PA.MAX_PER_CLIENT))
+                self.pr.start("TV", "10.%d.0.5" % (n // PA.MAX_PER_CLIENT))
                 n += 1
         self.clock.t += 30
         with self.assertRaises(ApiError) as e:
@@ -145,6 +146,24 @@ class Unit(unittest.TestCase):
         self.assertEqual(e.exception.retry_after, PA.TTL - 30 + 1)
         self.clock.t += PA.TTL                                    # all expired: room again
         self.pr.start("TV", "192.0.2.200")
+
+    def test_one_network_cannot_fill_the_server(self):
+        """L6: an unauthenticated client spreading over many addresses of one /24 (or one IPv6 /64) is capped."""
+        for i in range(PA.MAX_PER_NETWORK):
+            self.pr.start("TV", "192.0.2.%d" % (10 + i))
+        with self.assertRaises(ApiError) as e:
+            self.pr.start("TV", "192.0.2.99")
+        self.assertEqual(e.exception.code, 429)
+        self.assertIn("from this network", e.exception.msg)
+        self.pr.start("TV", "198.51.100.7")                       # another network still may
+        for i in range(PA.MAX_PER_CLIENT):
+            self.pr.start("TV", "2001:db8:5:6::%x" % (i + 1))
+        with self.assertRaises(ApiError) as e:                    # another address, same /64
+            self.pr.start("TV", "2001:db8:5:6::ffff")
+        self.assertEqual(e.exception.code, 429)
+        self.pr.start("TV", "2001:db8:5:7::1")
+        self.assertEqual(PA.network_of("192.0.2.77"), "192.0.2.0/24")
+        self.assertEqual(PA.network_of("2001:db8:5:6:1:2:3:4"), "2001:db8:5:6::/64")
 
     def test_cap_over_http_is_429_with_retry_after(self):
         from orbit.api import Api, Call
