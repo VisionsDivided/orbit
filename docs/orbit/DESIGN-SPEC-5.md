@@ -150,6 +150,16 @@ The Downloading label and percentage come from Seerr, which gets them from Sonar
   - One row per active stream: logo 60px, device name 24px/800, "channel · programme" and "Watching since hh:mm" muted. Each row has its own button, "Stop Kitchen and watch" / "Stop Bedroom and watch".
   - Cancel at the bottom-right. **Default focus is Cancel; never pre-select a stream.**
 
+## 10b. Film and episode player (web)
+
+- Same scrims as §10. Top line: a round glass Back button, "Title · S1 · E6 — Episode", clock (40px/300) at the right.
+- Bottom: a progress bar across the full content width, 4px (8px under the pointer) on `rgba(255,255,255,.22)`, buffered range `rgba(255,255,255,.34)`, fill accent with a soft glow, a 16px white scrubber (shown on hover, while dragging and when paused), and a glass time tooltip.
+- Under it, three columns: left the title (28px/800), the episode line "S1 · E6 — Name" (20px muted) and "39:39 / 40:21" (click: time left). Centre: previous episode, back 10 s, play / pause (a 90px white circle), forward 30 s, next episode, stop; previous / next only when there is one. Right: subtitles (accent underline when on), audio (only with more than one track), settings, picture in picture, mute + volume slider, full screen.
+- One visibility state: every control is inside one element that fades as a whole (.28s). It appears on mouse move, tap or key, and hides after 3 s without input while playing; it stays while paused, while a menu is open or the pointer is over the bar. The cursor hides with it.
+- Settings panel: glass (`rgba(10,12,22,.9)`, 16px radius, inset 1px `rgba(255,255,255,.12)`) above the bar's right end: playback speed, quality (when the stream has several), aspect, subtitle appearance, audio delay, sleep timer, open in a player app (IPTV), keyboard shortcuts. Selected rows carry an accent check.
+- Focus: white 3px ring with a violet glow `0 0 18px rgba(138,92,255,.55)`.
+- Phone: transport (48px, play 68px) in the middle of the picture; bottom row with episode line, time and 44px buttons; double tap on the left or right third skips 10 s; the panel is a bottom sheet (22px top radius) with a dimmed backdrop.
+
 ## 11. Discover
 
 - Hero for the #1 trending title (Request as primary). Below it, in order: Your requests (landscape cards with a status badge under the caption), Trending movies, Trending shows, Upcoming movies, Upcoming shows, Popular.

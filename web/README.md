@@ -408,7 +408,7 @@ is never changed, so syncs keep every edit.
 | `GET /api/layout` · `POST /api/layout {op, …}` | `group.create {name}`, `group.rename {id, name}`, `group.hide {id, hidden}`, `group.move {id, dir}`, `group.delete {id}`, `channel.rename {key, name}`, `channel.hide {key, hidden}`, `channel.move {group, key, dir}`, `channel.add/remove {group, key}`, `reset` |
 
 ## Tests
-`node --test web/tests/guide.test.mjs web/tests/vod.test.mjs web/tests/reminders.test.mjs web/tests/playfmt.test.mjs web/tests/resume.test.mjs web/tests/livefix.test.mjs web/tests/streamprompt.test.mjs web/tests/signout.test.mjs web/tests/setup.test.mjs web/tests/discover.test.mjs`
+`node --test web/tests/guide.test.mjs web/tests/vod.test.mjs web/tests/reminders.test.mjs web/tests/playfmt.test.mjs web/tests/resume.test.mjs web/tests/livefix.test.mjs web/tests/streamprompt.test.mjs web/tests/signout.test.mjs web/tests/setup.test.mjs web/tests/discover.test.mjs web/tests/vodctl.test.mjs`
 and `python -m unittest discover -s web/tests` (security attack cases in `test_security.py`: `file:` / `gopher:` /
 `ftp:` / `data:` / `concat:` sources and streams, loopback, 169.254.169.254, 10.x / 172.16.x / 192.168.x / 100.64.x,
 redirects to them, DNS rebinding, ffmpeg protocol whitelist, CSRF without token / wrong origin / text/plain,
@@ -444,6 +444,11 @@ down channel reconnecting and then playing from its alternate (notice, no dialog
 Settings / lock from the channel menu / a new browser must give it (wrong PIN refused, wait after five)
 and a locked film category, backup download / bad file / restore, guide mapping picked with the keyboard
 and used by the guide and search, the live link and .m3u played outside the browser.
+`node --test web/tests/e2e/player.e2e.mjs` (same mock stack; films and episodes are an ffmpeg-made MP4): the
+film player's Space pauses and resumes in place (also with the focus on `<body>` or on a bar button), the page
+behind is inert, every control shows and hides together after 3 s (cursor too), arrows / J / L seek, a click on
+the progress bar seeks, the settings panel (speed, aspect with "Fit, crop black bars", shortcuts), Escape closes
+the menu before the player, previous / next episode only where they apply and N plays the next one in place.
 Node 25 needs the file names (`node --test web/tests/e2e/` alone fails to load the folder).
 Needs Playwright (`PLAYWRIGHT_DIR`, or a normal `playwright` install), ffmpeg, python + cryptography and
 `web/frontend/vendor/hls.min.js` (not committed: copy it from the server's `/opt/tvbro/frontend/vendor/`); missing pieces skip the test.

@@ -64,6 +64,20 @@ function makeMedia(dir) {
     '-t', '240', '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '50', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '64k',
     '-f', 'hls', '-hls_time', '2', '-hls_playlist_type', 'vod', '-hls_segment_filename', path.join(dir, 's%03d.ts'), path.join(dir, 'index.m3u8')]);
   if (r.status !== 0) throw new Error('ffmpeg failed: ' + r.stderr);
+  // films and episodes: one MP4 (moov first, so the browser plays and seeks it with Range requests)
+  const f = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y',
+    '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=25', '-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=48000',
+    '-t', '240', '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '50', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '64k',
+    '-movflags', '+faststart', path.join(dir, 'film.mp4')]);
+  if (f.status !== 0) throw new Error('ffmpeg failed: ' + f.stderr);
+}
+/** A file with Range support (the browser's own player seeks in films with it). */
+function sendRange(req, res, file, type) {
+  const size = fs.statSync(file).size, m = /bytes=(\d*)-(\d*)/.exec(req.headers.range || '');
+  if (!m) { res.writeHead(200, { 'content-type': type, 'content-length': size, 'accept-ranges': 'bytes' }); return fs.createReadStream(file).pipe(res); }
+  const a = m[1] ? +m[1] : size - +m[2], b = m[1] && m[2] ? Math.min(+m[2], size - 1) : size - 1;
+  res.writeHead(206, { 'content-type': type, 'content-length': b - a + 1, 'content-range': `bytes ${a}-${b}/${size}`, 'accept-ranges': 'bytes' });
+  return fs.createReadStream(file, { start: a, end: b }).pipe(res);
 }
 
 function mockProvider(mediaDir) {
@@ -102,6 +116,7 @@ function mockProvider(mediaDir) {
         2: [1, 2].map((n) => ({ id: String(9100 + n), episode_num: n, season: 2, title: 'Second ' + n, container_extension: 'mp4', info: { duration_secs: 240 } })) } });
       return j([]);
     }
+    if (/^\/(movie|series)\/[^/]+\/[^/]+\/\d+\.mp4$/.test(u.pathname)) return sendRange(req, res, path.join(mediaDir, 'film.mp4'), 'video/mp4');
     if (u.pathname === '/xmltv.php') { res.writeHead(200, { 'content-type': 'application/xml' }); return res.end('<?xml version="1.0"?><tv></tv>'); }
     const m = u.pathname.match(/^\/hls\/\d+\/([\w.]+)$/);
     if (m && fs.existsSync(path.join(mediaDir, m[1]))) {

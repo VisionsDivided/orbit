@@ -283,6 +283,7 @@ export function playEpisode(series, d, e, o = {}) {
       const n = episodeAfter(d.episodes, e.id);
       return n ? { label: `${epCode(n)} – ${cleanEpisodeTitle(series.name, n.title)}`, go: () => playEpisode(series, d, n) } : null;
     },
+    hasEpisode: (dir) => !!episodeAfter(d.episodes, e.id, dir),
     episodeNav: (dir, auto) => { const n = episodeAfter(d.episodes, e.id, dir); if (n) playEpisode(series, d, n); else if (!auto) toast(dir > 0 ? 'Last episode' : 'First episode'); },
   };
   if (!playerReplace(popts)) openPlayer(popts);
