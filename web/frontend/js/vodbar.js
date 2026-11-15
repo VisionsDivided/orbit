@@ -1,17 +1,24 @@
 // Copyright 2026 The Orbit authors. SPDX-License-Identifier: Apache-2.0
-// The film / episode control bar (IPTV films and episodes, Plex / Jellyfin through the home server), direction 5
-// glass with ideas from Plex's web player: a thin progress bar that thickens on hover (buffered range, scrubber,
-// time tooltip, click or drag to seek); title, episode and time on the left; transport in the middle; subtitles,
-// audio, settings, picture in picture, volume and full screen on the right. A settings panel (a bottom sheet on
-// phones) holds speed, quality, aspect, subtitle appearance, audio delay, sleep timer and the shortcuts.
+// The player's control bar for everything the web app plays: films and episodes (IPTV, Plex / Jellyfin through
+// the home server), live TV and catch-up. Direction 5 glass with ideas from Plex's web player: a thin progress
+// bar that thickens on hover (buffered range, scrubber, time tooltip, click or drag to seek); title, episode and
+// time on the left; transport in the middle; subtitles, audio, settings, picture in picture, volume and full
+// screen on the right. A settings panel (a bottom sheet on phones) holds speed, quality, aspect, subtitle
+// appearance, audio delay, sleep timer and the shortcuts.
+//
+// Live mode (c.live): the top line names the channel (logo, number, name, Catch-up / Alternate source badges);
+// the left shows the programme, its time range and "Next: …"; the progress bar is the programme's (not
+// seekable) except in catch-up, which seeks like a film; the transport is channel down / play-pause / channel up;
+// favourite (My list) and record sit on the right; the panel adds stream info and "Open in a player app".
 //
 // Everything the viewer sees of the controls (top line with title and clock, progress bar, time, transport,
 // buttons) is one element, .vb, shown and hidden together by ONE class on the player layer (.chrome) with ONE
-// timer and ONE fade: never a part on its own. Live TV keeps its own overlay (player.js).
+// timer and ONE fade: never a part on its own. Space only ever plays / pauses, live or not.
 
 import { h, fmtDur, fmtTime, nowSec } from './util.js';
 import { prefs, setPref } from './prefs.js';
-import { vodKey, escapeStep, timeLine, epLine, timeAt, bufferedFracs, tapSide, SHORTCUTS, SPEEDS, HIDE_MS } from './vodctl.js';
+import { vodKey, escapeStep, timeLine, epLine, timeAt, bufferedFracs, tapSide, SHORTCUTS, SPEEDS, HIDE_MS,
+  liveKey, progFrac, progTitle, progLine, nextLine, chLine, holdStep, LIVE_SHORTCUTS } from './vodctl.js';
 
 const ICONS = {
   play: '<path d="M7 4.5v15l13-7.5z" fill="currentColor" stroke="none"/>',
@@ -34,6 +41,9 @@ const ICONS = {
   right: '<path d="M9 6l6 6-6 6"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  star: '<path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/>',
+  starOn: '<path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z" fill="currentColor"/>',
+  rec: '<circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/>',
 };
 const svg = (name, cls = '') => {
   const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -56,13 +66,20 @@ const CAPTION_BGS = [['none', 'None'], ['shade', 'Shaded'], ['solid', 'Solid bla
  * c: { layer, video, title(), subtitle(), pos(), total(), buffered() -> [[from, to]] title seconds, busy() (a
  *      seek is restarting the stream), togglePlay(), seekTo(t), canEp(dir), episode(dir), stop(),
  *      subsRows(), toggleSubs(), audioRows(), qualityRows(), aspectRows(), delayRows(), sleepRows(), extraRows(),
- *      pipOk(), inPip(), togglePip(), toggleFs(), onMenu(open) }
+ *      pipOk(), inPip(), togglePip(), toggleFs(), onMenu(open),
+ *      live?: { seekable (catch-up), channel() -> {name, number, logo} | null, logo(url) -> src, badges() -> [text],
+ *               prog() -> {title, ep?, sub?, start, stop} | null, next() -> {title, start} | null,
+ *               canZap(), zap(dir), canFav(), isFav(), toggleFav(), canRec(), recording(), record(),
+ *               stats() -> [chip text] } }
  * Rows: [{label, value?, on?, act()}]. Returns { el, show(), render(), onKey(e) -> handled, menuOpen(), destroy() }.
  */
 export function createVodBar(c) {
   const { layer, video } = c;
+  const live = c.live || null;
+  const seekable = !live || !!live.seekable;      // films and catch-up seek; a live channel shows its programme
+  const zapping = !!live && !live.seekable;       // channel down / up instead of skips and episodes
   let leftMode = loadLS('orbit.timeLeft', '0') === '1';
-  let hideTimer = null, hover = false, drag = null, menu = null, spinTimer = null;
+  let hideTimer = null, hover = false, drag = null, menu = null, spinTimer = null, hold = { key: '', n: 0 }, topKey = '';
 
   // ---------- the controls: one element, one visibility state ----------
   const btn = (icon, label, fn, cls = '') => {
@@ -72,7 +89,7 @@ export function createVodBar(c) {
   const setIcon = (b, name) => { if (b._ic !== name) { b._ic = name; b.replaceChildren(svg(name)); } };
 
   const backBtn = h('button', { class: 'vb-btn vb-close', type: 'button', 'aria-label': 'Back', title: 'Back (Esc)', onclick: (e) => { e.stopPropagation(); c.stop(); } }, svg('back'));
-  const topTitle = h('div', { class: 'vb-toptitle' });
+  const topTitle = h('div', { class: 'vb-toptitle' + (live ? ' vb-chan' : '') });
   const clock = h('div', { class: 'vb-clock' });
   const top = h('div', { class: 'vb-top' }, backBtn, topTitle, clock);
 
@@ -81,21 +98,29 @@ export function createVodBar(c) {
   const knob = h('div', { class: 'vb-knob' });
   const tip = h('div', { class: 'vb-tip', hidden: true });
   const track = h('div', { class: 'vb-track' }, buf, fill, knob);
-  const prog = h('div', { class: 'vb-prog', role: 'slider', tabindex: '-1', 'aria-label': 'Seek', 'aria-valuemin': '0' }, track, tip);
+  const prog = seekable
+    ? h('div', { class: 'vb-prog', role: 'slider', tabindex: '-1', 'aria-label': 'Seek', 'aria-valuemin': '0' }, track, tip)
+    : h('div', { class: 'vb-prog vb-prog-live', role: 'progressbar', 'aria-label': 'Programme progress', 'aria-valuemin': '0', 'aria-valuemax': '100' }, track, tip);
 
   const titleEl = h('div', { class: 'vb-title' });
   const epEl = h('div', { class: 'vb-ep' });
   const timeEl = h('button', { class: 'vb-time', type: 'button', title: 'Show the time left', onclick: (e) => { e.stopPropagation(); leftMode = !leftMode; saveLS('orbit.timeLeft', leftMode ? 1 : 0); render(); show(); } });
-  const left = h('div', { class: 'vb-left' }, titleEl, epEl, timeEl);
+  const nextEl = h('div', { class: 'vb-next', hidden: true });
+  const left = h('div', { class: 'vb-left' }, titleEl, epEl, timeEl, nextEl);
+  if (zapping) timeEl.hidden = true;
 
-  const prevBtn = btn('prev', 'Previous episode (P)', () => c.episode(-1), 'vb-ep-btn');
+  const prevBtn = zapping ? btn('prev', 'Channel down (↓)', () => live.zap(-1), 'vb-ep-btn') : btn('prev', 'Previous episode (P)', () => c.episode(-1), 'vb-ep-btn');
   const backBtn10 = btn('back10', 'Back 10 seconds (J)', () => skip(-10));
   const playBtn = btn('play', 'Play (Space)', () => c.togglePlay(), 'vb-play');
   const fwdBtn = btn('fwd30', 'Forward 30 seconds (L)', () => skip(30));
-  const nextBtn = btn('next', 'Next episode (N)', () => c.episode(1), 'vb-ep-btn');
+  const nextBtn = zapping ? btn('next', 'Channel up (↑)', () => live.zap(1), 'vb-ep-btn') : btn('next', 'Next episode (N)', () => c.episode(1), 'vb-ep-btn');
   const stopBtn = btn('stop', 'Stop', () => c.stop(), 'vb-stop');
   const mid = h('div', { class: 'vb-mid' }, prevBtn, backBtn10, playBtn, fwdBtn, nextBtn, stopBtn);
+  if (zapping) { backBtn10.hidden = true; fwdBtn.hidden = true; stopBtn.hidden = true; }   // (Back at the top goes to the guide)
 
+  const favBtn = btn('star', 'Add to My list', () => { live.toggleFav(); render(); }, 'vb-fav');
+  const recBtn = btn('rec', 'Record on the server', () => { live.record(); setTimeout(render, 400); }, 'vb-rec');
+  favBtn.hidden = recBtn.hidden = true;
   const subsBtn = btn('subs', 'Subtitles (C)', () => openMenu('subs'));
   const audioBtn = btn('audio', 'Audio track', () => openMenu('audio'));
   const gearBtn = btn('gear', 'Settings', () => openMenu('settings'));
@@ -106,7 +131,7 @@ export function createVodBar(c) {
   vol.addEventListener('click', (e) => e.stopPropagation());
   const volBox = h('div', { class: 'vb-volbox' }, muteBtn, vol);
   const fsBtn = btn('fs', 'Full screen (F)', () => c.toggleFs());
-  const right = h('div', { class: 'vb-right' }, subsBtn, audioBtn, gearBtn, pipBtn, volBox, fsBtn);
+  const right = h('div', { class: 'vb-right' }, favBtn, recBtn, subsBtn, audioBtn, gearBtn, pipBtn, volBox, fsBtn);
 
   const row = h('div', { class: 'vb-row' }, left, mid, right);
   const bottom = h('div', { class: 'vb-bottom' }, prog, row);
@@ -121,7 +146,8 @@ export function createVodBar(c) {
   const skipR = h('div', { class: 'vb-skip r', 'aria-hidden': 'true' });
   const panel = h('div', { class: 'vb-menu', hidden: true, role: 'menu' });
   const sheetBack = h('div', { class: 'vb-sheetback', hidden: true, onclick: (e) => { e.stopPropagation(); closeMenu(); } });
-  layer.classList.add('vod');
+  layer.classList.add('vod');                     // (the bar's layout: films, live and catch-up alike)
+  layer.classList.toggle('live', !!live);
   layer.append(el, spin, skipL, skipR, sheetBack, panel);
 
   // ---------- show / hide: one timer ----------
@@ -134,32 +160,78 @@ export function createVodBar(c) {
     }, HIDE_MS);
   }
   function hide() { if (!menu) { clearTimeout(hideTimer); layer.classList.remove('chrome'); } }
+  function toggleChrome() { if (layer.classList.contains('chrome') && !menu) hide(); else show(); }
 
   // ---------- drawing ----------
+  /** Live: the channel in the top line (logo, number and name, badges); redrawn only when it changes. */
+  function renderTop() {
+    const ch = live.channel(), badges = live.badges();
+    const k = JSON.stringify([ch && ch.logo, chLine(ch) || c.title(), badges]);
+    if (k === topKey) return;
+    topKey = k;
+    const kids = [];
+    if (ch && ch.logo) kids.push(h('img', { class: 'vb-logo', src: live.logo(ch.logo), alt: '', onerror: function () { this.remove(); } }));
+    kids.push(h('span', { class: 'vb-chname' }, chLine(ch) || c.title()));
+    for (const b of badges) kids.push(h('span', { class: 'vb-badge' + (/catch/i.test(b) ? ' catchup' : '') }, b));
+    topTitle.replaceChildren(...kids);
+  }
+  function setText(x, s) { if (x.textContent !== s) x.textContent = s; x.hidden = !s; }
   function render() {
-    const d = c.total(), t = drag ? drag.t : c.pos();
-    const title = c.title() || '', sub = epLine(c.subtitle());
-    if (titleEl.textContent !== title) titleEl.textContent = title;
-    if (epEl.textContent !== sub) epEl.textContent = sub;
-    epEl.hidden = !sub;
-    const tt = sub ? `${title} · ${sub}` : title;
-    if (topTitle.textContent !== tt) topTitle.textContent = tt;
-    timeEl.textContent = timeLine(t, d, leftMode, fmtDur);
-    timeEl.title = leftMode ? 'Show the length' : 'Show the time left';
-    clock.textContent = fmtTime(nowSec());
-    const f = d ? Math.min(1, Math.max(0, t / d)) : 0;
-    fill.style.width = (f * 100).toFixed(2) + '%';
-    knob.style.left = (f * 100).toFixed(2) + '%';
-    const bf = bufferedFracs(c.buffered(), d).find(([a, b]) => a <= f + 0.002 && b >= f - 0.002) || null;
-    buf.style.left = bf ? (bf[0] * 100).toFixed(2) + '%' : '0';
-    buf.style.width = bf ? ((bf[1] - bf[0]) * 100).toFixed(2) + '%' : '0';
-    prog.setAttribute('aria-valuemax', String(Math.floor(d || 0)));
-    prog.setAttribute('aria-valuenow', String(Math.floor(t)));
-    prog.setAttribute('aria-valuetext', timeLine(t, d, false, fmtDur));
+    const d = c.total(), t = drag ? drag.t : c.pos(), now = nowSec();
+    if (live) {
+      renderTop();
+      const p = live.prog();
+      if (zapping) {                                 // the programme on now, its progress and what is next
+        setText(titleEl, p ? progTitle(p) : 'No guide information');
+        titleEl.classList.toggle('dim', !p);
+        setText(epEl, progLine(p, now, fmtTime));
+        setText(nextEl, nextLine(live.next(), fmtTime));
+      } else {                                       // catch-up: the programme, its air time, then the film-style time
+        setText(titleEl, (p && progTitle(p)) || c.subtitle() || c.title() || '');
+        setText(epEl, progLine(p, now, fmtTime));
+      }
+    } else {
+      const title = c.title() || '', sub = epLine(c.subtitle());
+      if (titleEl.textContent !== title) titleEl.textContent = title;
+      if (epEl.textContent !== sub) epEl.textContent = sub;
+      epEl.hidden = !sub;
+      const tt = sub ? `${title} · ${sub}` : title;
+      if (topTitle.textContent !== tt) topTitle.textContent = tt;
+    }
+    clock.textContent = fmtTime(now);
+    if (seekable) {
+      timeEl.textContent = timeLine(t, d, leftMode, fmtDur);
+      timeEl.title = leftMode ? 'Show the length' : 'Show the time left';
+      const f = d ? Math.min(1, Math.max(0, t / d)) : 0;
+      fill.style.width = (f * 100).toFixed(2) + '%';
+      knob.style.left = (f * 100).toFixed(2) + '%';
+      const bf = bufferedFracs(c.buffered(), d).find(([a, b]) => a <= f + 0.002 && b >= f - 0.002) || null;
+      buf.style.left = bf ? (bf[0] * 100).toFixed(2) + '%' : '0';
+      buf.style.width = bf ? ((bf[1] - bf[0]) * 100).toFixed(2) + '%' : '0';
+      prog.setAttribute('aria-valuemax', String(Math.floor(d || 0)));
+      prog.setAttribute('aria-valuenow', String(Math.floor(t)));
+      prog.setAttribute('aria-valuetext', timeLine(t, d, false, fmtDur));
+    } else {                                         // live: how far the programme on now is
+      const f = progFrac(live.prog(), now);
+      prog.classList.toggle('empty', f == null);
+      fill.style.width = ((f || 0) * 100).toFixed(2) + '%';
+      prog.setAttribute('aria-valuenow', String(Math.round((f || 0) * 100)));
+    }
+    if (live) {
+      favBtn.hidden = !live.canFav();
+      const fav = !favBtn.hidden && live.isFav();
+      setIcon(favBtn, fav ? 'starOn' : 'star'); favBtn.classList.toggle('on', fav);
+      favBtn.setAttribute('aria-label', fav ? 'Remove from My list' : 'Add to My list'); favBtn.title = favBtn.getAttribute('aria-label');
+      recBtn.hidden = !live.canRec();
+      const recOn = !recBtn.hidden && live.recording();
+      recBtn.classList.toggle('on', recOn);
+      recBtn.setAttribute('aria-label', recOn ? 'Recording on the server' : 'Record on the server'); recBtn.title = recBtn.getAttribute('aria-label');
+    }
     const paused = video.paused;
     setIcon(playBtn, paused ? 'play' : 'pause');
     playBtn.setAttribute('aria-label', paused ? 'Play (Space)' : 'Pause (Space)'); playBtn.title = playBtn.getAttribute('aria-label');
-    prevBtn.hidden = !c.canEp(-1); nextBtn.hidden = !c.canEp(1);
+    if (zapping) prevBtn.hidden = nextBtn.hidden = !live.canZap();
+    else { prevBtn.hidden = !c.canEp(-1); nextBtn.hidden = !c.canEp(1); }
     subsBtn.hidden = c.subsRows().length < 2;
     subsBtn.classList.toggle('on', c.subsRows().some((r) => r.on && r.track));
     audioBtn.hidden = c.audioRows().length < 2;
@@ -177,7 +249,7 @@ export function createVodBar(c) {
   // ---------- progress bar: hover tooltip, click or drag to seek ----------
   const tAt = (x) => { const r = track.getBoundingClientRect(); return timeAt(x, r.left, r.width, c.total()); };
   function showTip(x) {
-    const d = c.total(); if (!d) { tip.hidden = true; return; }
+    const d = seekable ? c.total() : 0; if (!d) { tip.hidden = true; return; }
     const r = track.getBoundingClientRect(), t = tAt(x);
     tip.textContent = fmtDur(t); tip.hidden = false;
     const w = tip.offsetWidth || 50;
@@ -186,7 +258,7 @@ export function createVodBar(c) {
   prog.addEventListener('pointermove', (e) => { showTip(e.clientX); if (drag) { drag.t = tAt(e.clientX); render(); } });
   prog.addEventListener('pointerleave', () => { if (!drag) tip.hidden = true; });
   prog.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 || !c.total()) return;
+    if (e.button !== 0 || !seekable || !c.total()) return;
     e.preventDefault(); e.stopPropagation();
     try { prog.setPointerCapture(e.pointerId); } catch {}
     drag = { t: tAt(e.clientX) }; prog.classList.add('drag'); showTip(e.clientX); render(); show();
@@ -211,7 +283,12 @@ export function createVodBar(c) {
     video.volume = Math.min(1, Math.max(0, Math.round((video.volume + d) * 20) / 20));
     saveVol(); render(); show();
   }
-  function skip(d) { c.seekTo(Math.max(0, c.pos() + d)); render(); }
+  function skip(d) { if (!seekable) return; c.seekTo(Math.max(0, c.pos() + d)); render(); }
+  /** ← / → held down: 10, 20, 30, then 60 s per step. */
+  function stepOf(e) {
+    if (e.repeat && hold.key === e.key) hold.n++; else hold = { key: e.key, n: 0 };
+    return holdStep(hold.n);
+  }
 
   // ---------- picture, buffering spinner ----------
   const busyOn = () => { clearTimeout(spinTimer); spinTimer = setTimeout(() => { spin.hidden = false; }, 250); };
@@ -233,9 +310,10 @@ export function createVodBar(c) {
     if (e.pointerType === 'mouse') {
       if (e.button !== 0) return;
       if (c.unmuteFirst && c.unmuteFirst()) { show(); return; }
+      if (zapping) { show(); return; }              // live: a click shows the controls, it never pauses the channel
       c.togglePlay(); show(); return;
     }
-    const r = layer.getBoundingClientRect(), side = tapSide(e.clientX - r.left, r.width), now = Date.now();
+    const r = layer.getBoundingClientRect(), side = seekable ? tapSide(e.clientX - r.left, r.width) : null, now = Date.now();
     if (lastTap && now - lastTap.at < 320 && side && side === lastTap.side) {
       clearTimeout(tapTimer); lastTap = { at: now, side };     // (a third tap keeps skipping)
       skip(side === 'back' ? -10 : 10); ripple(side); return;
@@ -269,18 +347,19 @@ export function createVodBar(c) {
   const valueOf = (rows) => { const r = rows.find((x) => x.on); return r ? r.label : ''; };
   const PAGES = {
     settings: () => {
-      const q = c.qualityRows(), rows = [
-        { label: 'Playback speed', value: valueOf(speedRows()), page: 'speed' },
-      ];
+      const q = c.qualityRows(), rows = [];
+      if (seekable) rows.push({ label: 'Playback speed', value: valueOf(speedRows()), page: 'speed' });   // (not on a live channel)
       if (q.length > 1) rows.push({ label: 'Quality', value: valueOf(q), page: 'quality' });
       rows.push({ label: 'Aspect', value: valueOf(c.aspectRows()), page: 'aspect' });
       rows.push({ label: 'Subtitle appearance', value: (CAPTION_SIZES.find(([v]) => v === (prefs().captionSize || 100)) || [0, 'Normal'])[1], page: 'look' });
       rows.push({ label: 'Audio delay', value: `+${c.delayMs()} ms`, page: 'delay' });
       rows.push({ label: 'Sleep timer', value: c.sleepLeft() ? c.sleepLeft() + ' min left' : 'Off', page: 'sleep' });
+      if (live) rows.push({ label: 'Stream info', value: (live.stats()[0] || ''), page: 'stats' });
       for (const x of c.extraRows()) rows.push(x);
       rows.push({ label: 'Keyboard shortcuts', page: 'keys' });
       return { title: 'Settings', rows };
     },
+    stats: () => ({ title: 'Stream info', back: 'settings', stats: true, live: true, rows: [] }),
     speed: () => ({ title: 'Playback speed', back: 'settings', rows: speedRows() }),
     quality: () => ({ title: 'Quality', back: 'settings', rows: c.qualityRows() }),
     aspect: () => ({ title: 'Aspect', back: 'settings', rows: c.aspectRows() }),
@@ -318,7 +397,13 @@ export function createVodBar(c) {
     kids.push(head);
     const list = h('div', { class: 'vb-mlist' });
     if (pg.keys) {
-      for (const [k, what] of SHORTCUTS) list.append(h('div', { class: 'vb-key' }, h('kbd', {}, k), h('span', {}, what)));
+      const keys = zapping ? LIVE_SHORTCUTS : live ? SHORTCUTS.filter(([k]) => !k.startsWith('N')) : SHORTCUTS;
+      for (const [k, what] of keys) list.append(h('div', { class: 'vb-key' }, h('kbd', {}, k), h('span', {}, what)));
+    }
+    if (pg.stats) {
+      const chips = live.stats();
+      list.append(chips.length ? h('div', { class: 'vb-chips' }, ...chips.map((x) => h('span', { class: 'vb-chip' }, x)))
+        : h('div', { class: 'vb-mh' }, 'Waiting for the stream…'));
     }
     for (const r of pg.rows) {
       if (r.head) { list.append(h('div', { class: 'vb-mh' }, r.head)); continue; }
@@ -336,7 +421,7 @@ export function createVodBar(c) {
       r.page ? svg('right', 'vb-mgo') : null);
       list.append(b);
     }
-    if (!pg.rows.length && !pg.keys) list.append(h('div', { class: 'vb-mh' }, 'Nothing to choose here'));
+    if (!pg.rows.length && !pg.keys && !pg.stats) list.append(h('div', { class: 'vb-mh' }, 'Nothing to choose here'));
     kids.push(list);
     panel.replaceChildren(...kids);
     panel.dataset.page = menu.page;
@@ -367,22 +452,28 @@ export function createVodBar(c) {
 
   // ---------- keys (player.js sends every key while the player is open) ----------
   function onKey(e) {
-    const act = vodKey(e.key, { onSlider: document.activeElement === vol });
+    const onSlider = document.activeElement === vol;
+    const act = zapping ? liveKey(e.key, { onSlider }) : vodKey(e.key, { onSlider });
     if (menu && menuKey(e, act)) return true;
-    if (e.key === 'Enter') {                       // Enter: the focused control, else play / pause
+    if (e.key === 'Enter') {                       // Enter: the focused control, else play / pause (live: the controls)
       const ae = document.activeElement;
-      show();
-      if (ae && ae !== layer && layer.contains(ae) && ae.tagName === 'BUTTON') { ae.click(); return true; }
-      c.togglePlay(); return true;
+      if (ae && ae !== layer && layer.contains(ae) && ae.tagName === 'BUTTON') { show(); ae.click(); return true; }
+      if (zapping) { if (!e.repeat) toggleChrome(); return true; }
+      show(); c.togglePlay(); return true;
     }
+    if (act === 'info') { if (!e.repeat) toggleChrome(); return true; }
     if (!act) { show(); return false; }
     show();
     switch (act) {
       case 'toggle': if (!e.repeat) c.togglePlay(); break;
       case 'play': video.play().catch(() => {}); break;
       case 'pause': video.pause(); break;
-      case 'back10': skip(-10); break;
-      case 'fwd10': skip(10); break;
+      case 'back10': skip(e.key === 'ArrowLeft' ? -stepOf(e) : -10); break;
+      case 'fwd10': skip(stepOf(e)); break;
+      case 'chUp': if (!e.repeat && live.canZap()) live.zap(1); break;
+      case 'chDown': if (!e.repeat && live.canZap()) live.zap(-1); break;
+      case 'close': if (!e.repeat) c.stop(); break;  // live: ← / → go back to the guide (as before)
+      case 'settings': if (!e.repeat) openMenu('settings'); break;
       case 'fwd30': skip(30); break;
       case 'volUp': volBy(0.05); break;
       case 'volDown': volBy(-0.05); break;
@@ -415,7 +506,7 @@ export function createVodBar(c) {
       for (const [n, f] of evs) video.removeEventListener(n, f);
       document.removeEventListener('fullscreenchange', onFs);
       layer.removeEventListener('pointermove', onPointerMove);
-      layer.classList.remove('vod', 'paused', 'menu-open');
+      layer.classList.remove('vod', 'live', 'paused', 'menu-open');
     },
   };
 }

@@ -80,10 +80,9 @@ test('parity items in a real browser', { skip, timeout: 300000 }, async (t) => {
     assert.ok(seen.layer, 'still full screen');
     assert.match(seen.notice, /another source/i);
     // the channel shown stays the one asked for (guide, current channel), only the stream comes from the alternate
-    await key('Enter');
-    const info = await page.evaluate(() => document.querySelector('.pl-info') && document.querySelector('.pl-info').innerText);
+    const info = await page.evaluate(() => document.querySelector('#player-layer .vb-top').textContent);
     assert.match(info, /Kilo Movies/); assert.match(info, /Alternate source/);
-    await key('Escape'); await key('Escape'); await sleep(800);
+    await key('Escape'); await sleep(800);
     const s = await tv(); assert.equal(s.current, dead.key);
   });
 
@@ -244,11 +243,11 @@ test('parity items in a real browser', { skip, timeout: 300000 }, async (t) => {
     const bravo = byName('Bravo News');
     await page.goto(B + '/#play:' + encodeURIComponent(bravo.key));
     await page.waitForFunction(() => { const v = document.querySelector('#player-layer video'); return v && v.currentTime > 0.3; }, null, { timeout: 20000 });
-    await key('ArrowDown');                                 // quick settings
-    const items = await page.$$eval('.qs-btn', (b) => b.map((x) => x.textContent));
-    const oi = items.findIndex((l) => l.startsWith('Open in app'));
-    assert.ok(oi >= 0, 'quick settings offer Open in app for live: ' + items.join(' | '));
-    await page.click('.qs-btn:has-text("Open in app")');               // (the bar may redraw meanwhile)
+    await key('ContextMenu');                               // the settings panel
+    const items = await page.$$eval('.vb-menu .vb-mi', (b) => b.map((x) => x.textContent));
+    const oi = items.findIndex((l) => l.startsWith('Open in a player app'));
+    assert.ok(oi >= 0, 'the settings panel offers Open in a player app for live: ' + items.join(' | '));
+    await page.click('.vb-mi:has-text("Open in a player app")');
     await page.waitForSelector('.ext-modal .ext-url', { timeout: 5000 });
     const url = await page.$eval('.ext-url', (i) => i.value);
     assert.ok(url.startsWith(B + '/stream?'), 'absolute link to this server: ' + url);

@@ -185,18 +185,12 @@ test('focus navigation, guide window, preview and full screen in a real browser'
       for (const n of ['pause', 'emptied', 'abort', 'loadstart']) v.addEventListener(n, () => v.__ev.push(n));
       v.__t0 = v.currentTime;
     });
-    // the quick-settings bar closes first (topmost layer), then full screen
-    await key('ArrowDown'); assert.equal(await page.evaluate(() => !document.querySelector('.pl-qs').hidden), true, 'quick settings open');
-    await key('Escape'); assert.equal(await page.evaluate(() => !document.getElementById('player-layer').hidden), true, 'Escape closed only the quick settings');
-    // the info overlay (if shown) is the next layer, then full screen itself; one layer per Escape
-    let anim = '';
-    for (let i = 0; i < 3; i++) {
-      const infoUp = await page.evaluate(() => !!document.querySelector('#player-layer .pl-info:not([hidden])'));
-      await page.keyboard.press('Escape'); await sleep(60);
-      const st = await page.evaluate(() => ({ tr: document.getElementById('player-layer').style.transform || '', open: !document.getElementById('player-layer').hidden, info: !!document.querySelector('#player-layer .pl-info:not([hidden])') }));
-      if (infoUp) { assert.equal(st.info, false, 'Escape hid the info overlay'); assert.ok(st.open || st.tr, 'and did not close full screen too'); continue; }
-      anim = st.tr; break;
-    }
+    // the settings panel closes first (topmost layer), then full screen: one layer per Escape
+    await key('ContextMenu'); assert.equal(await page.evaluate(() => !document.querySelector('.vb-menu').hidden), true, 'settings panel open');
+    await key('Escape'); assert.equal(await page.evaluate(() => !document.getElementById('player-layer').hidden), true, 'Escape closed only the settings panel');
+    assert.equal(await page.evaluate(() => document.querySelector('.vb-menu').hidden), true);
+    await page.keyboard.press('Escape'); await sleep(60);
+    const anim = await page.evaluate(() => document.getElementById('player-layer').style.transform || '');
     await sleep(800);
     assert.equal(await page.evaluate(() => document.getElementById('player-layer').hidden), true, 'full screen closed');
     const v = await page.evaluate(() => { const v = document.querySelector('.pv video'); return v && { mark: v.__mark, paused: v.paused, muted: v.muted, ev: v.__ev, t0: v.__t0, t: v.currentTime }; });

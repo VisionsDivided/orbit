@@ -1,9 +1,9 @@
 // Copyright 2026 The tvBro authors. SPDX-License-Identifier: Apache-2.0
-// Full-screen player: live (channel up/down, info overlay, quick-settings bar) and catch-up. Films and
-// episodes (IPTV VOD, Plex / Jellyfin) get the control bar in vodbar.js instead.
-// While the player is open the page behind it is inert and every key goes to the player.
-// Quick settings: video quality, audio track, audio delay (Web Audio DelayNode), subtitles /
-// captions, aspect, sleep timer. Clock top-right.
+// Full-screen player: live TV (channel up/down, number entry, reconnects, docking into the guide's preview box),
+// catch-up, films and episodes (IPTV VOD, Plex / Jellyfin). All of them use one control bar, vodbar.js (live
+// and catch-up in its live mode): this file runs the engine, the stream slot, recovery, tracks and settings and
+// hands the bar its rows. While the player is open the page behind it is inert and every key goes to the player.
+// Settings: video quality, audio track, audio delay (Web Audio DelayNode), subtitles / captions, aspect, sleep timer.
 
 import { api, setResume, getResume, beginStream, endStream, streamStillOurs, inMyList, toggleMyList } from './api.js';
 import { LiveRecovery, watchStall } from './livefix.js';
@@ -12,7 +12,7 @@ import { openLiveExternally } from './external.js';
 import { createEngine, statChips, libsHere } from './engine.js';
 import { detectEnv, playPlan, externalReason, externalLinks } from './playfmt.js';
 import { parseVtt } from './vtt.js';
-import { h, fmtTime, fmtDur, nowSec, menu, toast } from './util.js';
+import { h, fmtTime, menu, toast } from './util.js';
 import { prefs, setPref } from './prefs.js';
 import { upNextDue, pickTrack, UPNEXT_COUNT } from './vodutil.js';
 import { contentBox } from './cropbars.js';
@@ -63,18 +63,10 @@ export function openPlayer(opts) {
   // "Fit, crop black bars": the largest content box seen in this video (a dark scene never zooms in further)
   const crop = { box: null, timer: null, canvas: null };
   const stage = h('div', { class: 'pl-stage' }, video);
-  const clock = h('div', { class: 'pl-clock' });
-  const titleEl = h('div', { class: 'player-title' }, opts.title || '');
-  const subEl = h('div', { class: 'player-sub' }, opts.subtitle || '');
-  const top = h('div', { class: 'player-top' },
-    h('button', { class: 'btn', onclick: () => close() }, '‹ Back'), titleEl, subEl);
-  const info = h('div', { class: 'pl-info', hidden: true });
   const digitsEl = h('div', { class: 'pl-digits', hidden: true });
   const status = h('div', { class: 'pl-status', hidden: true });
-  const qs = h('div', { class: 'pl-qs', hidden: true });
   const notice = h('div', { class: 'pl-notice', hidden: true, role: 'status', 'aria-live': 'polite' });   // reconnects: small, never a dialog
-  if (isVod) layer.append(stage, status, notice);   // + the control bar (vodbar.js, once the session exists)
-  else layer.append(stage, top, clock, info, qs, digitsEl, status, notice);
+  layer.append(stage, digitsEl, status, notice);   // + the control bar (vodbar.js, once the session exists)
   // the page behind the player takes no focus, clicks or keys (a focused "Play from start" there must never
   // get a Space); dialogs (stream limit, PIN, menus) live on <body>, outside it
   const appEl = document.getElementById('app');
@@ -89,7 +81,7 @@ export function openPlayer(opts) {
   const whatOf = (o) => (o.channel ? o.channel.name : o.title || '') + (o.subtitle ? ' · ' + o.subtitle : '') + (o.catchup ? ' (catch-up)' : '');
   let what = whatOf(opts);
   s.eng = { stats: () => ({}), destroy() {}, hls: null };
-  let qsOpen = false, infoTimer = null, hideTimer = null, tickTimer = null, nn = null, saveTimer = null;
+  let tickTimer = null, nn = null, saveTimer = null;
   let released = false, replacedEl = null, extEl = null, bar = null;
   const env = detectEnv();
   const idle = () => ({ stats: () => ({}), destroy() {}, hls: null });
@@ -174,8 +166,9 @@ export function openPlayer(opts) {
     s.mp = m; s.mpPlaying = false;
     if (m.durationSecs) opts.duration = m.durationSecs;
     if (opts.startAt == null) opts.startAt = m.resumeSecs && (!m.durationSecs || m.resumeSecs < m.durationSecs - 30) ? m.resumeSecs : 0;
-    if (m.title) { opts.title = m.title; titleEl.textContent = m.title; }
-    opts.subtitle = m.subtitle || ''; subEl.textContent = opts.subtitle;
+    if (m.title) opts.title = m.title;
+    opts.subtitle = m.subtitle || '';
+    if (bar) bar.render();
     if (!opts.upNext) opts.upNext = () => (s.mp && s.mp.next ? { label: s.mp.next.subtitle || s.mp.next.title, go: () => playNextMedia(s.mp.next) } : null);
     setupMediaSubs(m);
     return { url: m.url };
@@ -237,7 +230,6 @@ export function openPlayer(opts) {
         h('button', { class: 'btn focusable', onclick: () => retryMedia(at) }, '\u21bb Retry'),
         h('button', { class: 'btn secondary focusable', onclick: () => close() }, 'Close')));
     layer.append(errEl);
-    qsOpen = false; qs.hidden = true; info.hidden = true;
     if (bar) { bar.closeMenu(); bar.busy(false); }
     errEl.querySelector('.btn').focus();
   }
@@ -397,7 +389,7 @@ export function openPlayer(opts) {
         h('button', { class: 'btn secondary focusable', onclick: async () => { try { await navigator.clipboard.writeText(abs); flash('Link copied'); } catch { window.prompt('Stream link', abs); } } }, 'Copy link'),
         h('button', { class: 'btn secondary focusable', onclick: () => close() }, 'Close')));
     layer.append(extEl);
-    qsOpen = false; qs.hidden = true; info.hidden = true;
+    if (bar) { bar.closeMenu(); bar.busy(false); }
     extEl.querySelector('.btn').focus();
   }
   startEngine();
@@ -450,156 +442,23 @@ export function openPlayer(opts) {
   video.addEventListener('pause', () => { if (!video.ended) save(); });
   saveTimer = setInterval(save, 10000); s.save = save;
 
-  // ---------- clock / overlays ----------
-  const tickClock = () => { clock.textContent = fmtTime(nowSec()); };
-  tickClock();
-  tickTimer = setInterval(() => { tickClock(); if (!info.hidden) renderInfo(); if (qsOpen) renderQs(); if (bar) bar.render(); }, 1000);
-
-  function showChrome() {
-    layer.classList.add('chrome');
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => { if (!qsOpen) layer.classList.remove('chrome'); }, 3500);
-    armQsHide();
-  }
-  /** The quick-settings bar hides after 5 s without input (mouse, key, touch); a picker keeps it. */
-  let qsHideTimer = null;
-  function armQsHide() {
-    clearTimeout(qsHideTimer);
-    if (!qsOpen) return;
-    qsHideTimer = setTimeout(() => { if (!qsOpen) return; if (document.querySelector('.modal-back')) armQsHide(); else closeQs(); }, 5000);
-  }
-  if (!isVod) {                                    // (films: vodbar.js has its own single show / hide timer)
-    layer.addEventListener('mousemove', showChrome);
-    layer.addEventListener('pointerdown', showChrome, true);
-    layer.addEventListener('touchstart', showChrome, { passive: true, capture: true });
-    showChrome();
-  }
+  // ---------- the bar's clock and programme ----------
+  tickTimer = setInterval(() => { if (bar) bar.render(); }, 1000);
 
   async function loadNowNext() {
     if (!opts.channel || opts.catchup) return;
-    try { const r = await api.nownext([opts.channel.key]); nn = r.nownext[opts.channel.key] || null; if (!info.hidden) renderInfo(); } catch {}
-  }
-  function showInfo(ms = 5000) {
-    info.hidden = false; renderInfo(); clearTimeout(infoTimer);
-    if (ms) infoTimer = setTimeout(() => { info.hidden = true; }, ms);
-  }
-  function chipsEl() { return h('div', { class: 'chips pl-chips' }, ...statChips(s.eng.stats()).map((c) => h('span', { class: 'chip' }, c))); }
-  function renderInfo() {
-    const now = nowSec(), ch = opts.channel;
-    const rows = [];
-    const head = h('div', { class: 'pl-info-head' });
-    if (ch && ch.logo) head.append(h('img', { class: 'pl-logo', src: api.img(ch.logo), onerror: function () { this.style.visibility = 'hidden'; } }));
-    head.append(h('div', { class: 'pl-info-ch' }, ch ? `${ch.number || ''}  ${ch.name}` : (opts.title || '')));
-    if (opts.catchup) head.append(h('span', { class: 'badge catchup' }, '⟲ Catch-up'));
-    if (rec && rec.key !== rec.origin) head.append(h('span', { class: 'badge' }, 'Alternate source'));
-    rows.push(head);
-    const p = opts.prog || (nn && nn.now);
-    let frac = null, timeLine = '';
-    if (seekable) {
-      const d = total(), t = pos();
-      if (d) { frac = Math.min(1, t / d); timeLine = `${fmtDur(t)} / ${fmtDur(d)}   ${fmtDur(Math.max(0, d - t))} left`; }
-      if (opts.subtitle) rows.push(h('div', { class: 'pl-info-title' }, opts.subtitle));
-      if (p) rows.push(h('div', { class: 'pl-info-time' }, `${fmtTime(p.start)} – ${fmtTime(p.stop)}`));
-    } else if (p) {
-      frac = Math.min(1, Math.max(0, (now - p.start) / Math.max(1, p.stop - p.start)));
-      rows.push(h('div', { class: 'pl-info-title' }, p.title + (p.ep ? '  ·  ' + p.ep : '') + (p.sub ? ' ' + p.sub : '')));
-      timeLine = `${fmtTime(p.start)} – ${fmtTime(p.stop)}   ${Math.max(0, Math.ceil((p.stop - now) / 60))} min left`;
-    } else rows.push(h('div', { class: 'pl-info-title dim' }, 'No guide information'));
-    if (timeLine) rows.push(h('div', { class: 'pl-info-time' }, timeLine));
-    if (frac != null) { const b = h('div', { class: 'progress' }, h('i')); b.firstChild.style.width = (frac * 100).toFixed(1) + '%'; rows.push(b); }
-    if (!seekable && nn && nn.next) rows.push(h('div', { class: 'pl-info-next' }, `Next ${fmtTime(nn.next.start)}  ${nn.next.title}`));
-    rows.push(chipsEl());
-    info.replaceChildren(...rows);
+    try { const r = await api.nownext([opts.channel.key]); nn = r.nownext[opts.channel.key] || null; if (bar) bar.render(); } catch {}
   }
   function flash(msg, ms = 2200) { status.textContent = msg; status.hidden = false; clearTimeout(flash.t); flash.t = setTimeout(() => { status.hidden = true; }, ms); }
 
-  // ---------- quick settings / transport bar ----------
-  let qsIdx = 0;
-  function qsItems() {
-    const items = [];
-    if (seekable) {
-      items.push({ label: 'Restart', value: 'from start', act: () => seekTo(0) });
-      items.push({ label: '« 10 s', value: 'rewind', act: () => seekBy(-10) });
-      items.push({ label: video.paused ? '▶ Play' : '❚❚ Pause', value: '', act: () => togglePlay() });
-      items.push({ label: '10 s »', value: 'forward', act: () => seekBy(10) });
-      if (opts.episodeNav) {
-        items.push({ label: '⏮ Previous', value: 'episode', act: () => opts.episodeNav(-1) });
-        items.push({ label: 'Next ⏭', value: 'episode', act: () => opts.episodeNav(1) });
-      }
-    }
-    items.push({ label: 'Video', value: qualityLabel(), act: pickQuality });
-    items.push({ label: 'Audio', value: audioLabel(), act: pickAudio });
-    items.push({ label: 'Audio delay', value: `${curDelay() > 0 ? '+' : ''}${curDelay()} ms`, act: pickDelay, adjust: (d) => setAudioDelay(curDelay() + d * 50) });
-    items.push({ label: 'Subtitles', value: subsLabel(), act: pickSubs });
-    items.push({ label: 'Aspect', value: ASPECTS[aspectIdx].name, act: pickAspect });
-    items.push({ label: 'Sleep timer', value: sleepAt ? Math.max(1, Math.ceil((sleepAt - Date.now()) / 60000)) + ' min' : 'Off', act: pickSleep });
-    if (video.muted) items.push({ label: 'Unmute', value: 'sound off', act: () => { video.muted = false; } });
-    if (opts.vod && fileUrl) items.push({ label: 'Open in app', value: 'VLC · Infuse', act: openInApp });
-    if (opts.channel && !opts.catchup && !opts.local) items.push({ label: 'Open in app', value: 'VLC · link · .m3u', act: () => openLiveExternally(opts.channel, () => video.pause()) });
-    if (opts.channel && !opts.catchup && !opts.local) items.push({ label: '⏺ Record', value: s.recId ? 'recording' : 'on the server', act: recordNow });
-    if (opts.channel && !opts.local) {
-      const c = opts.channel, fav = inMyList(c.key);
-      items.push({ label: fav ? '★ Favourited' : '☆ Favourite', value: fav ? 'remove' : 'add to ★ Favourites', act: () => {
-        const on = toggleMyList({ key: c.key, kind: 'live', name: c.name, logo: c.logo, ch: c });
-        flash(on ? '★ Added to Favourites' : 'Removed from Favourites');
-      } });
-    }
-    if (pipOk()) items.push({ label: 'Picture in picture', value: inPip() ? 'on' : 'off', act: togglePip });
-    items.push({ label: document.fullscreenElement ? 'Window' : 'Full screen', value: 'F', act: toggleFs });
-    return items;
-  }
-  function renderQs() {
-    const items = qsItems();
-    qsIdx = Math.min(qsIdx, items.length - 1);
-    const kids = [];
-    if (seekable) {
-      const d = total();
-      const seek = h('input', { type: 'range', class: 'pl-seek', min: 0, max: Math.max(1, Math.floor(d)), step: 1, value: Math.floor(pos()), tabindex: '-1' });
-      seek.oninput = () => seekTo(+seek.value);
-      kids.push(h('div', { class: 'pl-seekrow' }, h('span', {}, fmtDur(pos())), seek, h('span', {}, d ? fmtDur(d) : '--:--')));
-    }
-    kids.push(h('div', { class: 'qs-row' }, ...items.map((it, i) => h('button', { class: 'qs-btn' + (i === qsIdx ? ' kf' : ''), tabindex: '-1', onclick: () => { qsIdx = i; it.act(); renderQs(); } },
-      h('div', { class: 'qs-l' }, it.label), it.value ? h('div', { class: 'qs-v' }, it.value) : null))));
-    kids.push(h('div', { class: 'qs-hint' }, 'Left/Right choose · Enter open · +/− adjust delay · Up/Esc close'));
-    kids.push(chipsEl());
-    qs.replaceChildren(...kids);
-    s._items = items;
-  }
-  function openQs() { qsOpen = true; qs.hidden = false; layer.classList.add('chrome'); renderQs(); armQsHide(); }
-  function closeQs() { qsOpen = false; qs.hidden = true; clearTimeout(qsHideTimer); showChrome(); }
-
-  function pick(title, rows) {
-    if (!rows.length) { flash('Nothing to choose'); return; }
-    menu(title, rows.map((r) => ({ label: (r.on ? '• ' : '') + r.label, action: () => { r.act(); if (qsOpen) renderQs(); layer.focus(); } })));
-  }
-  function qualityLabel() {
-    const hl = s.eng.hls;
-    if (hl && hl.levels && hl.levels.length) {
-      const l = hl.levels[hl.currentLevel];
-      const name = l ? (l.height ? l.height + 'p' : Math.round(l.bitrate / 1000) + ' kbps') : '';
-      return hl.autoLevelEnabled ? 'Auto' + (name ? ` (${name})` : '') : (name || 'Auto');
-    }
-    return video.videoHeight ? video.videoHeight + 'p' : 'Auto';
-  }
-  /** Picker rows [{label, on, act}]: the live bar's pop-up menus and the film bar's panel both use them. */
+  // ---------- settings rows (the bar's panel) ----------
+  /** Picker rows [{label, on, act}] for the bar's settings panel. */
   function qualityRows() {
     const hl = s.eng.hls;
     if (!hl || !hl.levels || hl.levels.length < 2) return [];
     return [{ label: 'Auto', on: hl.autoLevelEnabled, act: () => { hl.currentLevel = -1; } },
       ...hl.levels.map((l, i) => ({ label: `${l.height ? l.height + 'p' : '?'} · ${(l.bitrate / 1e6).toFixed(1)} Mbps${l.frameRate ? ' · ' + l.frameRate + ' fps' : ''}`,
         on: !hl.autoLevelEnabled && hl.currentLevel === i, act: () => { hl.currentLevel = i; } }))];
-  }
-  function pickQuality() {
-    const rows = qualityRows();
-    if (!rows.length) { flash('Single quality stream'); return; }
-    pick('Video quality', rows);
-  }
-  function audioLabel() {
-    if (s.mp && s.mp.kind === 'hls' && s.mp.audio && s.mp.audio.length) { const t = s.mp.audio.find((x) => x.default) || s.mp.audio[0]; return t.label || t.lang || 'Default'; }
-    if (rmx && rmx.audio && rmx.audio.length) { const t = rmx.audio[rmx.audioPos || 0]; return t ? t.label : 'Default'; }
-    const hl = s.eng.hls;
-    if (hl && hl.audioTracks && hl.audioTracks.length) { const t = hl.audioTracks[hl.audioTrack]; return t ? (t.name || t.lang || 'Track ' + (hl.audioTrack + 1)) : 'Default'; }
-    const st = s.eng.stats(); return st.channels ? (st.channels >= 6 ? '5.1' : st.channels === 2 ? 'Stereo' : st.channels + ' ch') : 'Default';
   }
   function audioRows() {
     if (s.mp && s.mp.kind === 'hls' && s.mp.audio && s.mp.audio.length > 1) {   // the transcode carries one track: start it again with another
@@ -625,11 +484,6 @@ export function openPlayer(opts) {
     if (!hl || !hl.audioTracks || hl.audioTracks.length < 2) return [];
     return hl.audioTracks.map((t, i) => ({ label: `${t.name || t.lang || 'Track ' + (i + 1)}${t.attrs && t.attrs.CHANNELS ? ' · ' + t.attrs.CHANNELS + ' ch' : ''}`,
       on: i === hl.audioTrack, act: () => { hl.audioTrack = i; saveAudio(t.lang || t.name); } }));
-  }
-  function pickAudio() {
-    const rows = audioRows();
-    if (rows.length < 2) { flash('Only one audio track'); return; }
-    pick('Audio track', rows);
   }
   // --- audio delay: <video> -> MediaElementSource -> DelayNode -> speakers ---
   function curDelay() { return s.audio ? Math.round(s.audio.delay.delayTime.value * 1000) : 0; }
@@ -662,11 +516,9 @@ export function openPlayer(opts) {
       { label: '+250 ms', act: () => setAudioDelay(curDelay() + 250) }, { label: '−250 ms', act: () => setAudioDelay(curDelay() - 250) },
       { label: 'Reset to 0', act: () => setAudioDelay(0) }];
   }
-  function pickDelay() { pick(`Audio delay (now +${curDelay()} ms)`, delayRows()); }
   // --- subtitles / closed captions (hls.js subtitle tracks + CEA-608/708 as TextTracks) ---
   // (a remux's subtitle tracks stay on the element: unused ones, e.g. after the next episode, are left out)
   function textTracks() { return [...(video.textTracks || [])].filter((t) => (t.kind === 'subtitles' || t.kind === 'captions') && !(t._src === null && [...subTracks.values()].includes(t))); }
-  function subsLabel() { const t = textTracks().find((x) => x.mode === 'showing'); return t ? (t.label || t.language || 'On') : 'Off'; }
   function setSubs(track, remember = true) {
     const hl = s.eng.hls;
     for (const t of textTracks()) t.mode = t === track ? 'showing' : 'disabled';
@@ -685,11 +537,6 @@ export function openPlayer(opts) {
     if (!tr.length) return [];
     return [{ label: 'Off', on: !tr.some((t) => t.mode === 'showing'), act: () => setSubs(null) },
       ...tr.map((t) => ({ label: `${t.label || t.language || t.kind}${t.kind === 'captions' ? ' (CC)' : ''}`, on: t.mode === 'showing', track: true, act: () => setSubs(t) }))];
-  }
-  function pickSubs() {
-    const rows = subsRows();
-    if (!rows.length) { flash('No subtitles or captions in this stream'); return; }
-    pick('Subtitles / captions', rows);
   }
   /** C: subtitles off, or back on (the show's / last language, else the first track). */
   function toggleSubs() {
@@ -765,14 +612,12 @@ export function openPlayer(opts) {
     else Object.assign(video.style, { aspectRatio: '', width: '100%', height: '100%', maxWidth: '' });
   }
   function aspectRows() { return ASPECTS.map((a, i) => ({ label: a.name, on: i === aspectIdx, act: () => { aspectIdx = i; applyAspect(); } })); }
-  function pickAspect() { pick('Aspect', aspectRows()); }
   function sleepRows() {
     return [0, 15, 30, 60, 90].map((m) => ({ label: m ? m + ' minutes' : 'Off', on: !m && !sleepAt, act: () => {
       clearTimeout(sleepTimer); sleepAt = m ? Date.now() + m * 60000 : 0;
       if (m) sleepTimer = setTimeout(() => { sleepAt = 0; if (cur) cur.close(); toast('Sleep timer: playback stopped'); }, m * 60000);
     } }));
   }
-  function pickSleep() { pick('Sleep timer', sleepRows()); }
   // picture in picture: the standard API (Chrome / Edge / Safari on Mac) or Safari's own (iPhone / iPad)
   function pipOk() { return (document.pictureInPictureEnabled && !!video.requestPictureInPicture) || typeof video.webkitSetPresentationMode === 'function'; }
   function inPip() { return document.pictureInPictureElement === video || video.webkitPresentationMode === 'picture-in-picture'; }
@@ -791,16 +636,6 @@ export function openPlayer(opts) {
 
   // ---------- transport ----------
   function togglePlay() { if (video.paused) video.play().catch(() => {}); else video.pause(); }
-  function seekBy(d) {
-    const t = Math.max(0, pos() + d);
-    seekTo(t);
-    flash(`${d > 0 ? '+' : ''}${d} s  ·  ${fmtDur(pendingSeek != null ? pendingSeek : pos())}`, 900);
-  }
-  let holdCount = 0, holdKey = '';
-  function holdStep(e) {   // hold Left/Right to accelerate: 10, 20, 30, 60 s per step
-    if (e.repeat && holdKey === e.key) holdCount++; else { holdCount = 0; holdKey = e.key; }
-    return [10, 20, 30, 60][Math.min(3, Math.floor(holdCount / 4))];
-  }
 
   // ---------- keys ----------
   let digits = '', digitTimer = null;
@@ -826,46 +661,15 @@ export function openPlayer(opts) {
       else if (k === ' ') e.preventDefault();      // (Space is play / pause only, never a button)
       return;
     }
-    if (bar) {                                   // films and episodes: the control bar (vodbar.js)
-      if (bar.onKey(e)) { e.preventDefault(); e.stopPropagation(); }
+    // live: number keys pick a channel by its number (shown top-left, jumps after 1.5 s)
+    if (!seekable && /^[0-9]$/.test(k) && opts.zapNumber && !(bar && bar.menuOpen())) {
+      e.preventDefault(); e.stopPropagation();
+      digits = (digits + k).slice(0, 4); digitsEl.textContent = digits; digitsEl.hidden = false;
+      clearTimeout(digitTimer);
+      digitTimer = setTimeout(() => { digitsEl.hidden = true; const n = +digits; digits = ''; if (!opts.zapNumber(n)) flash('No channel ' + n); }, 1500);
       return;
     }
-    showChrome();
-    if (qsOpen) {
-      const items = s._items || [];
-      if (k === 'ArrowRight') { qsIdx = Math.min(items.length - 1, qsIdx + 1); renderQs(); }
-      else if (k === 'ArrowLeft') { qsIdx = Math.max(0, qsIdx - 1); renderQs(); }
-      else if ((k === '+' || k === '=' || k === '-') && items[qsIdx] && items[qsIdx].adjust) { items[qsIdx].adjust(k === '-' ? -1 : 1); renderQs(); }
-      else if (k === 'Enter') { if (items[qsIdx]) items[qsIdx].act(); renderQs(); }
-      else if (k === ' ' || k === 'k' || k === 'MediaPlayPause') { if (!e.repeat) togglePlay(); renderQs(); }   // never the lit item ("Restart" is first)
-      else if (k === 'ArrowUp' || k === 'Escape' || k === 'Backspace' || k === 'ArrowDown') { if (!e.repeat) closeQs(); }
-      else return;
-      e.preventDefault(); e.stopPropagation(); return;
-    }
-    let handled = true;
-    if (k === 'Escape' || k === 'Backspace') { if (!e.repeat) { if (!info.hidden) info.hidden = true; else close(); } }
-    else if (k === 'ArrowDown' || k === 'ContextMenu' || k === 'm' || k === 'M') openQs();
-    else if (k === 'Enter' || k === 'i' || k === 'I') { if (info.hidden) showInfo(); else info.hidden = true; }
-    else if (k === ' ' || k === 'k' || k === 'MediaPlayPause') togglePlay();
-    else if (k === 'f' || k === 'F') toggleFs();
-    else if (seekable) {
-      if (k === 'ArrowLeft') seekBy(-holdStep(e));
-      else if (k === 'ArrowRight') seekBy(holdStep(e));
-      else if (k === 'ArrowUp') showInfo();
-      else if (k === 'PageDown' && opts.episodeNav) opts.episodeNav(1);
-      else if (k === 'PageUp' && opts.episodeNav) opts.episodeNav(-1);
-      else handled = false;
-    } else {
-      if ((k === 'ArrowUp' || k === 'PageUp' || k === 'ChannelUp') && opts.zap) opts.zap(1);
-      else if ((k === 'PageDown' || k === 'ChannelDown') && opts.zap) opts.zap(-1);
-      else if ((k === 'ArrowLeft' || k === 'ArrowRight') && !e.repeat) close();
-      else if (/^[0-9]$/.test(k) && opts.zapNumber) {
-        digits = (digits + k).slice(0, 4); digitsEl.textContent = digits; digitsEl.hidden = false;
-        clearTimeout(digitTimer);
-        digitTimer = setTimeout(() => { digitsEl.hidden = true; const n = +digits; digits = ''; if (!opts.zapNumber(n)) flash('No channel ' + n); }, 1500);
-      } else handled = false;
-    }
-    if (handled) { e.preventDefault(); e.stopPropagation(); }
+    if (bar && bar.onKey(e)) { e.preventDefault(); e.stopPropagation(); }   // everything else: the control bar (vodbar.js)
   }
   layer.addEventListener('keydown', onKey);
   // Every key while the player is open is the player's: a key whose target is outside the layer (the focus was
@@ -884,10 +688,6 @@ export function openPlayer(opts) {
   document.addEventListener('keydown', onDocKey, true);
   document.addEventListener('keyup', onKeyUp, true);
   document.addEventListener('focusin', onFocusIn);
-  if (!isVod) {
-    stage.addEventListener('click', () => { if (extEl) return; if (video.muted) { video.muted = false; return; } if (qsOpen) closeQs(); else openQs(); });
-    stage.addEventListener('dblclick', toggleFs);
-  }
 
   // ---------- shows: "Up next" (last 30 s when the length is known, or at the end) ----------
   let up = { el: null, timer: null, cancelled: false };
@@ -936,31 +736,56 @@ export function openPlayer(opts) {
     off = 0; rmx = null; fileUrl = null; fixes = 0; pendingSeek = null; resumed = false; clearTimeout(seekTo.timer);
     setupRemuxSubs();                              // drops the last remux's subtitle cues
     what = whatOf(opts);
-    titleEl.textContent = opts.title || ''; subEl.textContent = opts.subtitle || '';
     restart();
-    if (bar) { bar.render(); bar.show(); } else flash(opts.subtitle || opts.title || '', 3000);
-    if (qsOpen) renderQs();
+    if (bar) { bar.render(); bar.show(); }
     return true;
   };
 
   loadNowNext();
-  if (isVod) {
-    bar = createVodBar({
-      layer, video,
-      title: () => opts.title || '', subtitle: () => opts.subtitle || '',
-      pos, total, busy: () => pendingSeek != null,
-      buffered: () => { const b = video.buffered, out = []; for (let i = 0; b && i < b.length; i++) out.push([off + b.start(i), off + b.end(i)]); return out; },
-      togglePlay, seekTo,
-      canEp: (dir) => (opts.media ? dir > 0 && !!(s.mp && s.mp.next) : opts.hasEpisode ? !!opts.hasEpisode(dir) : !!opts.episodeNav),
-      episode: (dir) => { if (opts.media) { if (dir > 0 && s.mp && s.mp.next) playNextMedia(s.mp.next); } else if (opts.episodeNav) opts.episodeNav(dir); },
-      stop: () => close(),
-      unmuteFirst: () => { if (!s.autoMuted || !video.muted) return false; s.autoMuted = false; video.muted = false; return true; },
-      subsRows, toggleSubs, audioRows, qualityRows, aspectRows, delayRows, sleepRows,
-      delayMs: curDelay, sleepLeft: () => (sleepAt ? Math.max(1, Math.ceil((sleepAt - Date.now()) / 60000)) : 0),
-      extraRows: () => (opts.vod && fileUrl ? [{ label: 'Open in a player app', value: 'VLC · Infuse', act: openInApp }] : []),
-      pipOk, inPip, togglePip, toggleFs,
-    });
-  } else showInfo();
+  const channelOk = () => !!(opts.channel && !opts.local);
+  const liveNow = () => !!(opts.channel && !opts.catchup && !opts.local);
+  bar = createVodBar({
+    layer, video,
+    title: () => opts.title || '', subtitle: () => opts.subtitle || '',
+    pos, total, busy: () => pendingSeek != null,
+    buffered: () => { const b = video.buffered, out = []; for (let i = 0; b && i < b.length; i++) out.push([off + b.start(i), off + b.end(i)]); return out; },
+    togglePlay, seekTo,
+    canEp: (dir) => (opts.media ? dir > 0 && !!(s.mp && s.mp.next) : opts.hasEpisode ? !!opts.hasEpisode(dir) : !!opts.episodeNav),
+    episode: (dir) => { if (opts.media) { if (dir > 0 && s.mp && s.mp.next) playNextMedia(s.mp.next); } else if (opts.episodeNav) opts.episodeNav(dir); },
+    stop: () => close(),
+    unmuteFirst: () => { if (!s.autoMuted || !video.muted) return false; s.autoMuted = false; video.muted = false; return true; },
+    subsRows, toggleSubs, audioRows, qualityRows, aspectRows, delayRows, sleepRows,
+    delayMs: curDelay, sleepLeft: () => (sleepAt ? Math.max(1, Math.ceil((sleepAt - Date.now()) / 60000)) : 0),
+    extraRows: () => {
+      const rows = [];
+      if (opts.catchup) rows.push({ label: 'Restart', value: 'from the start', act: () => seekTo(0) });
+      if (opts.vod && fileUrl) rows.push({ label: 'Open in a player app', value: 'VLC · Infuse', act: openInApp });
+      if (liveNow()) rows.push({ label: 'Open in a player app', value: 'VLC · link · .m3u', act: () => openLiveExternally(opts.channel, () => video.pause()) });
+      return rows;
+    },
+    pipOk, inPip, togglePip, toggleFs,
+    live: isVod ? null : {
+      seekable,
+      channel: () => opts.channel || null,
+      logo: (u) => api.img(u),
+      badges: () => [...(opts.catchup ? ['Catch-up'] : []), ...(rec && rec.key !== rec.origin ? ['Alternate source'] : [])],
+      prog: () => opts.prog || (nn && nn.now) || null,
+      next: () => (seekable ? null : (nn && nn.next) || null),
+      canZap: () => !seekable && !!opts.zap,
+      zap: (dir) => { if (opts.zap) opts.zap(dir); },
+      canFav: channelOk,
+      isFav: () => channelOk() && inMyList(opts.channel.key),
+      toggleFav: () => {
+        const c = opts.channel;
+        const on = toggleMyList({ key: c.key, kind: 'live', name: c.name, logo: c.logo, ch: c });
+        flash(on ? '★ Added to My list' : 'Removed from My list');
+      },
+      canRec: liveNow,
+      recording: () => !!s.recId,
+      record: recordNow,
+      stats: () => statChips(s.eng.stats()),
+    },
+  });
 
   function teardown() {
     if (s.save) s.save();
@@ -969,9 +794,9 @@ export function openPlayer(opts) {
     window.removeEventListener('beforeunload', onPageHide);
     window.removeEventListener('pageshow', onPageShow);
     document.removeEventListener('visibilitychange', onVisibility);
-    clearUpNext(); clearTimeout(qsHideTimer); clearTimeout(recTimer); clearTimeout(note.t); if (stall) stall.stop();
+    clearUpNext(); clearTimeout(recTimer); clearTimeout(note.t); if (stall) stall.stop();
     clearInterval(crop.timer); window.removeEventListener('resize', cropApply);
-    clearInterval(tickTimer); clearInterval(saveTimer); clearInterval(subTimer); clearTimeout(seekTo.timer); clearTimeout(infoTimer); clearTimeout(hideTimer); clearTimeout(digitTimer);
+    clearInterval(tickTimer); clearInterval(saveTimer); clearInterval(subTimer); clearTimeout(seekTo.timer); clearTimeout(digitTimer);
     try { s.eng.destroy(); } catch {}
     try { if (s.audio) s.audio.ctx.close(); } catch {}
     layer.removeEventListener('keydown', onKey);
