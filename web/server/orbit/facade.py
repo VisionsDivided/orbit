@@ -36,6 +36,7 @@ import threading
 import time
 import urllib.error
 import urllib.parse
+import zlib
 from hashlib import sha256
 from typing import Callable, Optional
 
@@ -50,6 +51,10 @@ CHECK_EVERY = 16                    # chunks between "is this TV still linked?" 
 MAX_API = 300 * 1024 * 1024         # one player_api.php answer (VOD lists), as tvbro_server.app.MAX_API_BYTES
 MAX_M3U = 200 * 1024 * 1024         # an M3U playlist
 MAX_HLS = 8 * 1024 * 1024           # an HLS playlist
+CAT_GLOBAL = 2                      # catalogue calls (player_api.php, get.php) being fetched at once, server-wide
+CAT_WAIT = 180                      # seconds a catalogue call waits for its turn before 503
+CAT_TTL = 60                        # a scrubbed catalogue answer is reused this long (same device, same call)
+CAT_CACHE_MAX = 256 * 1024 * 1024   # bytes of cached answers in all (oldest dropped)
 ACTIVE_SEC = 20                     # a TV counts as streaming for this long after its last media bytes
 USER_RE = re.compile(r"^tv[0-9a-f]{16}$")
 PASS_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -84,6 +89,15 @@ _LOGIN_IN_PATH = re.compile(r"(/xt/[^/\s?]+/[a-z]+/)[^/\s?]+/[^/\s?]+")
 def redact(text: str) -> str:
     """A request path (or log line) with any facade device login in it replaced by '-/-'."""
     return _LOGIN_IN_PATH.sub(r"\1-/-", text or "")
+
+
+def gunzip_capped(data: bytes, cap: int) -> bytes:
+    """A gzip body inflated to at most ``cap`` bytes (ValueError beyond: a small "gzip bomb" cannot fill memory)."""
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    out = d.decompress(data, cap + 1)
+    if len(out) > cap:
+        raise ValueError("too large")
+    return out
 
 
 def safe_err(e: BaseException) -> str:
@@ -351,7 +365,14 @@ class Facade:
                  clock: Callable[[], float] = time.time):
         self.keys, self.provider, self._seal, self._unseal = keys, provider, seal, unseal
         self.open_url, self.is_blocked = open_url, is_blocked
+        self.clock = clock
         self.relays = Relays(clock)
+        # M3: a catalogue answer can be hundreds of MB while it is read, parsed and scrubbed. One call at a time per
+        # device, a small cap server-wide, and the scrubbed answer is reused for a minute.
+        self._cat_lock = threading.Lock()
+        self._cat_dev: dict[str, list] = {}         # device -> [semaphore, users]
+        self._cat_all = threading.BoundedSemaphore(CAT_GLOBAL)
+        self._cat_cache: dict[tuple, tuple] = {}    # key -> (expires, (body, ctype))
 
     def seal(self, url: str) -> str:
         return self._seal("xt|" + url)
@@ -442,6 +463,63 @@ class Facade:
         return lambda u: prefix + self.seal(u) + _ext(u)
 
     # ---- catalogue ----
+    def _cat_cached(self, key: tuple) -> Optional[tuple]:
+        now = self.clock()
+        with self._cat_lock:
+            hit = self._cat_cache.get(key)
+            if hit and hit[0] > now:
+                return hit[1]
+            if hit:
+                self._cat_cache.pop(key, None)
+        return None
+
+    def _cat_store(self, key: tuple, out: tuple):
+        now = self.clock()
+        size = len(out[0])
+        with self._cat_lock:
+            for k in [k for k, v in self._cat_cache.items() if v[0] <= now]:
+                del self._cat_cache[k]
+            if size > CAT_CACHE_MAX:
+                return
+            self._cat_cache.pop(key, None)
+            total = sum(len(v[1][0]) for v in self._cat_cache.values())
+            for k in list(self._cat_cache):           # oldest first (insertion order)
+                if total + size <= CAT_CACHE_MAX:
+                    break
+                total -= len(self._cat_cache.pop(k)[1][0])
+            self._cat_cache[key] = (now + CAT_TTL, out)
+
+    def _catalogue(self, h, dev: str, key: tuple, make: Callable[[], Optional[tuple]]):
+        """Serve a catalogue answer: from the cache, else ``make()`` -> (body, ctype) or None (it answered itself),
+        one at a time per device and at most CAT_GLOBAL server-wide."""
+        with self._cat_lock:
+            ent = self._cat_dev.setdefault(dev, [threading.Semaphore(1), 0])
+            ent[1] += 1
+        try:
+            if not ent[0].acquire(timeout=CAT_WAIT):
+                return self._err(h, 503, "busy: this device already has a catalogue request running")
+            try:
+                hit = self._cat_cached(key)    # a parallel identical call may have just filled it
+                if hit is not None:
+                    return self._send(h, 200, hit[0], hit[1], gz=True)
+                if not self._cat_all.acquire(timeout=CAT_WAIT):
+                    return self._err(h, 503, "busy: try again in a moment")
+                try:
+                    out = make()
+                finally:
+                    self._cat_all.release()
+                if out is None:
+                    return None
+                self._cat_store(key, out)
+                return self._send(h, 200, out[0], out[1], gz=True)
+            finally:
+                ent[0].release()
+        finally:
+            with self._cat_lock:
+                ent[1] -= 1
+                if ent[1] <= 0 and self._cat_dev.get(dev) is ent:
+                    del self._cat_dev[dev]
+
     def _fetch(self, url: str, cap: int, headers: Optional[dict] = None):
         with self.open_url(url, timeout=120, headers=headers) as r:
             data = r.read(cap + 1)
@@ -470,15 +548,21 @@ class Facade:
         action = extra.pop("action", None)
         url = f"{P.normalize_server(prov['server'])}/player_api.php?" + urllib.parse.urlencode(
             {"username": prov["user"], "password": prov["pass"], **({"action": action} if action else {}), **extra})
-        try:
-            body, _ = self._fetch(url, MAX_API)
-        except Exception as e:                  # noqa: BLE001
-            return self._upstream_fail(h, e)
-        sc = Scrub(prov["server"], prov["user"], prov["pass"], query["username"], query["password"], origin,
-                   self._linker(pid, query["username"], query["password"]))
-        if sc.needed(body):
-            body = sc.apply(body)
-        self._send(h, 200, body, "application/json", gz=True)
+
+        def make():
+            try:
+                body, _ = self._fetch(url, MAX_API)
+            except Exception as e:              # noqa: BLE001
+                self._upstream_fail(h, e)
+                return None
+            sc = Scrub(prov["server"], prov["user"], prov["pass"], query["username"], query["password"], origin,
+                       self._linker(pid, query["username"], query["password"]))
+            if sc.needed(body):
+                body = sc.apply(body)
+            return body, "application/json"
+        # the scrubbed answer carries this device's own login, so it is reused for the same device only
+        key = ("api", pid, dev, origin, action or "", tuple(sorted(extra.items())))
+        return self._catalogue(h, dev, key, make)
 
     def _m3u(self, h, pid, prov, dev, query, raw_query, origin):
         if prov.get("kind") == "xtream":
@@ -490,22 +574,31 @@ class Facade:
             url = prov.get("url") or ""
         if not url:
             return self._err(h, 404, "no playlist address")
-        try:
-            body, _ = self._fetch(url, MAX_M3U)
-        except Exception as e:                  # noqa: BLE001
-            return self._upstream_fail(h, e)
-        if body[:2] == b"\x1f\x8b":
+
+        def make():
             try:
-                body = gzip.decompress(body)[:MAX_M3U]
-            except OSError:
-                return self._err(h, 502, "provider sent a broken playlist")
-        user, secret = query["username"], query["password"]
-        link = self._linker(pid, user, secret)
-        tprefix = f"/xt/{pid}/t/{user}/{secret}/"
-        absol = lambda p: origin + p            # noqa: E731  (the TV stores these: absolute addresses)
-        text = rewrite_m3u(body.decode("utf-8", "replace"), lambda u: absol(link(u)),
-                           lambda t: absol(template_link(t, self.seal, tprefix)), lambda u: absol(link(u)))
-        self._send(h, 200, text.encode(), "audio/x-mpegurl; charset=utf-8", gz=True)
+                body, _ = self._fetch(url, MAX_M3U)
+            except Exception as e:              # noqa: BLE001
+                self._upstream_fail(h, e)
+                return None
+            if body[:2] == b"\x1f\x8b":
+                try:
+                    body = gunzip_capped(body, MAX_M3U)
+                except ValueError:
+                    self._err(h, 502, "the provider's playlist is too large")
+                    return None
+                except (OSError, zlib.error, EOFError):
+                    self._err(h, 502, "provider sent a broken playlist")
+                    return None
+            user, secret = query["username"], query["password"]
+            link = self._linker(pid, user, secret)
+            tprefix = f"/xt/{pid}/t/{user}/{secret}/"
+            absol = lambda p: origin + p        # noqa: E731  (the TV stores these: absolute addresses)
+            text = rewrite_m3u(body.decode("utf-8", "replace"), lambda u: absol(link(u)),
+                               lambda t: absol(template_link(t, self.seal, tprefix)), lambda u: absol(link(u)))
+            return text.encode(), "audio/x-mpegurl; charset=utf-8"
+        q = tuple(sorted((k, v) for k, v in query.items() if k not in ("username", "password")))
+        return self._catalogue(h, dev, ("m3u", pid, dev, origin, q), make)
 
     def _xmltv(self, h, pid, prov, dev, query, raw_query, origin):
         if prov.get("kind") == "xtream" and "n" not in query:

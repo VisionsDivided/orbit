@@ -99,7 +99,8 @@ server relays everything from the provider: catalogue, guide and **every byte of
   virtual NIC on a busy or 100 Mbit/s host link, or a server on Wi-Fi, is where this shows first.
 - **CPU and memory.** A relay is a copy loop in its own thread, 64 KiB at a time: a few percent of one core per
   stream on a small VM, no transcoding. Catalogue answers are read whole before they are passed on (a large VOD list
-  can be tens of MB in memory for a moment, per TV syncing at that moment).
+  can be tens of MB in memory for a moment). Each TV fetches one catalogue call at a time, at most 2 are fetched at
+  once server-wide (others wait), and a TV's scrubbed answer is reused for 60 s (at most 256 MB cached in all).
 - **Connections.** The provider sees the server's address for every stream, not the TV's. The provider's connection
   limit is unchanged (one connection per stream either way). The server handles up to 256 connections at once.
 - **Names.** TVs use the same address for the facade as for the API, so whatever they link with must be in

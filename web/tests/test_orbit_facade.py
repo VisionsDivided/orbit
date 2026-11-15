@@ -155,6 +155,106 @@ class Keys(unittest.TestCase):
         self.assertIsNone(self.keys.creds(web), "a browser sign-in still gets none")
 
 
+class _H:
+    """Just enough of a request handler for Facade._send."""
+
+    def __init__(self):
+        self.headers, self.command, self.code, self.out = {"Accept-Encoding": ""}, "GET", None, {}
+        self.wfile = self
+        self.body = b""
+
+    def send_response(self, code):
+        self.code = code
+
+    def send_header(self, k, v):
+        self.out[k] = v
+
+    def end_headers(self):
+        pass
+
+    def write(self, b):
+        self.body += b
+
+
+class Catalogue(unittest.TestCase):
+    """M3: catalogue calls are one at a time per device, capped server-wide, reused for 60 s, and a gzip playlist
+    cannot inflate past the cap."""
+    PROV = {"kind": "xtream", "server": "http://provider.example.com", "user": USER, "pass": PW}
+
+    def setUp(self):
+        self.t = [1000.0]
+        self.fetches = []
+        self.now_running, self.peak = 0, 0
+        self.lock = threading.Lock()
+        self.delay = 0.0
+        self.fac = F.Facade(None, lambda pid: self.PROV, lambda u: "sealed", lambda t: None, self.open_url,
+                            lambda e: False, clock=lambda: self.t[0])
+
+    def open_url(self, url, timeout=30, headers=None):
+        test = self
+
+        class R:
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                with test.lock:
+                    test.fetches.append(url)
+                    test.now_running += 1
+                    test.peak = max(test.peak, test.now_running)
+                return self
+
+            def __exit__(self, *a):
+                with test.lock:
+                    test.now_running -= 1
+
+            def read(self, n):
+                time.sleep(test.delay)
+                return b'[{"stream_id": 1, "name": "One"}]'
+        return R()
+
+    def api(self, dev, action="get_live_streams", user="tv" + "a" * 16):
+        h = _H()
+        self.fac._api(h, "p0", self.PROV, dev, {"username": user, "password": "b" * 32, "action": action}, "",
+                      "http://192.0.2.10:8750")
+        return h
+
+    def test_answers_are_reused_for_a_minute_per_device(self):
+        a = self.api("dev1")
+        self.assertEqual(a.code, 200)
+        self.assertEqual(self.api("dev1").body, a.body)
+        self.assertEqual(len(self.fetches), 1, "the second call came from the cache")
+        self.api("dev2")
+        self.assertEqual(len(self.fetches), 2, "another device's answer carries another login: not shared")
+        self.api("dev1", action="get_vod_streams")
+        self.assertEqual(len(self.fetches), 3)
+        self.t[0] += F.CAT_TTL + 1
+        self.api("dev1")
+        self.assertEqual(len(self.fetches), 4, "stale after a minute")
+
+    def test_one_call_at_a_time_per_device_and_a_global_cap(self):
+        self.delay = 0.15
+        ts = [threading.Thread(target=self.api, args=("dev1", "a%d" % i)) for i in range(4)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual((len(self.fetches), self.peak), (4, 1), "one device: one at a time")
+        self.peak = 0
+        ts = [threading.Thread(target=self.api, args=("dev%d" % i, "b")) for i in range(6)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertLessEqual(self.peak, F.CAT_GLOBAL)
+        self.assertEqual(self.fac._cat_dev, {}, "nothing left behind per device")
+
+    def test_gzip_is_inflated_with_a_cap(self):
+        bomb = gzip.compress(b"\0" * (4 * 1024 * 1024))
+        with self.assertRaises(ValueError):
+            F.gunzip_capped(bomb, 1024 * 1024)
+        self.assertEqual(F.gunzip_capped(gzip.compress(b"#EXTM3U\n"), 100), b"#EXTM3U\n")
+
+
 # --------------------------------------------------------------------------- end to end, real server process
 
 

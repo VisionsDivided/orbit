@@ -133,7 +133,7 @@ Facade routes (Host check as everywhere; no cookie, the device login is in the a
 
 | Path under `/xt/<id>/` | Does |
 |---|---|
-| `player_api.php?username&password[&action&…]` | the provider's answer for the same action and parameters (Xtream only). `user_info.username` / `password` become the device's, `server_info` names this server, and any value that carries the provider login in an address is replaced by a sealed `s/` address. Other answers pass through unchanged. gzip when the TV accepts it. |
+| `player_api.php?username&password[&action&…]` | the provider's answer for the same action and parameters (Xtream only). `user_info.username` / `password` become the device's, `server_info` names this server, and any value that carries the provider login in an address is replaced by a sealed `s/` address. Other answers pass through unchanged. gzip when the TV accepts it. Catalogue calls (`player_api.php`, `get.php`) run one at a time per device and at most 2 at once server-wide (a call waits its turn, 503 after 3 minutes); the device's scrubbed answer is reused for 60 s for the same call and parameters. A gzip playlist is inflated to at most 200 MB (502 beyond). |
 | `xmltv.php?username&password[&n=i]` | the guide, streamed through: Xtream's own `xmltv.php`, or the M3U playlist's i-th guide address. |
 | `get.php?username&password` | the M3U playlist (for Xtream: the provider's `get.php`), rewritten: every stream line, the `url-tvg` / `x-tvg-url` guide addresses and absolute `catchup-source` templates point here. Logos stay as they are. |
 | `live\|movie\|series\|timeshift/<user>/<pass>/<rest>` | relayed from the provider's same path with the real login (Xtream only). |
