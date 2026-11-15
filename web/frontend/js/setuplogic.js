@@ -39,7 +39,8 @@ export function seerrUserLabel(u) {
 }
 
 /** The mapping list from GET /v1/discover/users: one row per Orbit account with the options of its select
- *  ([value, label], "" = not linked; the suggested user is marked) and the value now. */
+ *  ([value, label], "" = not linked; the suggested user and Seerr admins are marked: only the owner may link an
+ *  account to a Seerr admin, whose requests are approved automatically) and the value now. */
 export function mappingRows(data) {
   const users = (data && data.users) || [];
   return ((data && data.accounts) || []).map((a) => ({
@@ -47,7 +48,8 @@ export function mappingRows(data) {
     name: a.displayName && a.displayName !== a.username ? `${a.displayName} (${a.username})` : a.username,
     value: a.seerrUserId ? String(a.seerrUserId) : '',
     suggested: a.suggested || null,
-    options: [['', 'Not linked'], ...users.map((u) => [String(u.id), seerrUserLabel(u) + (u.id === a.suggested && u.id !== a.seerrUserId ? ' · suggested' : '')])],
+    options: [['', 'Not linked'], ...users.map((u) => [String(u.id), seerrUserLabel(u) + (u.admin ? ' · Seerr admin' : '')
+      + (u.id === a.suggested && u.id !== a.seerrUserId ? ' · suggested' : '')])],
   }));
 }
 
