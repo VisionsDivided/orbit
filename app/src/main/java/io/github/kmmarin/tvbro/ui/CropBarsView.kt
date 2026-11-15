@@ -14,6 +14,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.ui.PlayerView
+import io.github.kmmarin.tvbro.R
 import io.github.kmmarin.tvbro.data.CropBars
 
 /**
@@ -111,7 +112,6 @@ class CropBarsView private constructor(private val pv: PlayerView) : Player.List
         val f = if (!active || !full) null else CropBars.fill(box, pv.width.toDouble(), pv.height.toDouble(), vs.width * vs.pixelWidthHeightRatio.toDouble(), vs.height.toDouble())
         val s = (f?.scale ?: 1.0).toFloat()
         if (v.scaleX == s && v.translationX == (f?.tx ?: 0.0).toFloat() && v.translationY == (f?.ty ?: 0.0).toFloat()) return
-        v.pivotX = v.width / 2f; v.pivotY = v.height / 2f
         v.scaleX = s; v.scaleY = s
         v.translationX = (f?.tx ?: 0.0).toFloat(); v.translationY = (f?.ty ?: 0.0).toFloat()
     }
@@ -131,9 +131,8 @@ class CropBarsView private constructor(private val pv: PlayerView) : Player.List
 
     companion object {
         private val worker: Handler by lazy { Handler(HandlerThread("orbit-cropbars").apply { start() }.looper) }
-        private val views = java.util.WeakHashMap<PlayerView, CropBarsView>()
-
-        /** The crop helper of [pv], made on first use (it lives as long as the view). Main thread. */
-        fun of(pv: PlayerView): CropBarsView = views.getOrPut(pv) { CropBarsView(pv) }
+        /** The crop helper of [pv], made on first use (kept in a view tag: it lives as long as the view). Main thread. */
+        fun of(pv: PlayerView): CropBarsView =
+            (pv.getTag(R.id.orbit_cropbars) as? CropBarsView) ?: CropBarsView(pv).also { pv.setTag(R.id.orbit_cropbars, it) }
     }
 }
