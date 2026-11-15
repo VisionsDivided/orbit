@@ -80,9 +80,41 @@ class Security(unittest.TestCase):
             with self.assertRaises(ApiError):
                 self.acc.login("alex", "wrong guess %d" % i, "192.0.2.%d" % (60 + i))   # many addresses
             self.acc.login("sam", "another pass 2", "192.0.2.99")    # the attacker's own account
-        with self.assertRaises(ApiError) as e:
-            self.acc.login("alex", "correct horse 1", "192.0.2.77")
+        with self.assertRaises(ApiError) as e:                     # a wrong guess from yet another address: slowed
+            self.acc.login("alex", "wrong again", "192.0.2.78")
         self.assertEqual(e.exception.code, 429)
+        # M2: the right password from a client that has not been failing still signs the owner in
+        self.acc.login("alex", "correct horse 1", "192.0.2.77")
+
+    def test_strangers_cannot_lock_every_account_out(self):
+        """M2: no overall bucket for account sign-ins: many failures (unknown usernames, many addresses) do not
+        hold up anyone else."""
+        for i in range(200):
+            with self.assertRaises(ApiError):
+                self.acc.login("nobody%d" % i, "guess", "198.51.100.%d" % (i % 250))
+        self.acc.login("alex", "correct horse 1", "192.0.2.80")
+        self.acc.login("sam", "another pass 2", "192.0.2.81")
+
+    def test_a_failing_client_is_held_up_even_with_the_right_password(self):
+        for i in range(6):
+            with self.assertRaises(ApiError):
+                self.acc.login("alex", "wrong %d" % i, "192.0.2.90")
+        with self.assertRaises(ApiError) as e:
+            self.acc.login("alex", "correct horse 1", "192.0.2.90")
+        self.assertEqual(e.exception.code, 429)
+        self.acc.login("alex", "correct horse 1", "192.0.2.91")      # another client is not
+
+    def test_ipv6_clients_count_per_64(self):
+        for i in range(6):
+            with self.assertRaises(ApiError):
+                self.acc.login("alex", "wrong %d" % i, "2001:db8:1:2::%x" % (i + 1))
+        with self.assertRaises(ApiError) as e:                         # the same /64, another address
+            self.acc.login("sam", "another pass 2", "2001:db8:1:2::abcd")
+        self.assertEqual(e.exception.code, 429)
+        self.acc.login("sam", "another pass 2", "2001:db8:1:3::1")    # another /64
+        self.assertEqual(AU.client_key("2001:db8:1:2:aaaa::1"), "2001:db8:1:2::/64")
+        self.assertEqual(AU.client_key("::ffff:192.0.2.7"), "192.0.2.7")
+        self.assertEqual(AU.client_key("192.0.2.7"), "192.0.2.7")
 
     def test_one_account_cannot_push_out_the_others(self):
         for _ in range(AC.MAX_SESSIONS_PER_ACCOUNT + 5):

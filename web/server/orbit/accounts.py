@@ -18,7 +18,7 @@ import secrets
 import time
 from typing import Callable, Optional
 
-from tvbro_server.auth import (MAX_LEN, Throttle, Wait, check_new_password, hash_password,  # noqa: F401
+from tvbro_server.auth import (MAX_LEN, Throttle, Wait, check_new_password, client_key, hash_password,  # noqa: F401
                                verify_password)
 from tvbro_server.secfile import write_secret
 
@@ -81,8 +81,10 @@ class Accounts:
         self.clock = clock
         self.db = Database(os.path.join(data_dir, "orbit.db"))
         self.token_path = os.path.join(data_dir, "orbit-setup-token")
-        self.throttle = Throttle(clock)          # wrong passwords per client address
-        self.user_throttle = Throttle(clock)     # and per username (a success elsewhere never resets it)
+        # Wrong sign-in passwords. No overall bucket: a stranger must not be able to lock every account out.
+        self.throttle = Throttle(clock, global_free=None)       # per client address (IPv6 per /64)
+        self.pair_throttle = Throttle(clock, global_free=None)  # per (client, username)
+        self.user_throttle = Throttle(clock, global_free=None)  # per username: slows wrong guesses only (below)
         self._gate_cache: dict = {}
         # set by the app (orbit/profilestate.py): the owner's first profile at setup, a deleted profile
         self.on_setup: Callable[[str], None] = lambda pid: None
@@ -141,10 +143,10 @@ class Accounts:
     def login(self, username, password, client: str, device: str = "", kind: str = "web") -> str:
         """kind: "desktop" for the Orbit desktop app (watches and syncs like a linked TV), else a browser."""
         key = username.strip().lower() if isinstance(username, str) else ""
-        try:
+        pair = "cu:" + client_key(client) + "|" + key
+        try:                                  # this client's own failures hold up only this client
             self.throttle.check(client)
-            if key:
-                self.user_throttle.check("u:" + key)
+            self.pair_throttle.check(pair)
         except Wait as e:
             raise ApiError(429, "too many wrong passwords", e.retry_after)
         row = self.db.one("SELECT id, username, display_name, role, pw_hash, disabled, created FROM accounts "
@@ -153,11 +155,18 @@ class Accounts:
         ok = verify_password(pw, row[4] if row else self._dummy) and row is not None and not row[5]
         if not ok:
             LOG.warning("wrong Orbit sign-in from %s", client)
+            # the per-username block is applied only now, after the password was checked: guessing one username
+            # from many addresses is slowed down (429), but the right password from a clean client still works
+            wait = self.user_throttle.blocked("u:" + key) if key else 0
             self.throttle.fail(client)
+            self.pair_throttle.fail(pair)
             if key:
                 self.user_throttle.fail("u:" + key)
+            if wait:
+                raise ApiError(429, "too many wrong passwords", max(1, int(wait + 0.999)))
             raise ApiError(403, "wrong username or password")
         self.throttle.ok(client)
+        self.pair_throttle.ok(pair)
         self.user_throttle.ok("u:" + key)
         self._prune()
         return self._issue(self._account(row), device, kind="desktop" if kind == "desktop" else "web")
