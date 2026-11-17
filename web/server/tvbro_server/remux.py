@@ -658,6 +658,7 @@ class RemuxManager:
                 return
             old = j.proc
             if old is not None and old.poll() is None:
+                old.orbit_restart = True                # its end is not an error (_drain)
                 try:
                     if j.paused:
                         old.send_signal(signal.SIGCONT)
@@ -720,7 +721,7 @@ class RemuxManager:
         except (OSError, ValueError):
             pass
         rc = proc.wait()
-        if rc != 0 and not j.killed and proc is j.proc:     # ffmpeg answers SIGTERM with 255 (also a restart)
+        if rc != 0 and not j.killed and not getattr(proc, "orbit_restart", False):   # SIGTERM: 255
             LOG.warning("remux %s ended (%s): %s", j.rid[:6], rc, j.err)
 
     def get(self, rid: str) -> Optional[Job]:
