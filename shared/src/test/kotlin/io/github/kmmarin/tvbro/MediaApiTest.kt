@@ -141,4 +141,43 @@ class MediaApiTest {
         assertTrue(eps[0].inProgress); assertFalse(eps[1].inProgress); assertTrue(eps[1].watched)
         assertEquals("$server/v1/media/image?conn=c1&path=x", eps[0].image)
     }
+
+    /** A fake server whose /v1/speedtest answers [size] bytes with X-Orbit-Away: [away]. */
+    private fun speedServer(away: String, size: Int, hits: IntArray): okhttp3.OkHttpClient =
+        okhttp3.OkHttpClient.Builder().addInterceptor(okhttp3.Interceptor { chain ->
+            val r = chain.request()
+            hits[0]++
+            assertEquals("/v1/speedtest", r.url.encodedPath)
+            assertEquals("tvbro_s=sess1", r.header("Cookie"))
+            okhttp3.Response.Builder().request(r).protocol(okhttp3.Protocol.HTTP_1_1).code(200).message("OK")
+                .header("X-Orbit-Away", away).body(ByteArray(size).toResponseBody("application/octet-stream".toMediaType())).build()
+        }).build()
+
+    @Test fun speedTestMeasuresAwayFromHomeAndIsReused() {
+        val hits = IntArray(1)
+        val l = link.copy(server = "http://192.0.2.11:8750")
+        val api = OrbitApi(speedServer("1", 4 * 1024 * 1024, hits))
+        val v = api.speedKbps(l, now = 1_000L)
+        assertTrue("measured: $v", v != null && v > 0)
+        assertEquals(v, api.speedKbps(l, now = 60_000L))                  // within 5 minutes: no new test
+        assertEquals(1, hits[0])
+        api.speedKbps(l, now = 1_000L + 6 * 60_000L)
+        assertEquals(2, hits[0])
+    }
+
+    @Test fun speedTestAtHomeSendsNothing() {
+        val hits = IntArray(1)
+        val l = link.copy(server = "http://192.0.2.12:8750")
+        assertNull(OrbitApi(speedServer("0", 1024 * 1024, hits)).speedKbps(l, now = 1_000L))
+        assertNull(OrbitApi.speedFrom(0, 10.0)); assertNull(OrbitApi.speedFrom(100, 0.0))
+        assertEquals(8000, OrbitApi.speedFrom(1_000_000, 1000.0))
+    }
+
+    @Test fun playSendsTheMeasuredSpeed() {
+        val f = Fake { _, _ -> 200 to playAnswer }
+        MediaApi(OrbitApi(f.client)).play(link, "c1", "i9", "tv", speedKbps = 12000)
+        assertEquals("12000", f.calls.single().second!!["speedKbps"]!!.jsonPrimitive.content)
+        MediaApi(OrbitApi(f.client)).play(link, "c1", "i9", "tv")
+        assertNull(f.calls.last().second!!["speedKbps"])
+    }
 }

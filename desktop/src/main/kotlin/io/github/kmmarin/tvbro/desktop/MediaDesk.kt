@@ -62,7 +62,7 @@ class DeskMediaPlay(private val app: AppState) {
         starting = true; message = ""
         app.io {
             val (p, err) = try {
-                (app.orbit.call { api.play(it, conn, id, "desktop", if (hlsOnly) MediaApi.HLS_ONLY else null) } to null)
+                (app.orbit.call { api.play(it, conn, id, "desktop", if (hlsOnly) MediaApi.HLS_ONLY else null, api.speedKbps(it)) } to null)
             } catch (e: CancellationException) { throw e } catch (e: Exception) { null to e }
             app.runOnUi {
                 starting = false

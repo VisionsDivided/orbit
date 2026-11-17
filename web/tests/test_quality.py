@@ -41,6 +41,23 @@ class Away(unittest.TestCase):
             self.assertEqual(Q.choose(None, "100.100.1.1")["level"], "2")
         with mock.patch.dict(os.environ, {Q.ENV_LEVEL: "huge"}):
             self.assertEqual(Q.choose(None, "100.100.1.1")["level"], "4")
+        with mock.patch.dict(os.environ, {Q.ENV_NETS: "", Q.ENV_LEVEL: "", Q.ENV_ORIG: ""}):
+            away = "100.100.1.1"
+            for kbps, level in ((40000, "orig"), (28572, "orig"), (28000, "8"), (12000, "8"), (11000, "4"),
+                                (6000, "4"), (5000, "2"), (500, "2")):
+                self.assertEqual(Q.choose("auto", away, kbps)["level"], level, kbps)
+            self.assertEqual(Q.choose(None, away, "12000")["speed"], 12000)
+            self.assertEqual(Q.choose(None, "192.168.1.20", 500)["level"], "orig", "home is always Original")
+            self.assertNotIn("speed", Q.choose(None, "192.168.1.20", 500))
+            self.assertEqual(Q.choose("8", away, 500)["level"], "8", "a chosen level wins over the measurement")
+            for junk in (0, -5, True, "fast", float("nan"), 10 ** 9):
+                self.assertEqual(Q.choose(None, away, junk)["level"], "4", junk)
+        with mock.patch.dict(os.environ, {Q.ENV_ORIG: "50000"}):
+            self.assertEqual(Q.choose(None, "100.100.1.1", 40000)["level"], "8")
+        self.assertEqual(len(Q.test_bytes("1")), 256 * 1024)
+        self.assertEqual(len(Q.test_bytes(None)), 2 * 1024 * 1024)
+        self.assertEqual(len(Q.test_bytes(10 ** 12)), Q.TEST_MAX)
+        self.assertEqual(Q.public(Q.choose(None, "100.100.1.1", 6000))["speedKbps"], 6000)
         self.assertEqual(Q.resolution(720), "1280x720")
         self.assertEqual(Q.resolution(480), "854x480")
 

@@ -89,10 +89,14 @@ address can claim to forward for anyone. Session cookies get `Secure` when a tru
 
 ## Films and shows away from home
 
-At home a film or episode is sent as it is, often 8 to 20 Mbit/s. Over Tailscale or the internet that is usually
-more than the link carries, and the player waits a long time before the picture starts. So a device that is away
-gets a transcode instead: 720p at 4 Mbit/s by default (`ORBIT_AWAY_QUALITY`: `8` for 1080p at 8 Mbit/s, `4`, `2`
-for 480p at 2 Mbit/s, or `orig` for no limit). The web app's Settings ▸ This browser ▸ Films and shows quality
+At home a film or episode is always sent as it is, often 8 to 20 Mbit/s. Over Tailscale or the internet that can be
+more than the link carries, and the player waits a long time before the picture starts. So away from home "Auto"
+fits the connection: just before playing, the app times a short download from this server (`GET /v1/speedtest`,
+about 1.5 s, reused for 5 minutes) and the server picks the highest level that needs at most 70% of it. Original
+counts as `ORBIT_ORIG_KBPS` (default 20000 kbit/s); then 1080p at 8 Mbit/s, 720p at 4, 480p at 2. Without a
+measurement (an older app, or the test failed) a device that is away gets `ORBIT_AWAY_QUALITY` (default `4`:
+720p at 4 Mbit/s; also `8`, `2` or `orig`). The web app measures for Plex, Jellyfin and IPTV films; the TV and
+desktop apps for Plex and Jellyfin (their IPTV films still play the original file). The web app's Settings ▸ This browser ▸ Films and shows quality
 overrides it per browser. Plex and Jellyfin do the transcode themselves; IPTV films and episodes are converted by
 this server's ffmpeg (about one CPU core per film at 720p).
 

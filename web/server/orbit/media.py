@@ -418,7 +418,7 @@ class MediaServers:
         (a lower quality cap away from home)."""
         r, c = self.connector(sess, b.get("conn"))
         out = self.plays.start(sess, r, c, b.get("id"), b.get("client"), b.get("caps"), b.get("audio"),
-                               b.get("startSecs"), b.get("quality"), addr)
+                               b.get("startSecs"), b.get("quality"), addr, b.get("speedKbps"))
         self._ok(r)
         return out
 

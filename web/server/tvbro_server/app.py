@@ -1919,7 +1919,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", rep.ctype)
             self.send_header("Content-Length", str(len(rep.raw)))
             self.end_headers()
-            self.wfile.write(rep.raw)
+            try:
+                self.wfile.write(rep.raw)
+            except ConnectionError:                     # a speed test the app stopped reading early
+                self.close_connection = True
             return
         if rep.session is not None:
             hdr["Set-Cookie"] = self._cookie(rep.session, AUTH.SESSION_TTL if rep.session else 0)
@@ -2708,7 +2711,7 @@ class Handler(BaseHTTPRequestHandler):
         a capped level, which "auto" is away from home, means a transcode, see quality.py)."""
         file_url = self._signed("/vodstream", {"kind": kind, "id": vid, "ext": ext})
         client = self._client()
-        qual = Q.choose(self.q.get("quality", [""])[0][:8], self._client_ip())
+        qual = Q.choose(self.q.get("quality", [""])[0][:8], self._client_ip(), self.q.get("speed", [""])[0][:12])
         if qual["cap"] and not APP.remux.available():
             qual = {**qual, "level": "orig", "cap": None, "label": Q.LABELS["orig"]}
         shown = {"quality": Q.public(qual)}

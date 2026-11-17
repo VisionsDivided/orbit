@@ -593,6 +593,22 @@ class Play(unittest.TestCase):
             q = self.seen(self.px, "GET", "/video/:/transcode/universal/decision")[-1]["query"]
             self.assertEqual((a["quality"]["level"], q["maxVideoBitrate"]), ("orig", "20000"))
             self.assertEqual(self.play_from("192.168.1.20", cid, "10", "web", quality="9000")[0], 400)
+            code, a = self.play_from("100.101.102.103", cid, "10", "tv", speedKbps=50000)   # fast link away
+            self.assertEqual((a["kind"], a["quality"]["level"], a["quality"]["speedKbps"]), ("file", "orig", 50000))
+            code, a = self.play_from("100.101.102.103", cid, "10", "tv", speedKbps=4000)    # slow link away
+            q = self.seen(self.px, "GET", "/video/:/transcode/universal/decision")[-1]["query"]
+            self.assertEqual((a["quality"]["level"], q["maxVideoBitrate"]), ("2", "2000"))
+            code, a = self.play_from("192.168.1.20", cid, "10", "tv", speedKbps=1000)       # home: speed ignored
+            self.assertEqual(a["quality"], {"level": "orig", "away": False, "label": "Original"})
+
+    def test_speed_test_sends_incompressible_bytes_to_signed_in_clients(self):
+        rep = self.api.handle(TM.V1.Call("GET", "/v1/speedtest", self.alex, {}, "100.101.102.103",
+                                         {"bytes": "300000"}))
+        self.assertEqual((rep.code, rep.ctype, len(rep.raw)), (200, "application/octet-stream", 300000))
+        self.assertEqual((rep.headers["X-Orbit-Away"], rep.headers["Cache-Control"]), ("1", "no-store"))
+        big = self.api.handle(TM.V1.Call("GET", "/v1/speedtest", self.alex, {}, "192.168.1.20", {"bytes": "9e99"}))
+        self.assertEqual((len(big.raw), big.headers["X-Orbit-Away"]), (2 * 1024 * 1024, "0"), "nonsense: default")
+        self.assertEqual(self.api.handle(TM.V1.Call("GET", "/v1/speedtest", None, {}, "1.1.1.1", {})).code, 401)
 
     def test_away_from_home_jellyfin_gets_a_capped_transcode(self):
         cid = self.link_jellyfin_qc()["id"]

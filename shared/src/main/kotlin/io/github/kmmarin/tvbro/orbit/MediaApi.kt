@@ -75,15 +75,21 @@ class MediaApi(private val api: OrbitApi = OrbitApi()) {
     /**
      * Starts playing film or episode [id] of connection [conn] (`POST /v1/media/play`). [client] "tv" or "desktop" asks
      * for the original file when the server can (direct play), else HLS; [caps] tells the server what this device plays
-     * ([HLS_ONLY]: never the original file, the fallback after a direct-play failure).
+     * ([HLS_ONLY]: never the original file, the fallback after a direct-play failure). [speedKbps]: the connection
+     * speed away from home ([OrbitApi.speedKbps]), so "auto" quality fits it.
      */
-    fun play(link: OrbitLink, conn: String, id: String, client: String, caps: JsonObject? = null): MediaPlayAnswer {
+    fun play(link: OrbitLink, conn: String, id: String, client: String, caps: JsonObject? = null,
+             speedKbps: Int? = null): MediaPlayAnswer {
         val body = buildMap<String, JsonElement> {
             put("conn", JsonPrimitive(conn)); put("id", JsonPrimitive(id)); put("client", JsonPrimitive(client))
             if (caps != null) put("caps", caps)
+            if (speedKbps != null) put("speedKbps", JsonPrimitive(speedKbps))
         }
         return parse(api.postJson(link, "/v1/media/play", JsonObject(body)), link.server)
     }
+
+    /** This device's speed to the home server away from home ([OrbitApi.speedKbps]); pass it to [play]. */
+    fun speedKbps(link: OrbitLink): Int? = api.speedKbps(link)
 
     /** `POST /v1/media/progress`: [state] [PLAYING], [PAUSED] or [STOPPED] (stopped ends the session on the server). */
     fun progress(link: OrbitLink, session: String, positionSecs: Long, state: String) {

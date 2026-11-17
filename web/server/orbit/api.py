@@ -14,6 +14,7 @@ from .accounts import DEVICE_KINDS, Accounts, ApiError
 from .pairing import Pairings
 from . import progress as PROG
 from .media import CLIENT_KEY, MediaServers, Raw
+from tvbro_server import quality as Q
 
 # paths that work without a session (setup / sign-in / TV pairing send X-TvBro: 1 instead of a CSRF token)
 PUBLIC_GET = {"/v1/status"}
@@ -57,6 +58,7 @@ class Api:
         A, PR = self.acc, self.pair
         r: dict[tuple[str, str], Callable[[Call], Reply]] = {
             ("GET", "/v1/status"): lambda c: Reply({"accounts": A.enabled(), "setup": not A.enabled()}),
+            ("GET", "/v1/speedtest"): self._speedtest,
             ("POST", "/v1/setup"): self._setup,
             ("POST", "/v1/auth/login"): self._login,
             ("POST", "/v1/auth/logout"): self._logout,
@@ -172,6 +174,13 @@ class Api:
         if self.device_view is not None:
             pl = self.device_view(pl, c)
         return Reply({"playlists": pl})
+
+    @staticmethod
+    def _speedtest(c: Call) -> Reply:
+        """Signed-in clients: ``bytes`` (default 2 MB, at most 8 MB) that do not compress, timed by the app before it
+        plays a film, so "auto" quality can fit the connection (tvbro_server/quality.py)."""
+        return Reply({}, raw=Q.test_bytes(c.query.get("bytes")), ctype="application/octet-stream",
+                     headers={"Cache-Control": "no-store", "X-Orbit-Away": "1" if Q.is_away(c.client) else "0"})
 
     @staticmethod
     def _media(out) -> Reply:

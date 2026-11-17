@@ -123,13 +123,41 @@ const withSid = (u) => u + (u.includes('?') ? '&' : '?') + 'sid=' + SID;
 export { req as apiReq, authPost as apiAuthPost };
 
 /** Films and episodes: this browser's quality choice (Settings ▸ This browser), sent with every play. "auto": the
- *  original at home, a lower cap away from home (the server decides; see tvbro_server/quality.py). */
-export const QUALITIES = [['auto', 'Auto (original at home, 720p away)'], ['orig', 'Original'], ['8', '1080p · 8 Mbps'],
+ *  original at home; away, the highest level the measured connection carries (the server decides; tvbro_server/quality.py). */
+export const QUALITIES = [['auto', 'Auto (original at home; away, what the connection carries)'], ['orig', 'Original'], ['8', '1080p · 8 Mbps'],
   ['4', '720p · 4 Mbps'], ['2', '480p · 2 Mbps']];
 export function playQuality() {
   try { const v = localStorage.getItem('orbit.quality'); return QUALITIES.some((q) => q[0] === v) ? v : 'auto'; } catch { return 'auto'; }
 }
-export function setPlayQuality(v) { try { localStorage.setItem('orbit.quality', v); } catch { /* private window */ } }
+export function setPlayQuality(v) { try { localStorage.setItem('orbit.quality', v); } catch { /* private window */ } speedCache = null; }
+
+/** "Auto" away from home: the connection speed in kbit/s, measured with GET /v1/speedtest (at most ~1.5 s, reused for
+ *  5 minutes), or null at home, with a chosen level, or when it could not be measured (the server then uses its
+ *  away default). The server answers X-Orbit-Away: 0 at home, and the test stops there. */
+let speedCache = null;
+export function speedFrom(bytes, ms) { return bytes > 0 && ms > 0 ? Math.round(bytes * 8 / ms) : null; }
+export async function measureSpeed() {
+  if (playQuality() !== 'auto') return null;
+  if (speedCache && Date.now() - speedCache.at < 5 * 60e3) return speedCache.kbps;
+  const ctl = new AbortController(); const stop = setTimeout(() => ctl.abort(), 4000);
+  let kbps = null;
+  try {
+    const r = await fetch('/v1/speedtest?bytes=' + 8 * 1024 * 1024, { credentials: 'same-origin', cache: 'no-store', signal: ctl.signal });
+    if (r.ok && r.headers.get('X-Orbit-Away') === '1' && r.body) {
+      const rd = r.body.getReader(); let t0 = 0, got = 0;
+      for (;;) {
+        const { done, value } = await rd.read(); if (done) break;
+        if (!t0) { t0 = performance.now(); continue; }        // timed from the first bytes: no round-trip delay
+        got += value.length;
+        if (performance.now() - t0 > 1500) break;
+      }
+      try { await rd.cancel(); } catch { /* already done */ }
+      kbps = speedFrom(got, performance.now() - t0);
+    }
+  } catch { /* timed out or offline: the server's away default */ } finally { clearTimeout(stop); ctl.abort(); }
+  speedCache = { at: Date.now(), kbps };
+  return kbps;
+}
 
 export const api = {
   health: () => req('/api/health'),
@@ -201,6 +229,7 @@ export const api = {
     if (opts.ss) q += '&ss=' + Math.floor(opts.ss);
     if (opts.a != null) q += '&a=' + opts.a;
     q += '&quality=' + playQuality();
+    const kbps = await measureSpeed(); if (kbps) q += '&speed=' + kbps;
     const r = await req(q);
     if (r.url) r.url = withSid(r.url);
     if (r.file) r.file = withSid(r.file);
@@ -210,7 +239,8 @@ export const api = {
   withSid,
   // ---- Plex / Jellyfin through the home server (API-v1 "Media servers" > "Playback") ----
   /** {conn, id, audio?} -> {session, url, kind, durationSecs, resumeSecs, title, subtitle, audio, subtitles, next} */
-  mediaPlay: (p) => req('/v1/media/play', { method: 'POST', body: JSON.stringify({ ...p, client: 'web', quality: playQuality() }) }),
+  mediaPlay: async (p) => { const kbps = await measureSpeed();
+    return req('/v1/media/play', { method: 'POST', body: JSON.stringify({ ...p, client: 'web', quality: playQuality(), ...(kbps ? { speedKbps: kbps } : {}) }) }); },
   /** state: 'playing' | 'paused' | 'stopped'. keepalive: also when the page is going away. */
   mediaProgress: (session, positionSecs, state, keepalive) => req('/v1/media/progress', { method: 'POST', keepalive: !!keepalive,
     body: JSON.stringify({ session, positionSecs: Math.max(0, Math.round((positionSecs || 0) * 10) / 10), state }) }),

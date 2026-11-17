@@ -57,7 +57,10 @@ object MediaPlayback {
         starting = true
         m.viewModelScope.launch {
             try {
-                val p = withContext(Dispatchers.IO) { MediaApi(OrbitApi()).play(link, conn, id, "tv", if (hlsOnly) MediaApi.HLS_ONLY else tvCaps()) }
+                val p = withContext(Dispatchers.IO) {
+                    val api = MediaApi(OrbitApi())
+                    api.play(link, conn, id, "tv", if (hlsOnly) MediaApi.HLS_ONLY else tvCaps(), api.speedKbps(link))
+                }
                 val start = atSecs ?: MediaApi.startAt(p.resumeSecs, p.durationSecs, fromStart)
                 val title = listOfNotNull(p.title.ifBlank { null }, p.subtitle).joinToString("  ·  ").ifEmpty { name(source) }
                 m.detailMsg = ""

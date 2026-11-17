@@ -288,9 +288,9 @@ class Plays:
 
     # ---- the API side ----
     def start(self, sess: dict, row, connector, item_id, client, caps, audio, start_secs=None,
-              quality=None, addr: str = "") -> dict:
+              quality=None, addr: str = "", speed=None) -> dict:
         """``quality``: "auto" (default), "orig", "8", "4" or "2" (tvbro_server/quality.py); ``addr``: the client's
-        address, which decides what "auto" means (a lower cap away from home)."""
+        address and ``speed`` its measured speed in kbit/s, which decide what "auto" means away from home."""
         if client not in CLIENTS:
             raise ApiError(400, "client: web, tv or desktop")
         if caps is not None and not isinstance(caps, dict):
@@ -299,7 +299,7 @@ class Plays:
             raise ApiError(400, "audio: a track id from an earlier answer")
         if quality is not None and (not isinstance(quality, str) or quality not in ("auto", *Q.LEVELS)):
             raise ApiError(400, "quality: auto, orig, 8, 4 or 2")
-        qual = Q.choose(quality, addr)
+        qual = Q.choose(quality, addr, speed)
         if start_secs is not None:
             if isinstance(start_secs, bool) or not isinstance(start_secs, (int, float)) or not 0 <= start_secs <= 10 * 86400:
                 raise ApiError(400, "startSecs: a number of seconds")
@@ -336,7 +336,7 @@ class Plays:
         hls = info["kind"] == "hls"
         LOG.info("media play %s: started%s (%s%s)", p.label(),
                  f" at {p.ref.get('offset')} s" if p.ref.get("offset") is not None else "", qual["label"],
-                 ", away" if qual["away"] else "")
+                 (", away" + (f", {qual['speed']} kbps measured" if qual.get("speed") else "")) if qual["away"] else "")
         return {"session": sid, "url": base + ("/master.m3u8" if hls else "/file"), "kind": info["kind"],
                 "container": container, "mime": HLS_CTYPE if hls else MIME.get(container or "", "application/octet-stream"),
                 "durationSecs": info.get("durationSecs"), "resumeSecs": info.get("resumeSecs"),

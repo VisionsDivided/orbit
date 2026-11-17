@@ -56,7 +56,8 @@ class MediaDeskTest {
         assertEquals("e3", r.media!!.answer.next!!.id)
         assertNull(r.resumeKey)                                   // the media server keeps the resume point, not this app
         assertTrue(app.full)
-        assertEquals(listOf("/v1/media/play"), fake.asked)        // no /v1/streams: no IPTV stream slot
+        // no /v1/streams: no IPTV stream slot (a speed test may go first; this fake has none, so "auto" stays the default)
+        assertEquals(listOf("/v1/media/play"), fake.asked.filterNot { it.startsWith("/v1/speedtest") })
         // stopping reports "stopped" for the session
         app.runOnUi { app.stopPlayback() }
         waitFor("stopped") { fake.asked.contains("/v1/media/progress") }

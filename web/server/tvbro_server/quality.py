@@ -9,8 +9,10 @@ transcode capped at ``ORBIT_AWAY_QUALITY`` (default 4 Mbps, 720p) unless it chos
 default), or in ``ORBIT_AWAY_NETS`` (comma-separated addresses or CIDR ranges). The last one is for a VPN that
 arrives through a router doing NAT, so remote devices look like the router's LAN address: list that address.
 
-Levels: "orig" (no cap), "8" (8 Mbps, 1080p), "4" (4 Mbps, 720p), "2" (2 Mbps, 480p); "auto" (or nothing) picks
-"orig" at home and the away level otherwise."""
+Levels: "orig" (no cap), "8" (8 Mbps, 1080p), "4" (4 Mbps, 720p), "2" (2 Mbps, 480p). "auto" (or nothing) picks
+"orig" at home. Away it picks from the connection speed the app measured just before playing (``GET /v1/speedtest``,
+sent as ``speed`` in kbit/s): the highest level that needs at most 70% of it, where Original counts as
+``ORBIT_ORIG_KBPS`` (default 20000). Without a measurement it uses the away level."""
 from __future__ import annotations
 
 import ipaddress
@@ -22,7 +24,10 @@ LEVELS: dict[str, Optional[tuple[int, int]]] = {"orig": None, "8": (8000, 1080),
 LABELS = {"orig": "Original", "8": "1080p · 8 Mbps", "4": "720p · 4 Mbps", "2": "480p · 2 Mbps"}
 WIDTH = {1080: 1920, 720: 1280, 480: 854}
 VPN_NETS = "100.64.0.0/10, fd7a:115c:a1e0::/48"
-ENV_NETS, ENV_LEVEL = "ORBIT_AWAY_NETS", "ORBIT_AWAY_QUALITY"
+ENV_NETS, ENV_LEVEL, ENV_ORIG = "ORBIT_AWAY_NETS", "ORBIT_AWAY_QUALITY", "ORBIT_ORIG_KBPS"
+HEADROOM = 0.7                      # share of the measured speed a level may use
+AUDIO_KBPS = 200                    # added to a capped level's video rate
+ORDER = ("orig", "8", "4", "2")
 _cache: dict = {}
 
 
@@ -64,13 +69,50 @@ def away_level() -> str:
     return v if v in LEVELS else "4"
 
 
-def choose(choice, addr: str) -> dict:
+def orig_kbps() -> int:
+    try:
+        return max(1000, int(os.environ.get(ENV_ORIG) or 20000))
+    except ValueError:
+        return 20000
+
+
+def speed_kbps(v) -> Optional[int]:
+    """A measured speed in kbit/s from a client (a number or a numeric string), else None."""
+    if isinstance(v, bool):
+        return None
+    try:
+        n = int(float(v))
+    except (TypeError, ValueError):
+        return None
+    return n if 0 < n <= 10_000_000 else None
+
+
+def for_speed(kbps: int) -> str:
+    """The highest level a connection of ``kbps`` carries with headroom (the lowest when none fits)."""
+    room = kbps * HEADROOM
+    for level in ORDER:
+        need = orig_kbps() if LEVELS[level] is None else LEVELS[level][0] + AUDIO_KBPS
+        if need <= room:
+            return level
+    return ORDER[-1]
+
+
+def choose(choice, addr: str, speed=None) -> dict:
     """{"level", "cap": (kbps, height) | None, "away": bool, "label"} for a requested level ("auto" / None / a
-    level; anything else counts as "auto") and the client's address."""
+    level; anything else counts as "auto"), the client's address and its measured speed (kbit/s, optional)."""
     away = is_away(addr)
     c = str(choice or "auto").strip().lower()
-    level = c if c in LEVELS else (away_level() if away else "orig")
-    return {"level": level, "cap": LEVELS[level], "away": away, "label": LABELS[level]}
+    kbps = speed_kbps(speed)
+    if c in LEVELS:
+        level = c
+    elif not away:
+        level = "orig"
+    else:
+        level = for_speed(kbps) if kbps else away_level()
+    out = {"level": level, "cap": LEVELS[level], "away": away, "label": LABELS[level]}
+    if kbps and c not in LEVELS and away:
+        out["speed"] = kbps
+    return out
 
 
 def resolution(height: int) -> str:
@@ -80,4 +122,23 @@ def resolution(height: int) -> str:
 
 def public(q: dict) -> dict:
     """The part of choose()'s answer a client sees."""
-    return {"level": q["level"], "away": q["away"], "label": q["label"]}
+    out = {"level": q["level"], "away": q["away"], "label": q["label"]}
+    if q.get("speed"):
+        out["speedKbps"] = q["speed"]
+    return out
+
+
+TEST_MAX = 8 * 1024 * 1024
+_noise: dict = {}
+
+
+def test_bytes(n) -> bytes:
+    """``n`` bytes (256 KB to 8 MB, default 2 MB) that do not compress, for a speed test."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 2 * 1024 * 1024
+    n = min(TEST_MAX, max(256 * 1024, n))
+    if "b" not in _noise:
+        _noise["b"] = os.urandom(TEST_MAX)
+    return _noise["b"][:n]

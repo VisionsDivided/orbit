@@ -121,6 +121,46 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT, private val userAgent
         }
 
         private fun JsonObject.str(k: String) = (this[k] as? JsonPrimitive)?.contentOrNull
+
+        /** kbit/s from [bytes] read in [ms] milliseconds; null when nothing was measured. */
+        fun speedFrom(bytes: Long, ms: Double): Int? = if (bytes > 0 && ms > 0) (bytes * 8 / ms).toInt().takeIf { it > 0 } else null
+
+        private const val SPEED_TEST_MS = 1500L
+        private const val SPEED_REUSE_MS = 5 * 60_000L
+        private val speeds = HashMap<String, Pair<Long, Int?>>()      // server -> (measured at, kbit/s or null)
+    }
+
+    /**
+     * "Auto" quality away from home: this device's speed to the home server in kbit/s (`GET /v1/speedtest`, read for
+     * about 1.5 s and reused for 5 minutes), sent with a play so the server can pick the highest quality the connection
+     * carries. Null at home (the server answers `X-Orbit-Away: 0` and the test stops there), from an older server, or
+     * when it fails: the server then uses its away default. Call off the main thread.
+     */
+    fun speedKbps(link: OrbitLink, now: Long = System.currentTimeMillis()): Int? {
+        synchronized(speeds) { speeds[link.server]?.let { (at, v) -> if (now - at in 0 until SPEED_REUSE_MS) return v } }
+        val v = runCatching { measureSpeed(link) }.getOrNull()
+        synchronized(speeds) { speeds[link.server] = now to v }
+        return v
+    }
+
+    private fun measureSpeed(link: OrbitLink): Int? {
+        val req = Request.Builder().url(link.server + "/v1/speedtest?bytes=" + 8 * 1024 * 1024).header("User-Agent", userAgent)
+            .header("Cookie", "$COOKIE=${link.session}").build()
+        client.newCall(req).execute().use { r ->
+            if (!r.isSuccessful || r.header("X-Orbit-Away") != "1") return null
+            val src = r.body?.byteStream() ?: return null
+            val buf = ByteArray(64 * 1024)
+            if (src.read(buf) < 0) return null                       // timed from the first bytes: no round-trip delay
+            val t0 = System.nanoTime()
+            var got = 0L
+            while (true) {
+                val n = src.read(buf)
+                if (n < 0) break
+                got += n
+                if (System.nanoTime() - t0 > SPEED_TEST_MS * 1_000_000) break
+            }
+            return speedFrom(got, (System.nanoTime() - t0) / 1e6)
+        }
     }
 
     private fun call(server: String, path: String, body: String?, link: OrbitLink? = null): JsonObject = exchange(server, path, body, link).first
