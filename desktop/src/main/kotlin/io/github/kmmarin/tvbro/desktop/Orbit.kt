@@ -455,6 +455,17 @@ class OrbitDesktop(private val app: AppState, private val scope: CoroutineScope,
      * them and asks which one to stop; without [ask] (the TV screen's preview) it just answers false. The home server
      * not answering never blocks playback.
      */
+    /**
+     * An IPTV film or episode from this computer's facade address [url], after [claimStream]: a converted copy that fits
+     * the connection away from home (speed test, then `POST /v1/vod/play`), or null to play [url] as it is.
+     */
+    suspend fun convertedFilm(url: String): String? {
+        val l = link ?: return null
+        val sid = saved.streamSid.takeIf { it.isNotEmpty() } ?: return null
+        if (!url.startsWith(l.server + "/xt/")) return null
+        return withContext(Dispatchers.IO) { try { api.vodPlay(l, url, sid, api.speedKbps(l)) } catch (e: Exception) { null } }
+    }
+
     suspend fun claimStream(what: String, ask: Boolean): Boolean {
         val l = link ?: return true
         if (holding && beat?.isActive == true) return true

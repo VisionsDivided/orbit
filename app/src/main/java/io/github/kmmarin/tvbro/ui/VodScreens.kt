@@ -220,6 +220,8 @@ fun VodPlayerScreen(m: AppModel) {
     val clock = remember(media?.p?.session) { io.github.kmmarin.tvbro.orbit.MediaProgressClock() }
     val clockNow by rememberUpdatedState(clock)
     val fellBack = remember { booleanArrayOf(false) }
+    // Orbit: the converted copy an IPTV film plays from away from home (null: the file itself)
+    val converted = remember { arrayOfNulls<String>(1) }
 
     fun back() { m.screen = if (vp.key.startsWith("r|")) Screen.RECORDINGS else if (m.detail != null) Screen.DETAIL else Screen.LIST }
     val vodScope = rememberCoroutineScope()
@@ -254,6 +256,12 @@ fun VodPlayerScreen(m: AppModel) {
         val l = object : Player.Listener {
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 val mp = mediaNow
+                if (mp == null && converted[0] != null && !fellBack[0]) {      // the converted copy failed: the file
+                    fellBack[0] = true
+                    exo.setMediaItem(MediaItem.fromUri(vp.url), exo.currentPosition.coerceAtLeast(0)); exo.prepare(); exo.playWhenReady = true
+                    status = "Playing the original file"
+                    return
+                }
                 status = if (mp == null) "Playback error: ${error.errorCodeName}"
                     else if (fallBack()) "Trying another format..." else io.github.kmmarin.tvbro.orbit.MediaPlayback.playerError(error.errorCodeName, mp.source)
             }
@@ -308,7 +316,14 @@ fun VodPlayerScreen(m: AppModel) {
             if (isMedia) return@launch
             // Orbit: join the household's stream count (asks to stop the oldest viewer when every stream is in use)
             if (fromProvider && !m.orbit.claimStream("vod", vp.title, ask = true)) { back(); return@launch }
-            exo.setMediaItem(MediaItem.fromUri(vp.url)); exo.prepare(); exo.playWhenReady = true
+            // Orbit away from home: a copy the connection carries (a seekable HLS from the home server), else the file
+            if (fromProvider) status = "Starting…"
+            val conv = if (fromProvider) m.orbit.convertedFilm(vp.url) else null
+            converted[0] = conv
+            if (status == "Starting…") status = ""
+            exo.setMediaItem(if (conv != null) MediaItem.Builder().setUri(conv).setMimeType(MimeTypes.APPLICATION_M3U8).build()
+                else MediaItem.fromUri(vp.url))
+            exo.prepare(); exo.playWhenReady = true
         }
         onDispose {
             claim.cancel(); if (fromProvider) m.orbit.releaseStream("vod")

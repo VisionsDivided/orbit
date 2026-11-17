@@ -1042,6 +1042,7 @@ class App:
         self.discover = ODISC.Discover(self.orbit, OSEERR.SeerrConfig(DATA_DIR), fetch_image=_fetch_tmdb_image,
                                        image_cache=self.images, sniff=_img_ctype)
         self.v1.routes.update(self.discover.routes())
+        self.v1.routes[("POST", "/v1/vod/play")] = self._v1_vod_play     # IPTV films in the apps, converted away
         self.v1.prefix_routes.update(self.discover.prefix_routes())
         self.v1.routes.update(OSYNC.routes(self.profiles.for_session))   # /v1/sync: revision check, batches
         # Orbit: /v1/catalog (Home, Movies, Shows): IPTV VOD + the account's Plex / Jellyfin + the profile's state
@@ -1123,6 +1124,45 @@ class App:
         if not p:
             return None
         return {**p, "server": NET.lower_host(p.get("server") or "")}
+
+    def _v1_vod_play(self, c) -> "V1.Reply":
+        """Orbit: ``POST /v1/vod/play`` (docs/orbit/API-v1.md), an IPTV film or episode in the TV or desktop app.
+        ``url``: the device's own facade address of it; ``sid``: its stream session; ``quality`` / ``speedKbps`` as
+        for /v1/media/play. When "auto" (or the chosen level) caps it, the answer is a converted, seekable HLS
+        address (remux.py start_seekable); otherwise ``fmt: file`` and the app plays its facade address as before."""
+        b = c.body
+        if c.sess.get("session_kind") not in ("tv", "desktop"):
+            return V1.Reply({"error": "only a linked TV or the desktop app"}, 403)
+        quality = b.get("quality")
+        if quality is not None and (not isinstance(quality, str) or quality not in ("auto", *Q.LEVELS)):
+            return V1.Reply({"error": "quality: auto, orig, 8, 4 or 2"}, 400)
+        qual = Q.choose(quality, c.client, b.get("speedKbps"))
+        orig = {**qual, "level": "orig", "cap": None, "label": Q.LABELS["orig"]}
+        if not qual["cap"] or not self.remux.available():
+            return V1.Reply({"fmt": "file", "quality": Q.public(qual if not qual["cap"] else orig)})
+        sid = b.get("sid")
+        if not isinstance(sid, str) or not re.match(r"^[A-Za-z0-9_\-]{8,64}$", sid):
+            return V1.Reply({"error": "sid: the stream session"}, 400)
+        hit = self.facade.film_url(b.get("url"), c.sess.get("h") or "")
+        if hit is None:
+            return V1.Reply({"error": "url: a film or episode address of this device's playlists"}, 404)
+        url, key = hit
+        if self.streams.touch(sid) is None:
+            return V1.Reply({"stopped": self.streams.why(sid)}, 409)
+        try:
+            probe = self.remux.probe(key, url)
+        except Exception as e:                      # noqa: BLE001  (the original file may still play)
+            LOG.info("vod play: probe failed (%s); the app plays the original", type(e).__name__)
+            return V1.Reply({"fmt": "file", "quality": Q.public(orig)})
+        p = R.plan(probe, {"ios": False, "hevc": False, "ac3": False, "eac3": False, "av1": False}, None, qual["cap"])
+        if not p["ok"] or not p.get("duration"):
+            return V1.Reply({"fmt": "file", "quality": Q.public(orig)})
+        p = {**p, "subs": []}                       # sidecar subtitles would only cover the part converted so far
+        job = self.remux.start_seekable(sid, f"{key}:q{qual['level']}", url, p, float(p["duration"]))
+        LOG.info("vod play: converting for an app (%s%s)", qual["label"],
+                 f", {qual['speed']} kbps measured" if qual.get("speed") else "")
+        return V1.Reply({"fmt": "hls", "url": f"/remux/{job.rid}/full.m3u8?sid={urllib.parse.quote(sid)}",
+                         "durationSecs": int(p["duration"]), "quality": Q.public(qual)})
 
     def _streams_status(self) -> dict:
         """tvBro's stream count, plus the TVs pulling media through the facade right now (exact)."""
@@ -2756,8 +2796,16 @@ class Handler(BaseHTTPRequestHandler):
         if not job.local and self._stream_gate() is None:       # a recording uses no provider stream
             return
         name = parts[3]
+        if name == "full.m3u8":                     # an app's converted film: the whole film, seekable
+            if not job.seekable:
+                return self._err(404, "not found")
+            APP.remux.seen(job)
+            sid = self.q.get("sid", [""])[0][:64]
+            return self._send_bytes(R.vod_playlist(job.duration, urllib.parse.quote(sid)).encode(),
+                                    "application/vnd.apple.mpegurl")
         f = os.path.join(job.dir, "s00000.m4s" if name == "info.json" else name)
         seg = R.seg_number(name)
+        APP.remux.ensure(job, seg)                  # a seekable job: restarts ffmpeg where the viewer jumped
         APP.remux.seen(job, seg)
         gone = job.mode == "live" and seg is not None and seg < job.produced()   # left the live window
         if not name.endswith(".vtt") and not gone:

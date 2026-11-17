@@ -2,7 +2,10 @@
 """Films and episodes away from home: which addresses count as away, the level "auto" picks, the capped transcode
 of an IPTV film (plan + ffmpeg command line) and the caps sent to Plex / Jellyfin."""
 import os
+import re
+import shutil
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -79,12 +82,67 @@ class CappedFilm(unittest.TestCase):
         self.assertIn("-c:v libx264", s)
         self.assertIn("-b:v 4000k -maxrate 4000k -bufsize 8000k", s)
         self.assertIn("scale=-2:'min(720,ih)'", s)
-        self.assertIn(f"expr:gte(t,n_forced*{R.HLS_TIME})", s)
+        self.assertIn("-g 9999 -sc_threshold 0", s, "keyframes only on the 6-second marks")
+        self.assertIn(f"gte(t,(floor(prev_forced_t/{R.HLS_TIME}+0.001)+1)*{R.HLS_TIME})", s)
+        self.assertEqual(a[a.index("-hls_time") + 1], R.SEEK_HLS_TIME)
+        b = R.ffmpeg_args(URL, R.plan(probe("hevc"), CHROME, cap=(4000, 720)), "/d", 42, start_number=7)
+        self.assertEqual((b[b.index("-ss") + 1], b[b.index("-start_number") + 1]), ("42.000", "7"))
         self.assertNotIn("-c:v copy", s)
         self.assertNotIn("hvc1", s, "no HEVC tag on H.264 output")
         self.assertEqual(a.count("-i"), 1)
         self.assertEqual(a[a.index("-i") + 1], URL, "the URL only goes into -i")
         self.assertIn("-c:v copy", " ".join(R.ffmpeg_args(URL, R.plan(probe(), CHROME), "/d", 0)))
+
+
+
+class SeekableFilm(unittest.TestCase):
+    """An app's converted film: the whole film as a VOD playlist, ffmpeg restarted where the viewer jumps."""
+
+    def test_vod_playlist_lists_every_segment(self):
+        t = R.vod_playlist(20.5, "tvabc")
+        self.assertIn("#EXT-X-PLAYLIST-TYPE:VOD", t)
+        self.assertIn('#EXT-X-MAP:URI="init.mp4?sid=tvabc"', t)
+        self.assertEqual(re.findall(r"#EXTINF:([\d.]+),", t), ["6.000", "6.000", "6.000", "2.500"])
+        self.assertEqual(re.findall(r"^s\d{5}\.m4s\?sid=tvabc$", t, re.M)[-1], "s00003.m4s?sid=tvabc")
+        self.assertTrue(t.rstrip().endswith("#EXT-X-ENDLIST"))
+        self.assertTrue(R.NAME_RE.match("full.m3u8"))
+
+    def test_a_jump_restarts_ffmpeg_at_that_segment(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        procs = []
+
+        class P:
+            def __init__(self, args, **kw):
+                self.args, self.stderr, self.rc = args, iter(()), None
+                procs.append(self)
+            def poll(self): return self.rc
+            def wait(self, *a): return self.rc          # a running ffmpeg stays running
+            def terminate(self): self.rc = -15
+            def send_signal(self, s): pass
+
+        with mock.patch.object(R.subprocess, "Popen", P), mock.patch.object(R.NET, "check_host", lambda u: None):
+            m = R.RemuxManager(d, lambda: 2, lambda sid: False)
+            j = m.start_seekable("tvsid0001", "xt:p1:movie:1.mkv:q4", URL,
+                                 R.plan(probe("hevc"), CHROME, cap=(4000, 720)), 600.0)
+            self.assertEqual(len(procs), 1)
+            open(os.path.join(j.dir, "s00000.m4s"), "wb").close()
+            m.ensure(j, 0)                                     # there
+            m.ensure(j, 3)                                     # ffmpeg is at 1: coming soon, wait
+            self.assertEqual(len(procs), 1)
+            m.ensure(j, 50)                                    # a jump: restart at 5 minutes
+            self.assertEqual(len(procs), 2)
+            a = procs[-1].args
+            self.assertEqual((a[a.index("-ss") + 1], a[a.index("-start_number") + 1]), ("300.000", "50"))
+            self.assertEqual(procs[0].rc, -15, "the old ffmpeg is stopped")
+            self.assertFalse(os.path.exists(os.path.join(j.dir, "s00000.m4s")), "old segments go")
+            self.assertEqual((j.first_seg, j.produced()), (50, 50))
+            m.ensure(j, 52)
+            self.assertEqual(len(procs), 2)
+            m.ensure(j, 10)                                    # back before the restart point
+            self.assertEqual(len(procs), 3)
+            m.ensure(j, 100)                                   # past the end: nothing
+            self.assertEqual(len(procs), 3)
 
 
 if __name__ == "__main__":

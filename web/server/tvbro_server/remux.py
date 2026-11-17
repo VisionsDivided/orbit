@@ -14,6 +14,11 @@ viewer are deleted, so a long film never fills the disk. Seeking outside what ha
 produced starts a new ffmpeg at that time (input seek, ``-ss``); the browser adds the
 offset itself.
 
+A converted film for the TV and desktop apps (``start_seekable``) is served as a complete VOD playlist instead
+(``full.m3u8``, every 6-second segment of the film listed up front), so any HLS player seeks in it like in a Plex
+transcode: a segment far from what ffmpeg is producing restarts ffmpeg at that segment. This works because a capped
+transcode puts its keyframes exactly on the 6-second marks of the film's own clock, wherever it starts.
+
 The upstream URL carries the provider login: it is passed to ffmpeg as an argument only,
 ffmpeg runs with ``-loglevel error`` and anything it prints is scrubbed of URLs.
 """
@@ -49,8 +54,10 @@ AHEAD_SEGS = 20               # pause ffmpeg when it is two minutes ahead of the
 RESUME_SEGS = 10              # ... and continue at one minute
 BEHIND_SEGS = 50              # keep five minutes behind the viewer on disk
 LOCAL_JOBS = 2                # remuxes of recordings (no provider stream; capped for CPU)
+SEEK_GAP = 4                  # a seekable job: a segment this far past ffmpeg's position is waited for, beyond restarts
+SEEK_HLS_TIME = "5.9"         # cut at every forced keyframe (frames land a little after each 6-second mark)
 
-NAME_RE = re.compile(r"^(index\.m3u8|init\.mp4|s\d{5}\.m4s|sub\d{1,2}\.vtt|info\.json)$")
+NAME_RE = re.compile(r"^(index\.m3u8|full\.m3u8|init\.mp4|s\d{5}\.m4s|sub\d{1,2}\.vtt|info\.json)$")
 _URL_RE = re.compile(r"\w+://\S+")
 
 
@@ -173,13 +180,17 @@ def input_protocols(url: str) -> list[str]:
 def video_encode(kbps: int, height: int) -> list[str]:
     """H.264 under ``kbps`` and at most ``height`` lines (never scaled up), a keyframe at every segment boundary so
     the segments stay HLS_TIME long. ``veryfast``: one 1080p film needs about one modern CPU core in real time."""
+    # keyframes only on the film clock's HLS_TIME marks (first frame, then the first frame at or after each mark), so
+    # an encode started anywhere cuts its segments where an encode from the start would (start_seekable)
     return ["-vf", f"scale=-2:'min({height},ih)',format=yuv420p", "-c:v", "libx264", "-preset", "veryfast",
             "-profile:v", "high", "-b:v", f"{kbps}k", "-maxrate", f"{kbps}k", "-bufsize", f"{kbps * 2}k",
-            "-force_key_frames", f"expr:gte(t,n_forced*{HLS_TIME})"]
+            "-g", "9999", "-sc_threshold", "0", "-force_key_frames",
+            f"expr:if(isnan(prev_forced_t),1,gte(t,(floor(prev_forced_t/{HLS_TIME}+0.001)+1)*{HLS_TIME}))"]
 
 
-def ffmpeg_args(url: str, p: dict, out_dir: str, ss: float = 0.0, ffmpeg: str = "ffmpeg") -> list[str]:
-    """The ffmpeg command line for plan ``p`` (from plan()). ``url`` goes only into -i."""
+def ffmpeg_args(url: str, p: dict, out_dir: str, ss: float = 0.0, ffmpeg: str = "ffmpeg", start_number: int = 0) -> list[str]:
+    """The ffmpeg command line for plan ``p`` (from plan()). ``url`` goes only into -i. ``start_number``: the first
+    segment's number (a seekable job restarted at that segment)."""
     args = ["nice", "-n", "10", ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error"] + input_protocols(url)
     if url.startswith(("http://", "https://")):
         args += ["-user_agent", UA, "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10"]
@@ -209,10 +220,10 @@ def ffmpeg_args(url: str, p: dict, out_dir: str, ss: float = 0.0, ffmpeg: str = 
             ch = a.get("out_channels", 2)
             args += ["-c:a", "aac", "-ac", str(ch), "-b:a", "384k" if ch == 6 else "128k" if cap else "160k"]
     args += ["-map_metadata", "-1", "-map_chapters", "-1", "-max_muxing_queue_size", "4096",
-             "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", str(HLS_TIME),
+             "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", SEEK_HLS_TIME if cap else str(HLS_TIME),
              "-hls_playlist_type", "event", "-hls_list_size", "0",
              "-hls_flags", "independent_segments+temp_file", "-hls_fmp4_init_filename", "init.mp4",
-             "-hls_segment_filename", os.path.join(out_dir, "s%05d.m4s"), "-start_number", "0",
+             "-hls_segment_filename", os.path.join(out_dir, "s%05d.m4s"), "-start_number", str(int(start_number)),
              os.path.join(out_dir, "index.m3u8")]
     for n, s in enumerate(p.get("subs") or []):
         args += ["-map", f"0:{s['index']}", "-c:s", "webvtt", "-flush_packets", "1", "-f", "webvtt",
@@ -394,6 +405,19 @@ def serve_playlist(text: str, sid: str, prefix: str = "", live: bool = False) ->
     return "\n".join(out) + "\n"
 
 
+def vod_playlist(duration: float, sid: str) -> str:
+    """The whole film as a VOD playlist of HLS_TIME segments (start_seekable), each URI carrying the stream session."""
+    q = ("?sid=" + sid) if sid else ""
+    n = max(1, int(-(-duration // HLS_TIME)))
+    out = ["#EXTM3U", "#EXT-X-VERSION:7", f"#EXT-X-TARGETDURATION:{HLS_TIME + 1}", "#EXT-X-PLAYLIST-TYPE:VOD",
+           "#EXT-X-MEDIA-SEQUENCE:0", "#EXT-X-INDEPENDENT-SEGMENTS", f'#EXT-X-MAP:URI="init.mp4{q}"']
+    for i in range(n):
+        d = min(HLS_TIME, duration - i * HLS_TIME) if duration > 0 else HLS_TIME
+        out += [f"#EXTINF:{max(d, 0.1):.3f},", f"s{i:05d}.m4s{q}"]
+    out.append("#EXT-X-ENDLIST")
+    return "\n".join(out) + "\n"
+
+
 def _boxes(buf: bytes, start: int = 0, end: Optional[int] = None):
     """ISO BMFF boxes in buf[start:end] -> (type, payload start, box end)."""
     end = len(buf) if end is None else end
@@ -506,6 +530,9 @@ class Job:
         self.killed = False
         self.err = ""
         self.start: Optional[float] = None    # film time where the copy really starts
+        # start_seekable: the full film as one VOD playlist; ffmpeg restarts at the segment the viewer jumps to
+        self.seekable, self.duration, self.first_seg = False, 0.0, 0
+        self.restart: Optional[Callable[[int], list]] = None      # segment -> ffmpeg command line
 
     def start_time(self) -> Optional[float]:
         """From the first segment: the keyframe ffmpeg started at (<= ss)."""
@@ -522,7 +549,7 @@ class Job:
 
     def produced(self) -> int:
         """Number of finished segments (ffmpeg renames each when it is complete)."""
-        best = -1
+        best = self.first_seg - 1
         try:
             for n in os.listdir(self.dir):
                 k = seg_number(n)
@@ -611,6 +638,49 @@ class RemuxManager:
         n = live_start_number(time.time()) if mode == "live" else 0
         return self._spawn(sid, key, 0.0, mode, False, lambda d: stream_args(url, info, d, mode, n, self.ffmpeg))
 
+    def start_seekable(self, sid: str, key: str, url: str, p: dict, duration: float) -> Job:
+        """A capped film for an app: served as ``full.m3u8`` (vod_playlist), seekable anywhere (ensure())."""
+        self._check_input(url, False)
+        j = self._spawn(sid, key, 0.0, "vod", False, lambda d: ffmpeg_args(url, p, d, 0.0, self.ffmpeg))
+        j.seekable, j.duration = True, float(duration)
+        j.restart = lambda seg, d=j.dir: ffmpeg_args(url, p, d, seg * HLS_TIME, self.ffmpeg, seg)
+        return j
+
+    def ensure(self, j: Job, seg: Optional[int]):
+        """A seekable job: segment ``seg`` is coming (ffmpeg is at or a little before it) or ffmpeg restarts there."""
+        if not j.seekable or seg is None or seg < 0 or seg * HLS_TIME >= max(j.duration, HLS_TIME):
+            return
+        with self._lock:
+            if self.jobs.get(j.rid) is not j or os.path.exists(os.path.join(j.dir, f"s{seg:05d}.m4s")):
+                return
+            at = max(j.produced(), j.first_seg)
+            if j.running() and at <= seg <= at + SEEK_GAP:
+                return
+            old = j.proc
+            if old is not None and old.poll() is None:
+                try:
+                    if j.paused:
+                        old.send_signal(signal.SIGCONT)
+                    old.terminate()
+                    old.wait(5)
+                except Exception:                       # noqa: BLE001
+                    try:
+                        old.kill()
+                    except Exception:                   # noqa: BLE001
+                        pass
+            for n in os.listdir(j.dir):
+                if seg_number(n) is not None or n.endswith(".tmp"):
+                    try:
+                        os.remove(os.path.join(j.dir, n))
+                    except OSError:
+                        pass
+            j.first_seg, j.last_seg, j.paused, j.err = seg, seg, False, ""
+            j.proc = subprocess.Popen(j.restart(seg), cwd=j.dir, stdin=subprocess.DEVNULL,
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            proc = j.proc
+        threading.Thread(target=self._drain, args=(j, proc), daemon=True, name="remux-log").start()
+        LOG.info("remux %s restarted at %ds", j.rid[:6], seg * HLS_TIME)
+
     def _spawn(self, sid: str, key: str, ss: float, mode: str, local: bool, make_args) -> Job:
         with self._lock:
             for j in [j for j in self.jobs.values() if j.sid == sid]:
@@ -626,7 +696,7 @@ class RemuxManager:
             j.proc = subprocess.Popen(make_args(d), cwd=d, stdin=subprocess.DEVNULL,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             self.jobs[rid] = j
-        threading.Thread(target=self._drain, args=(j,), daemon=True, name="remux-log").start()
+        threading.Thread(target=self._drain, args=(j, j.proc), daemon=True, name="remux-log").start()
         LOG.info("remux %s started (%s %s at %ds)", rid[:6], mode, key, int(ss))
         return j
 
@@ -640,17 +710,17 @@ class RemuxManager:
             if self.jobs.get(j.rid) is j:
                 self._kill(j)
 
-    def _drain(self, j: Job):
+    def _drain(self, j: Job, proc: subprocess.Popen):
         """Keep ffmpeg's last error line (scrubbed); never log the input URL."""
         try:
-            for raw in j.proc.stderr:
+            for raw in proc.stderr:
                 line = scrub(raw.decode("utf-8", "replace").strip())
-                if line:
+                if line and proc is j.proc:
                     j.err = line[-200:]
         except (OSError, ValueError):
             pass
-        rc = j.proc.wait()
-        if rc != 0 and not j.killed:                 # ffmpeg answers SIGTERM with 255
+        rc = proc.wait()
+        if rc != 0 and not j.killed and proc is j.proc:     # ffmpeg answers SIGTERM with 255 (also a restart)
             LOG.warning("remux %s ended (%s): %s", j.rid[:6], rc, j.err)
 
     def get(self, rid: str) -> Optional[Job]:

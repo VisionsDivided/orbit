@@ -180,4 +180,22 @@ class MediaApiTest {
         MediaApi(OrbitApi(f.client)).play(link, "c1", "i9", "tv")
         assertNull(f.calls.last().second!!["speedKbps"])
     }
+
+    @Test fun vodPlayGivesTheConvertedCopyOnlyWhenTheServerMadeOne() {
+        val film = "$server/xt/p1/movie/tvabc/0123/77.mkv"
+        var answer = """{"fmt":"hls","url":"/remux/r1/full.m3u8?sid=tv1","durationSecs":5400}"""
+        val f = Fake { _, _ -> 200 to answer }
+        val api = OrbitApi(f.client)
+        assertEquals("$server/remux/r1/full.m3u8?sid=tv1", api.vodPlay(link, film, "tv1", 6000))
+        val (path, body, _) = f.calls.single()
+        assertEquals("/v1/vod/play", path)
+        assertEquals(listOf(film, "tv1", "6000"), listOf("url", "sid", "speedKbps").map { body!![it]!!.jsonPrimitive.content })
+        answer = """{"fmt":"file"}"""
+        assertNull(api.vodPlay(link, film, "tv1", null))
+        answer = """{"fmt":"hls","url":"http://203.0.113.5/x.m3u8"}"""
+        assertNull("never an address off the home server", api.vodPlay(link, film, "tv1", null))
+        assertNull("not a facade address: not asked", api.vodPlay(link, "http://203.0.113.5/movie/u/p/1.mkv", "tv1", null))
+        assertEquals(3, f.calls.size)
+        assertNull(OrbitApi(Fake { _, _ -> 404 to "{}" }.client).vodPlay(link, film, "tv1", null))
+    }
 }

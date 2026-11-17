@@ -333,6 +333,19 @@ class OrbitModel(private val app: Application, private val scope: CoroutineScope
         return true
     }
 
+    /**
+     * An IPTV film or episode from this TV's facade address [url], after [claimStream]: a converted copy that fits the
+     * connection when the TV is away from home (speed test, then `POST /v1/vod/play`), or null to play [url] as it is
+     * (at home, unlinked, an older server, any error).
+     */
+    suspend fun convertedFilm(url: String): String? {
+        val l = link ?: return null
+        if (!url.startsWith(l.server + "/xt/")) return null
+        return withContext(Dispatchers.IO) {
+            try { api.vodPlay(l, url, store.streamSid, api.speedKbps(l)) } catch (e: Exception) { null }
+        }?.also { Diag.log("Orbit: film converted for this connection") }
+    }
+
     /** [stop]: the id of the stream to stop ("" = the oldest viewer), or null to cancel. */
     fun answerStreamAsk(stop: String?) { streamAsk?.answer?.complete(stop) }
 

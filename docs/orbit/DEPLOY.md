@@ -95,8 +95,10 @@ fits the connection: just before playing, the app times a short download from th
 about 1.5 s, reused for 5 minutes) and the server picks the highest level that needs at most 70% of it. Original
 counts as `ORBIT_ORIG_KBPS` (default 20000 kbit/s); then 1080p at 8 Mbit/s, 720p at 4, 480p at 2. Without a
 measurement (an older app, or the test failed) a device that is away gets `ORBIT_AWAY_QUALITY` (default `4`:
-720p at 4 Mbit/s; also `8`, `2` or `orig`). The web app measures for Plex, Jellyfin and IPTV films; the TV and
-desktop apps for Plex and Jellyfin (their IPTV films still play the original file). The web app's Settings ▸ This browser ▸ Films and shows quality
+720p at 4 Mbit/s; also `8`, `2` or `orig`). Every app measures, for Plex, Jellyfin and IPTV films alike. An IPTV
+film in the TV, phone or desktop app that needs a lower quality is converted by this server and served as one
+complete, seekable playlist (`POST /v1/vod/play`): jumping ahead restarts the conversion at that point. Converted
+copies have no subtitles; at home, and on a fast enough connection, the original file plays with all of them. The web app's Settings ▸ This browser ▸ Films and shows quality
 overrides it per browser. Plex and Jellyfin do the transcode themselves; IPTV films and episodes are converted by
 this server's ffmpeg (about one CPU core per film at 720p).
 

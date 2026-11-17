@@ -143,6 +143,25 @@ class OrbitApi(private val client: OkHttpClient = DEFAULT, private val userAgent
         return v
     }
 
+    /**
+     * An IPTV film or episode about to play from this device's facade address [url] (`POST /v1/vod/play`): the address
+     * of a converted, seekable HLS copy when the connection needs a lower quality (away from home, [speedKbps] from
+     * [speedKbps]), else null: play [url] as it is. [sid] is the stream session the device claimed. Null as well from an
+     * older server or on any error, so playback never depends on it. Call off the main thread.
+     */
+    fun vodPlay(link: OrbitLink, url: String, sid: String, speedKbps: Int?): String? {
+        if (!url.startsWith(link.server + "/xt/")) return null
+        val body = buildMap<String, kotlinx.serialization.json.JsonElement> {
+            put("url", JsonPrimitive(url)); put("sid", JsonPrimitive(sid))
+            if (speedKbps != null) put("speedKbps", JsonPrimitive(speedKbps))
+        }
+        val j = runCatching { call(link.server, "/v1/vod/play", Json.encodeToString(JsonObject.serializer(), JsonObject(body)), link) }
+            .getOrNull() ?: return null
+        if ((j["fmt"] as? JsonPrimitive)?.contentOrNull != "hls") return null
+        val path = (j["url"] as? JsonPrimitive)?.contentOrNull ?: return null
+        return if (path.startsWith("/remux/")) link.server + path else null
+    }
+
     private fun measureSpeed(link: OrbitLink): Int? {
         val req = Request.Builder().url(link.server + "/v1/speedtest?bytes=" + 8 * 1024 * 1024).header("User-Agent", userAgent)
             .header("Cookie", "$COOKIE=${link.session}").build()

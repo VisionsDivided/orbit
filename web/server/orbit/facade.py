@@ -422,6 +422,32 @@ class Facade:
         self._cat_all = threading.BoundedSemaphore(CAT_GLOBAL)
         self._cat_cache: dict[tuple, tuple] = {}    # key -> (expires, (body, ctype))
 
+    def film_url(self, address: str, sess_h: str) -> Optional[tuple[str, str]]:
+        """A device's own facade address of a film or episode (``.../xt/<pid>/movie|series/<user>/<pass>/<file>``,
+        only with that device's login, ``sess_h``) -> (the provider address behind it, a key naming the title);
+        None for anything else. For a converted film (tvbro_server.app, ``POST /v1/vod/play``)."""
+        try:
+            path = urllib.parse.urlsplit(str(address or "")).path
+        except ValueError:
+            return None
+        if not path.startswith(PREFIX):
+            return None
+        parts = path[len(PREFIX):].split("/")
+        if len(parts) < 5 or not PID_RE.match(parts[0]) or parts[1] not in ("movie", "series"):
+            return None
+        pid, kind, user, secret = parts[0], parts[1], parts[2], parts[3]
+        if not sess_h or self.keys.check(user, secret) != sess_h:
+            return None
+        prov = self.provider(pid)
+        tail = "/".join(parts[4:])
+        if prov is None or prov.get("kind") != "xtream" or not REST_RE.match(tail) or ".." in tail:
+            return None
+        tail = canonical_path(tail, relative=True)
+        if tail is None:
+            return None
+        from tvbro_server import parsers as P
+        return f"{P.normalize_server(prov['server'])}/{kind}/{prov['user']}/{prov['pass']}/{tail}", f"xt:{pid}:{kind}:{tail}"
+
     def seal(self, url: str) -> str:
         return self._seal("xt|" + url)
 

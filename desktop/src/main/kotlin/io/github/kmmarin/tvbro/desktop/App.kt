@@ -459,7 +459,11 @@ class AppState(private val scope: CoroutineScope, testSources: List<Source>? = n
         scope.launch {
             val ok = orbit.claimStream(r.live?.name ?: r.title, ask)
             if (gen != playGen) return@launch
-            if (ok) applyPlaying(r) else { if (playing == null) full = false; if (ask) toast("Not played: every stream is in use") }
+            if (!ok) { if (playing == null) full = false; if (ask) toast("Not played: every stream is in use") ; return@launch }
+            // a film or episode away from home: a converted copy the connection carries (seekable HLS), else the file
+            val conv = if (r.live == null && r.archive == null && (r.vod != null || r.episode != null)) orbit.convertedFilm(r.url) else null
+            if (gen != playGen) return@launch
+            applyPlaying(if (conv != null) r.copy(url = conv) else r)
         }
     }
 

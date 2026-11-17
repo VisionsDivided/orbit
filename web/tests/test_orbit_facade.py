@@ -189,6 +189,25 @@ class Keys(unittest.TestCase):
         self.assertIsNone(self.keys.creds(web), "a browser sign-in still gets none")
 
 
+    def test_film_url_maps_only_the_devices_own_film_addresses(self):
+        prov = {"kind": "xtream", "server": "http://provider.example.com:8080", "user": "pu", "pass": "pp"}
+        fac = F.Facade(self.keys, lambda pid: prov if pid == "p1" else None, lambda u: "s", lambda t: None,
+                       None, lambda e: False)
+        u, pw = self.keys.creds(self.tv)
+        base = f"http://192.0.2.10:8750/xt/p1/movie/{u}/{pw}/"
+        self.assertEqual(fac.film_url(base + "123.mkv", self.tv["h"]),
+                         ("http://provider.example.com:8080/movie/pu/pp/123.mkv", "xt:p1:movie:123.mkv"))
+        self.assertEqual(fac.film_url(base.replace("/movie/", "/series/") + "9.mp4", self.tv["h"])[0],
+                         "http://provider.example.com:8080/series/pu/pp/9.mp4")
+        for bad in (base.replace("/movie/", "/live/") + "1.ts",            # films and episodes only
+                    base.replace("/p1/", "/p2/") + "1.mkv",                # no such playlist
+                    base.replace(pw, "0" * 32) + "1.mkv",                  # wrong login
+                    base + "..%2f..%2fx.mkv", base + "a/../../b.mkv",      # out of the provider's path
+                    "http://192.0.2.10:8750/api/x", "", None, 42):
+            self.assertIsNone(fac.film_url(bad, self.tv["h"]), bad)
+        self.assertIsNone(fac.film_url(base + "123.mkv", self.alex["h"]), "only the device whose login it is")
+
+
 class _H:
     """Just enough of a request handler for Facade._send."""
 
